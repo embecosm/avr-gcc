@@ -1,3 +1,11 @@
+2013-08-26  Joern Rennecke <joern.rennecke@embecosm.com>
+      Merged from fsf-gcc/trunk:
+      2013-04-10  Senthil Kumar Selvaraj  <senthil_kumar.selvaraj@atmel.com>
+		  Jason Merrill  <jason@redhat.com>
+	* common.opt: Add -gdwarf.
+	* opts.c (common_handle_option): Handle it.
+	* gcc.c (ASM_DEBUG_SPEC): Don't expect "-2" for DWARF.
+
 2013-08-23  Joern Rennecke <joern.rennecke@embecosm.com>
       Merged from fsf-gcc/trunk:
       2013-05-27  Joern Rennecke <joern.rennecke@embecosm.com>
