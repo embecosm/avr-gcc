@@ -5,6 +5,8 @@
       2013-05-14  Senthil Kumar Selvaraj  <senthil_kumar.selvaraj@atmel.com>
 	* gcc.dg/torture/alias-1.c: Add dg-require-effective-target
 	scheduling.
+      2013-04-29  Senthil Kumar Selvaraj  <senthil_kumar.selvaraj@atmel.com>
+	* gcc.dg/c1x-align-3.c: Add test for negative power of 2.
 
 2013-08-23  Joern Rennecke <joern.rennecke@embecosm.com>
       Merged from fsf-gcc/trunk:
