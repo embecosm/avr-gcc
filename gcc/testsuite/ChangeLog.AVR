@@ -1,4 +1,12 @@
 2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
 
+	* global-used-types.c, inline2.c, inline3.c: Request dwarf-2 output.
+	* pr37726.c, pr41445-1.c, pr41445-2.c, pr41445-3.c: Likewise.
+	* pr41445-4.c, pr41445-5.c, pr41445-6.c, pr41543.c: Likewise.
+	* pr41695.c, pr43237.c, pr47939-1.c, pr47939-2.c: Likewise.
+	* pr47939-3.c, pr47939-4.c, pr53948.c, struct-loc1.c: Likewise.
+
+2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
+
 	* testsuite/gcc.c-torture/compile/limits-externdecl.c [target avr-*-*]:
 	Expect "size of array is too large" error.
