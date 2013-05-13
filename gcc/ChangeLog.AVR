@@ -1,0 +1,4 @@
+2013-05-02  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* reload.c (find_valid_class): Allow classes that do not include
+	FIRST_PSEUDO_REGISTER - 1.
