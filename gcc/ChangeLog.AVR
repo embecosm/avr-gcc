@@ -82,3 +82,7 @@
 	instruction sequence is 1 byte shorter.
       2013-07-23  Georg-Johann Lay  <avr@gjlay.de>
 	* config/avr/avr.md: Explain asm print modifier 'r' for REG.
+      Merged from embecosm/avr-gcc-mainline:
+      2013-05-02  Joern Rennecke <joern.rennecke@embecosm.com>
+	* reload.c (find_valid_class): Allow classes that do not include
+	FIRST_PSEUDO_REGISTER - 1.
