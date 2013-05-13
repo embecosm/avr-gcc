@@ -1,0 +1,4 @@
+2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* testsuite/gcc.c-torture/compile/limits-externdecl.c [target avr-*-*]:
+	Expect "size of array is too large" error.
