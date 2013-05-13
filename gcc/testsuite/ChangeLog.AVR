@@ -1,5 +1,9 @@
 2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
 
+	* gcc.c-torture/execute/pr56799.x: New file.
+
+2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
+
 	* global-used-types.c, inline2.c, inline3.c: Request dwarf-2 output.
 	* pr37726.c, pr41445-1.c, pr41445-2.c, pr41445-3.c: Likewise.
 	* pr41445-4.c, pr41445-5.c, pr41445-6.c, pr41543.c: Likewise.
