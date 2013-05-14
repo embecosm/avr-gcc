@@ -41,3 +41,6 @@
 	(canon_anti_dependence): Get comments and semantics in sync.
 	Add parameter mem_canonicalized.  Changed all callers.
 	* rtl.h (canon_anti_dependence): Update prototype.
+      2013-05-14  Joern Rennecke <joern.rennecke@embecosm.com>
+	* config/avr/avr.c (avr_encode_section_info): Bail out if the type
+	is error_mark_node.

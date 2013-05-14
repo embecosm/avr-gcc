@@ -131,3 +131,6 @@
 	(v4si): Use it.
 	* gcc.dg/tree-ssa/ssa-pre-30.c: Test requires int32.
 	* gcc.dg/tree-ssa/vrp58.c: Adjust scan expression for int16.
+      2013-05-14  Joern Rennecke <joern.rennecke@embecosm.com>
+	* testsuite/gcc.c-torture/compile/limits-externdecl.c [target avr-*-*]:
+	Expect "size of array is too large" error.
