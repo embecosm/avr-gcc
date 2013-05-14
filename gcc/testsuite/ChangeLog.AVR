@@ -2,6 +2,9 @@
       Merged from fsf-gcc/trunk:
       2013-04-02  Pitchumani Sivanupandi <pitchumani.s@atmel.com>
 	* gcc.dg/tree-ssa/sra-13.c: Fix for 16 bit int.
+      2013-05-14  Senthil Kumar Selvaraj  <senthil_kumar.selvaraj@atmel.com>
+	* gcc.dg/torture/alias-1.c: Add dg-require-effective-target
+	scheduling.
 
 2013-08-23  Joern Rennecke <joern.rennecke@embecosm.com>
       Merged from fsf-gcc/trunk:
