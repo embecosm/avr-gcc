@@ -1,3 +1,10 @@
+2013-08-26  Joern Rennecke <joern.rennecke@embecosm.com>
+      Merged from embecosm/avr-gcc-mainline:
+      2013-05-14  Joern Rennecke <joern.rennecke@embecosm.com>
+	* c-typeck.c (c_common_type): Prefer double_type_node over
+	other REAL_TYPE types with the same precision.
+	(convert_arguments): Likewise.
+
 2013-08-23  Joern Rennecke <joern.rennecke@embecosm.com>
       Merged from fsf-gcc/trunk:
       2013-07-04  Joern Rennecke <joern.rennecke@embecosm.com>
