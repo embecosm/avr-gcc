@@ -1,3 +1,14 @@
+2013-05-14  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	PR rtl-optimization/56833
+	* postreload.c (move2add_use_add2_insn): Update reg_set_luid
+	for all affected hard registers.
+	(move2add_use_add3_insn): Likewise.  Check that all source hard
+	regs have been set by the same set.
+	(reload_cse_move2add): Before concluding that we have a pre-existing
+	value, check that all destination hard registers have been set by the
+	same set.
+
 2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.c (avr_encode_section_info): Bail out if the type

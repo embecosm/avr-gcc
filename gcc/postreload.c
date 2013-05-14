@@ -1749,7 +1749,10 @@ move2add_use_add2_insn (rtx reg, rtx sym, rtx off, rtx insn)
 	    }
 	}
     }
-  reg_set_luid[regno] = move2add_luid;
+  int i = hard_regno_nregs[regno][GET_MODE (reg)] -1;
+  do
+    reg_set_luid[regno + i] = move2add_luid;
+  while (--i >= 0);
   reg_base_reg[regno] = -1;
   reg_mode[regno] = GET_MODE (reg);
   reg_symbol_ref[regno] = sym;
@@ -1793,6 +1796,14 @@ move2add_use_add3_insn (rtx reg, rtx sym, rtx off, rtx insn)
 	&& reg_symbol_ref[i] != NULL_RTX
 	&& rtx_equal_p (sym, reg_symbol_ref[i]))
       {
+	int j;
+
+	for (j = hard_regno_nregs[i][reg_mode[i]] - 1;
+	     j > 0 && reg_set_luid[i+j] == reg_set_luid[i];)
+	  j--;
+	if (j != 0)
+	  continue;
+
 	rtx new_src = gen_int_mode (INTVAL (off) - reg_offset[i],
 				    GET_MODE (reg));
 	/* (set (reg) (plus (reg) (const_int 0))) is not canonical;
@@ -1835,7 +1846,10 @@ move2add_use_add3_insn (rtx reg, rtx sym, rtx off, rtx insn)
       if (validate_change (insn, &SET_SRC (pat), tem, 0))
 	changed = true;
     }
-  reg_set_luid[regno] = move2add_luid;
+  i = hard_regno_nregs[regno][GET_MODE (reg)] -1;
+  do
+    reg_set_luid[regno + i] = move2add_luid;
+  while (--i >= 0);
   reg_base_reg[regno] = -1;
   reg_mode[regno] = GET_MODE (reg);
   reg_symbol_ref[regno] = sym;
@@ -1890,7 +1904,10 @@ reload_cse_move2add (rtx first)
 
 	  /* Check if we have valid information on the contents of this
 	     register in the mode of REG.  */
-	  if (reg_set_luid[regno] > move2add_last_label_luid
+	  for (i = hard_regno_nregs[regno][GET_MODE (reg)] - 1;
+	       i > 0 && reg_set_luid[regno + i] == reg_set_luid[regno];)
+	    i--;
+	  if (i == 0 && reg_set_luid[regno] > move2add_last_label_luid
 	      && MODES_OK_FOR_MOVE2ADD (GET_MODE (reg), reg_mode[regno])
               && dbg_cnt (cse2_move2add))
 	    {
@@ -2021,7 +2038,10 @@ reload_cse_move2add (rtx first)
 
 	      /* If the reg already contains the value which is sum of
 		 sym and some constant value, we can use an add2 insn.  */
-	      if (reg_set_luid[regno] > move2add_last_label_luid
+	      for (i = hard_regno_nregs[regno][GET_MODE (reg)] - 1;
+		   i > 0 && reg_set_luid[regno + i] == reg_set_luid[regno];)
+		i--;
+	      if (i == 0 && reg_set_luid[regno] > move2add_last_label_luid
 		  && MODES_OK_FOR_MOVE2ADD (GET_MODE (reg), reg_mode[regno])
 		  && reg_base_reg[regno] < 0
 		  && reg_symbol_ref[regno] != NULL_RTX
