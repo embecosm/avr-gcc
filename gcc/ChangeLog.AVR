@@ -1,3 +1,9 @@
+2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* config/avr/avr-stdint.h (INT16_TYPE): Change default to "int".
+	(UINT16_TYPE): Change default to "unsigned int".
+	* config/avr/avr.h (WCHAR_TYPE, WINT_TYPE): Define to "int".
+
 2013-05-25  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	PR rtl-optimization/56833

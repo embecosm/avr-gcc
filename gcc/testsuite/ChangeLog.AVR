@@ -1,3 +1,7 @@
+2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* gcc.dg/c99-stdint-1.c [avr-*-*]: Update line number for dg-bogus.
+
 2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.c-torture/execute/pr56799.x: New file.
