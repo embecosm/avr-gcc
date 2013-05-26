@@ -86,3 +86,7 @@
       2013-05-02  Joern Rennecke <joern.rennecke@embecosm.com>
 	* reload.c (find_valid_class): Allow classes that do not include
 	FIRST_PSEUDO_REGISTER - 1.
+      2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
+	* config/avr/avr-stdint.h (INT16_TYPE): Change default to "int".
+	(UINT16_TYPE): Change default to "unsigned int".
+	* config/avr/avr.h (WCHAR_TYPE, WINT_TYPE): Define to "int".

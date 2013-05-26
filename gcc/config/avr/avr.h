@@ -144,6 +144,8 @@ enum
 #define SIZE_TYPE (INT_TYPE_SIZE == 8 ? "long unsigned int" : "unsigned int")
 #define PTRDIFF_TYPE (INT_TYPE_SIZE == 8 ? "long int" :"int")
 
+#define WCHAR_TYPE "int"
+#define WINT_TYPE "int"
 #define WCHAR_TYPE_SIZE 16
 
 #define FIRST_PSEUDO_REGISTER 36
