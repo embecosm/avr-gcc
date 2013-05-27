@@ -1,0 +1,16 @@
+2013-08-23  Joern Rennecke <joern.rennecke@embecosm.com>
+      Merged from fsf-gcc/trunk:
+      2013-05-27  Joern Rennecke <joern.rennecke@embecosm.com>
+	PR rtl-optimization/56833
+	* postreload.c (move2add_record_mode): New function.
+	(move2add_record_sym_value, move2add_valid_value_p): Likewise.
+	(move2add_use_add2_insn): Use move2add_record_sym_value.
+	(move2add_use_add3_insn): Likewise.
+	(reload_cse_move2add): Use move2add_valid_value_p and
+	move2add_record_mode.  Invalidate call-clobbered and REG_INC
+	affected regs by setting reg_mode to VOIDmode.
+	(move2add_note_store): Don't pretend the inside of a SUBREG is
+	the actual destination.  Invalidate single/leading registers by
+	setting reg_mode to VOIDmode.
+	Use move2add_record_sym_value, move2add_valid_value_p and
+	move2add_record_mode.
