@@ -1689,7 +1689,6 @@ move2add_record_mode (rtx reg)
 {
   int regno, nregs;
   enum machine_mode mode = GET_MODE (reg);
-  int i;
 
   if (GET_CODE (reg) == SUBREG)
     {
@@ -1703,7 +1702,7 @@ move2add_record_mode (rtx reg)
     }
   else
     gcc_unreachable ();
-  for (i = nregs - 1; i > 0; i--)
+  for (int i = nregs - 1; i > 0; i--)
     reg_mode[regno + i] = BLKmode;
   reg_mode[regno] = mode;
 }
@@ -1727,14 +1726,12 @@ move2add_record_sym_value (rtx reg, rtx sym, rtx off)
 static bool
 move2add_valid_value_p (int regno, enum machine_mode mode)
 {
-  int i;
-
   if (reg_set_luid[regno] <= move2add_last_label_luid
       || !MODES_OK_FOR_MOVE2ADD (mode, reg_mode[regno]))
     return false;
 
-  for (i = hard_regno_nregs[regno][mode] - 1; i > 0; i--)
-    if (reg_mode[i] != BLKmode)
+  for (int i = hard_regno_nregs[regno][mode] - 1; i > 0; i--)
+    if (reg_mode[regno + i] != BLKmode)
       return false;
   return true;
 }

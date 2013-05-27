@@ -1,3 +1,9 @@
+2013-05-27  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* postreload.c (move2add_record_mode): Declare iteration variable
+	in for loop.
+	(move2add_valid_value_p): Likewise.  Fix array index.
+
 2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* config/avr/avr-stdint.h (INT16_TYPE): Change default to "int".
