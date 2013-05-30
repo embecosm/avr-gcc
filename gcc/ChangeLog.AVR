@@ -1,3 +1,10 @@
+2013-05-30  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	PR rtl-optimization/57439
+	* postreload.c (move2add_valid_value_p): Check that we have
+	a zero subreg_regno_offset when accessing the register in
+	the requested mode.
+
 2013-05-27  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* postreload.c (move2add_record_mode): Declare iteration variable
