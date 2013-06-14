@@ -1,3 +1,9 @@
+2013-06-14  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_asm_function_rodata_section):
+	When merging something into a function-specific section, always
+	add the SECTION_CODE flag.
+
 2013-05-30  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	PR rtl-optimization/57439
