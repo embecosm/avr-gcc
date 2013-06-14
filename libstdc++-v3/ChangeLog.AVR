@@ -1,0 +1,12 @@
+2013-06-14  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* configure.ac [avr-*-*]: Don't use AC_LIBTOOL_DLOPEN.
+	* crossconfig.m4: Add avr-*-* settings.
+	* configure: Regenerate.
+	* include/bits/locale_facets_nonio.h (__tm_small_int): typedef/define.
+	(_M_extract_num): Templatize base type of __member argument.
+	(_M_extract_name): Change type of __member argument to __tm_small_int&.
+	* include/bits/locale_facets_nonio.tcc (_M_extract_via_format) <Z>:
+	Change type of __tmp to __tm_small_int.
+	(_M_extract_num): Templatize base type of __member argument.
+	(_M_extract_name): Change type of __member argument to __tm_small_int&.
