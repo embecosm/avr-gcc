@@ -90,7 +90,13 @@ GLIBCXX_CONFIGURE
 
 # Libtool setup.
 if test "x${with_newlib}" != "xyes"; then
-  AC_LIBTOOL_DLOPEN
+  case "${host}" in
+    avr-*-*)
+      ;;
+    *)
+      AC_LIBTOOL_DLOPEN
+      ;;
+  esac
 fi
 AM_PROG_LIBTOOL
 ACX_LT_HOST_FLAGS
