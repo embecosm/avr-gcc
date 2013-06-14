@@ -8489,8 +8489,14 @@ avr_asm_function_rodata_section (tree decl)
             {
               const char *rname = ACONCAT ((new_prefix,
                                             name + strlen (old_prefix), NULL));
+#if 0
               flags &= ~SECTION_CODE;
               flags |= AVR_HAVE_JMP_CALL ? 0 : SECTION_CODE;
+#else
+	      /* The flags have to match the existing section where the
+		 function proper went.  */
+              flags |= SECTION_CODE;
+#endif
 
               return get_section (rname, flags, frodata->named.decl);
             }

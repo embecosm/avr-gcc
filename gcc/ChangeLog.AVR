@@ -6,6 +6,12 @@
 	* config/avr/avr.h (ELIMINABLE_REGS): Add elimination from
 	ARG_POINTER_REGNUM to STACK_POINTER_REGNUM.
 
+2013-06-14  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_asm_function_rodata_section):
+	When merging something into a function-specific section, always
+	add the SECTION_CODE flag.
+
 2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.h (WCHAR_TYPE, WINT_TYPE): Define to "int".
