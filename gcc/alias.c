@@ -156,7 +156,7 @@ static int insert_subset_children (splay_tree_node, void*);
 static alias_set_entry get_alias_set_entry (alias_set_type);
 static bool nonoverlapping_component_refs_p (const_rtx, const_rtx);
 static tree decl_for_component_ref (tree);
-static int write_dependence_p (const_rtx, const_rtx, int);
+static int write_dependence_p (const_rtx, unsigned, rtx, const_rtx, int);
 
 static void memory_modified_1 (rtx, const_rtx, void *);
 
@@ -2553,10 +2553,12 @@ canon_true_dependence (const_rtx mem, enum machine_mode mem_mode, rtx mem_addr,
 }
 
 /* Returns nonzero if a write to X might alias a previous read from
-   (or, if WRITEP is nonzero, a write to) MEM.  */
+   (or, if WRITEP is nonzero, a write to) MEM.
+   If CANON_MEM_ADDR is nonzero, it is the canonicalized address of MEM.  */
 
 static int
-write_dependence_p (const_rtx mem, const_rtx x, int writep)
+write_dependence_p (const_rtx mem, unsigned mem_size, rtx canon_mem_addr,
+		    const_rtx x, int writep)
 {
   rtx x_addr, mem_addr;
   rtx base;
@@ -2612,9 +2614,14 @@ write_dependence_p (const_rtx mem, const_rtx x, int writep)
     return 0;
 
   x_addr = canon_rtx (x_addr);
-  mem_addr = canon_rtx (mem_addr);
+  if (canon_mem_addr)
+    mem_addr = canon_mem_addr;
+  else
+    mem_addr = canon_rtx (mem_addr);
+  if (!mem_size)
+    mem_size = SIZE_FOR_MODE (mem);
 
-  if ((ret = memrefs_conflict_p (SIZE_FOR_MODE (mem), mem_addr,
+  if ((ret = memrefs_conflict_p (mem_size, mem_addr,
 				 SIZE_FOR_MODE (x), x_addr, 0)) != -1)
     return ret;
 
@@ -2629,7 +2636,19 @@ write_dependence_p (const_rtx mem, const_rtx x, int writep)
 int
 anti_dependence (const_rtx mem, const_rtx x)
 {
-  return write_dependence_p (mem, x, /*writep=*/0);
+  return write_dependence_p (mem, 0, NULL_RTX, x, /*writep=*/0);
+}
+
+/* Likewise, but we already have a canonicalized MEM_ADDR for MEM.
+   Also, consider MEM in MEM_MODE (which might be from an enclosing
+   STRICT_LOW_PART / ZERO_EXTRACT).  */
+
+int
+canon_anti_dependence (const_rtx mem, enum machine_mode mem_mode,
+		       rtx mem_addr, const_rtx x)
+{
+  return write_dependence_p (mem, GET_MODE_SIZE (mem_mode), mem_addr,
+			     x, /*writep=*/0);
 }
 
 /* Output dependence: X is written after store in MEM takes place.  */
@@ -2637,7 +2656,7 @@ anti_dependence (const_rtx mem, const_rtx x)
 int
 output_dependence (const_rtx mem, const_rtx x)
 {
-  return write_dependence_p (mem, x, /*writep=*/1);
+  return write_dependence_p (mem, 0, NULL_RTX, x, /*writep=*/1);
 }
 
 

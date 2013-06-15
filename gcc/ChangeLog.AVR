@@ -1,3 +1,13 @@
+2013-06-15  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	PR rtl-optimization/57425
+	* alias.c (write_dependence_p): Add new parameters mem_size and
+	canon_mem_addr.  Changed all callers.
+	(canon_anti_dependence): New function.
+	* cse.c (check_dependence): Use canon_anti_dependence.
+	* cselib.c (cselib_invalidate_mem): Likewise.
+	* rtl.h (canon_anti_dependence): Declare.
+
 2013-05-30  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	PR rtl-optimization/57439
