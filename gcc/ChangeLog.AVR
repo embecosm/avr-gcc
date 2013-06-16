@@ -22,3 +22,13 @@
 	* postreload.c (move2add_valid_value_p): Check that we have
 	a zero subreg_regno_offset when accessing the register in
 	the requested mode.
+      2013-06-16  Joern Rennecke <joern.rennecke@embecosm.com>
+	PR rtl-optimization/57425
+	PR rtl-optimization/57569
+	* alias.c (write_dependence_p): Add new parameters mem_mode,
+	canon_mem_addr and mem_canonicalized.  Change type of writep to bool.
+	Changed all callers.
+	(canon_anti_dependence): New function.
+	* cse.c (check_dependence): Use canon_anti_dependence.
+	* cselib.c (cselib_invalidate_mem): Likewise.
+	* rtl.h (canon_anti_dependence): Declare.
