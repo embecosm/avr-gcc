@@ -90,3 +90,8 @@
 	* config/avr/avr-stdint.h (INT16_TYPE): Change default to "int".
 	(UINT16_TYPE): Change default to "unsigned int".
 	* config/avr/avr.h (WCHAR_TYPE, WINT_TYPE): Define to "int".
+      2013-06-25  Joern Rennecke <joern.rennecke@embecosm.com>
+	* config/avr/avr.opt (mfract-convert-truncate): New option.
+	* config/avr/avr.c (avr_out_fract): Unless TARGET_FRACT_CONV_TRUNC
+	is set, round negative fractional integers according to n1169
+	when converting to integer types.
