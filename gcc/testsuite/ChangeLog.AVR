@@ -5,3 +5,6 @@
 	PR rtl-optimization/57569
 	* gcc.dg/torture/pr57425-1.c, gcc.dg/torture/pr57425-2.c: New files.
 	* gcc.dg/torture/pr57425-3.c, gcc.dg/torture/pr57569.c: Likewise.
+      2013-07-04  Joern Rennecke <joern.rennecke@embecosm.com>
+	* gcc.dg/tree-ssa/vrp66.c: Make conditional on { target { ! int16 } } .
+	* gcc.dg/tree-ssa/vrp66-int16-sw.c: New test.
