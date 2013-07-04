@@ -1,0 +1,5 @@
+2013-08-23  Joern Rennecke <joern.rennecke@embecosm.com>
+      Merged from fsf-gcc/trunk:
+      2013-07-04  Joern Rennecke <joern.rennecke@embecosm.com>
+	PR c/57821
+	* c-typeck.c (set_init_index): When folding, check for index overflow.

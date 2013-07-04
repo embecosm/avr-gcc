@@ -1,0 +1,6 @@
+2013-08-23  Joern Rennecke <joern.rennecke@embecosm.com>
+      Merged from fsf-gcc/trunk:
+      2013-07-04  Joern Rennecke <joern.rennecke@embecosm.com>
+	PR c/57821
+	* c-common.c (complete_array_type): Delay folding first index
+	like other indices.  When folding, check for index overflow.
