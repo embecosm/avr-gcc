@@ -1,3 +1,9 @@
+2013-07-04  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* c/c-typeck.c (set_init_index): When folding, check for index overflow.
+	* c-family/c-common.c (complete_array_type): Delay folding first index
+	like other indices.  When folding, check for index overflow.
+
 2013-06-25  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.opt (mfract-convert-truncate): New option.

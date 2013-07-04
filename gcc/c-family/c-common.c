@@ -9806,8 +9806,8 @@ complete_array_type (tree *ptype, tree initial_value, bool do_default)
 	      bool fold_p = false;
 
 	      if ((*v)[0].index)
-		maxindex = fold_convert_loc (input_location, sizetype,
-					     (*v)[0].index);
+		maxindex = (*v)[0].index, fold_p = true;
+
 	      curindex = maxindex;
 
 	      for (cnt = 1; vec_safe_iterate (v, cnt, &ce); cnt++)
@@ -9818,15 +9818,28 @@ complete_array_type (tree *ptype, tree initial_value, bool do_default)
 		  else
 		    {
 		      if (fold_p)
-		        curindex = fold_convert (sizetype, curindex);
+			{
+			  /* Since we treat size types now as ordinary
+			     unsigned types, we need an explicit overflow
+			     check.  */
+			  tree orig = curindex;
+		          curindex = fold_convert (sizetype, curindex);
+			  if (tree_int_cst_lt (curindex, orig))
+			    TREE_OVERFLOW (curindex) = 1;
+			}
 		      curindex = size_binop (PLUS_EXPR, curindex,
 					     size_one_node);
 		    }
 		  if (tree_int_cst_lt (maxindex, curindex))
 		    maxindex = curindex, fold_p = curfold_p;
 		}
-	       if (fold_p)
-	         maxindex = fold_convert (sizetype, maxindex);
+	      if (fold_p)
+		{
+		  tree orig = maxindex;
+	          maxindex = fold_convert (sizetype, maxindex);
+		  if (tree_int_cst_lt (maxindex, orig))
+		    TREE_OVERFLOW (maxindex) = 1;
+		}
 	    }
 	}
       else
