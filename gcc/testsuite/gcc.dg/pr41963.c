@@ -1,6 +1,5 @@
 /* { dg-do run } */
 /* { dg-options "-O2 -ffast-math" } */
-/* { dg-options "-O2 -ffast-math -lm" { target { "avr-*-*" } } } */
 
 extern float fabsf(float);
 extern float sqrtf(float);
