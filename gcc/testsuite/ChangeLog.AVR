@@ -5,6 +5,8 @@
 
 	* gcc.dg/pr46647.c: xfail for avr*-*-*.
 
+	* gcc.dg/pr53265.c: Disable test for avr*-*-*.
+
 2013-07-04  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.dg/large-size-array-6.c: New test.
