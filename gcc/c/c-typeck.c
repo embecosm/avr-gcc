@@ -7216,7 +7216,10 @@ set_init_index (tree first, tree last,
 	constant_expression_warning (last);
       constructor_index = convert (bitsizetype, first);
       if (tree_int_cst_lt (constructor_index, first))
-	TREE_OVERFLOW (constructor_index) = 1;
+	{
+	  constructor_index = copy_node (constructor_index);
+	  TREE_OVERFLOW (constructor_index) = 1;
+	}
 
       if (last)
 	{

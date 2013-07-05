@@ -1,3 +1,8 @@
+2013-07-05  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	PR c/57821
+	* c-typeck.c (set_init_index): When folding, check for index overflow.
+
 2013-05-14  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* c-typeck.c (c_common_type): Prefer double_type_node over

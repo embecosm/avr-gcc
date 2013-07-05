@@ -9778,6 +9778,7 @@ complete_array_type (tree *ptype, tree initial_value, bool do_default)
   tree maxindex, type, main_type, elt, unqual_elt;
   int failure = 0, quals;
   hashval_t hashcode = 0;
+  bool overflow_p = false;
 
   maxindex = size_zero_node;
   if (initial_value)
@@ -9824,8 +9825,7 @@ complete_array_type (tree *ptype, tree initial_value, bool do_default)
 			     check.  */
 			  tree orig = curindex;
 		          curindex = fold_convert (sizetype, curindex);
-			  if (tree_int_cst_lt (curindex, orig))
-			    TREE_OVERFLOW (curindex) = 1;
+			  overflow_p |= tree_int_cst_lt (curindex, orig);
 			}
 		      curindex = size_binop (PLUS_EXPR, curindex,
 					     size_one_node);
@@ -9837,8 +9837,7 @@ complete_array_type (tree *ptype, tree initial_value, bool do_default)
 		{
 		  tree orig = maxindex;
 	          maxindex = fold_convert (sizetype, maxindex);
-		  if (tree_int_cst_lt (maxindex, orig))
-		    TREE_OVERFLOW (maxindex) = 1;
+		  overflow_p |= tree_int_cst_lt (maxindex, orig);
 		}
 	    }
 	}
@@ -9900,7 +9899,7 @@ complete_array_type (tree *ptype, tree initial_value, bool do_default)
 
   if (COMPLETE_TYPE_P (type)
       && TREE_CODE (TYPE_SIZE_UNIT (type)) == INTEGER_CST
-      && TREE_OVERFLOW (TYPE_SIZE_UNIT (type)))
+      && (overflow_p || TREE_OVERFLOW (TYPE_SIZE_UNIT (type))))
     {
       error ("size of array is too large");
       /* If we proceed with the array type as it is, we'll eventually
