@@ -44,3 +44,6 @@
       2013-05-14  Joern Rennecke <joern.rennecke@embecosm.com>
 	* config/avr/avr.c (avr_encode_section_info): Bail out if the type
 	is error_mark_node.
+      2013-07-10  Georg-Johann Lay  <avr@gjlay.de>
+	PR target/56987
+	* config/avr/avr.opt (Waddr-space-convert): Fix typo.
