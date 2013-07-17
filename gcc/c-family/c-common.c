@@ -10660,10 +10660,22 @@ same_scalar_type_ignoring_signedness (tree t1, tree t2)
 	      && (c2 == INTEGER_TYPE || c2 == REAL_TYPE
 		  || c2 == FIXED_POINT_TYPE));
 
+  t1 = c_common_signed_type (t1);
+  t2 = c_common_signed_type (t2);
   /* Equality works here because c_common_signed_type uses
      TYPE_MAIN_VARIANT.  */
-  return c_common_signed_type (t1)
-    == c_common_signed_type (t2);
+  if (t1 == t2)
+    return true;
+  if (TYPE_PRECISION (t1) != TYPE_PRECISION (t2))
+    return false;
+  /* When short and int are the same size, we promote vectors of short
+     to vectors of int when doing arithmetic with scalars.  Hence,
+     we also have to accept mixing short / int vectors in this case.
+     Example: c-c++-common/vector-scalar.c for target avr.  */
+  if ((t1 == integer_type_node && t2 == short_integer_type_node)
+      || (t2 == integer_type_node && t1 == short_integer_type_node))
+    return true;
+  return false;
 }
 
 /* Check for missing format attributes on function pointers.  LTYPE is
