@@ -2,6 +2,8 @@
 
 	* gcc.dg/tree-ssa/pr21090.c: Do folding scan check only for
 	target { keeps_null_pointer_checks }.
+	* gcc.dg/tree-ssa/unreachable.c: Do optimized scan check only for
+	target { keeps_null_pointer_checks }.
 
 	* c-c++-common/simulate-thread/bitfields-2.c: Run test only for
 	target { ! int16 }.
