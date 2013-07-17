@@ -14,6 +14,7 @@
 	* lib/target-supports.exp (check_effective_target_int32): New proc.
 
 	* gcc.dg/torture/pr53366-1.c: Only run for target { size32plus }.
+	* gcc.dg/torture/pr56488.c: Likewise.
 
 	* gcc.dg/tree-ssa/pr42585.c: Add avr*-*-* to list of targets to
 	exclude from scan test.
