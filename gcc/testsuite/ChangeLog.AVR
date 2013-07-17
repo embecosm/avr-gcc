@@ -13,6 +13,8 @@
 	* gcc.dg/tree-ssa/slsr-3.c, gcc.dg/tree-ssa/ssa-ccp-23.c: Likewise.
 	* lib/target-supports.exp (check_effective_target_int32): New proc.
 
+	* gcc.dg/torture/pr53366-1.c: Only run for target { size32plus }.
+
 2013-07-05  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.dg/pr44214-1.c (v2df): Define size using sizeof (double).
