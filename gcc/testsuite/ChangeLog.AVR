@@ -15,6 +15,9 @@
 
 	* gcc.dg/torture/pr53366-1.c: Only run for target { size32plus }.
 
+	* gcc.dg/tree-ssa/pr42585.c: Add avr*-*-* to list of targets to
+	exclude from scan test.
+
 2013-07-05  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.dg/pr44214-1.c (v2df): Define size using sizeof (double).
