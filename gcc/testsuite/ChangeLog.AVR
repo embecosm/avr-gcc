@@ -12,7 +12,9 @@
 	PR c/57821
 	* gcc.dg/large-size-array-6.c: New test.
       2013-07-20  Joern Rennecke <joern.rennecke@embecosm.com>
-        * gcc.dg/tree-ssa/pr21090.c: Do vrp1 scan check only for
-        target { ! keeps_null_pointer_checks }.
-        * gcc.dg/tree-ssa/unreachable.c: Do optimized scan check only for
-        target { ! keeps_null_pointer_checks }.
+	* gcc.dg/tree-ssa/pr21090.c: Do vrp1 scan check only for
+	target { ! keeps_null_pointer_checks }.
+	* gcc.dg/tree-ssa/unreachable.c: Do optimized scan check only for
+	target { ! keeps_null_pointer_checks }.
+	* gcc.dg/torture/pr53366-1.c: Only run for target { size32plus }.
+	* gcc.dg/torture/pr56488.c: Likewise.
