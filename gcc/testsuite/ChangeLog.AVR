@@ -21,3 +21,10 @@
       2013-07-22  Georg-Johann Lay  <avr@gjlay.de>
 	PR testsuite/52641
 	* gcc.c-torture/execute/pr53366-1.x: New: Skip int16 platforms.
+      2013-07-22  Georg-Johann Lay  <avr@gjlay.de>
+	PR testsuite/52641
+	* gcc.c-torture/execute/pr57344-2.x: New. Skip int16.
+	* gcc.dg/pr53265.c: Add dg-require-effective-target size32plus.
+	* gcc.dg/torture/pr53366-1.c: Same.
+	* gcc.dg/torture/pr56488.c: Add dg-require-effective-target int32plus.
+	* gcc.dg/tree-ssa/pr57385.c: Same.
