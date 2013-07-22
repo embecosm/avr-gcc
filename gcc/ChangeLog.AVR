@@ -77,3 +77,6 @@
 	(avr_out_bitop): Handle the case where `insn' is just a pattern.
 	(avr_out_round): New function.
 	(avr_adjust_insn_length): Handle ADJUST_LEN_ROUND.
+      2013-07-22  Georg-Johann Lay  <avr@gjlay.de>
+	* config/avr/avr.c (avr_out_xload): No SBIS around LPM so that
+	instruction sequence is 1 byte shorter.
