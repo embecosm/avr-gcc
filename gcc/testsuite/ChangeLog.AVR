@@ -18,3 +18,6 @@
 	target { ! keeps_null_pointer_checks }.
 	* gcc.dg/torture/pr53366-1.c: Only run for target { size32plus }.
 	* gcc.dg/torture/pr56488.c: Likewise.
+      2013-07-22  Georg-Johann Lay  <avr@gjlay.de>
+	PR testsuite/52641
+	* gcc.c-torture/execute/pr53366-1.x: New: Skip int16 platforms.
