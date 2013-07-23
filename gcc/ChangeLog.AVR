@@ -80,3 +80,5 @@
       2013-07-22  Georg-Johann Lay  <avr@gjlay.de>
 	* config/avr/avr.c (avr_out_xload): No SBIS around LPM so that
 	instruction sequence is 1 byte shorter.
+      2013-07-23  Georg-Johann Lay  <avr@gjlay.de>
+	* config/avr/avr.md: Explain asm print modifier 'r' for REG.
