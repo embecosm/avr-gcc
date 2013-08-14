@@ -71,3 +71,5 @@
 	* gcc.dg/debug/dwarf2/dwarf-die5.c: Likewise.
 	PR testsuite/52641
 	* gcc.c-torture/execute/pr56799.x: New file.
+
+	* gcc.dg/c99-stdint-1.c [avr-*-*]: Update line number for dg-bogus.
