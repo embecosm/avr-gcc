@@ -69,3 +69,5 @@
 	* gcc.dg/debug/dwarf2/dwarf-die6.c: Likewise.
 	* gcc.dg/debug/dwarf2/const-2b.c: Likewise.
 	* gcc.dg/debug/dwarf2/dwarf-die5.c: Likewise.
+	PR testsuite/52641
+	* gcc.c-torture/execute/pr56799.x: New file.
