@@ -1,5 +1,5 @@
 /* PR tree-optimization/53265 */
-/* { dg-do compile { target { ! avr*-*-* } } } */ /* Don't run if arrays are too large.  */
+/* { dg-do compile { target { ! avr-*-* } } } */ /* Don't run if arrays are too large.  */
 /* { dg-options "-O2 -Wall" } */
 
 void bar (void *);

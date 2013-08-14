@@ -2,6 +2,11 @@
 
 	* gcc.dg/tree-ssa/pr31261.c [int16]: Change expected unsigned type.
 
+	* gcc.dg/pr46647.c, gcc.dg/pr53265.c: Use avr-*-*, not avr*-*-*.
+	* gcc.dg/strlenopt-10.c, strlenopt-11.c: Likewise.
+	* gcc.dg/strlenopt-13.c: Likewise.
+	* gcc.dg/tree-ssa/pr42585.c: Likewise.
+
 2013-07-17  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/pr21090.c: Do folding scan check only for
