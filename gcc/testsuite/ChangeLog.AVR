@@ -8,6 +8,8 @@
 	* gcc.dg/tree-ssa/vector-4.c (SItype): New typedef.
 	(v4si): Use it.
 
+	* gcc.dg/tree-ssa/vrp87.c [avr-*-*] (dg-additional-options): New.
+
 2013-08-14  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/pr31261.c [int16]: Change expected unsigned type.
