@@ -1,4 +1,4 @@
-2013-08-16  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-08-16  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/ssa-dom-thread-4.c [avr-*-*]: Expect 6 times
 	"Threaded".
@@ -10,7 +10,7 @@
 
 	* gcc.dg/tree-ssa/vrp87.c [avr-*-*] (dg-additional-options): New.
 
-2013-08-14  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-08-14  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/pr31261.c [int16]: Change expected unsigned type.
 
@@ -21,14 +21,14 @@
 	* gcc.dg/tree-ssa/pta-escape-2.c: Likewise.
 	* gcc.dg/tree-ssa/pta-escape-3.c: Likewise.
 
-2013-08-14  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-08-14  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/pr46647.c, gcc.dg/pr53265.c: Use avr-*-*, not avr*-*-*.
 	* gcc.dg/strlenopt-10.c, strlenopt-11.c: Likewise.
 	* gcc.dg/strlenopt-13.c: Likewise.
 	* gcc.dg/tree-ssa/pr42585.c: Likewise.
 
-2013-07-17  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-07-17  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/pr21090.c: Do folding scan check only for
 	target { keeps_null_pointer_checks }.
@@ -51,7 +51,7 @@
 	* gcc.dg/tree-ssa/pr42585.c: Add avr*-*-* to list of targets to
 	exclude from scan test.
 
-2013-07-05  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-07-05  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/pr44214-1.c (v2df): Define size using sizeof (double).
 	* gcc.dg/pr44214-3.c (v2df): Likewise.
@@ -69,34 +69,34 @@
 	* c-c++-common/scal-to-vec1.c: Add !int16 and large_double conditions
 	to tests that assume int/double are larger than short/float.
 
-2013-07-04  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-07-04  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/large-size-array-6.c: New test.
 
-2013-07-03  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-07-03  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* testsuite/gcc.dg/tree-ssa/vrp66.c: Make conditional on
 	{ target { ! int16 } } .
 	* gcc.dg/tree-ssa/vrp66-int16-sw.c: New test.
 
-2013-06-24  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-06-24  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/torture/stackalign/builtin-apply-2.c: Also skip for avr.
 
-2013-06-14  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-06-14  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/pr57154.c: Add dg-require-effective-target scheduling.
 	* gcc.dg/torture/alias-1.c: Likewise.
 
-2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-05-26  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/c99-stdint-1.c [avr-*-*]: Update line number for dg-bogus.
 
-2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-05-13  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.c-torture/execute/pr56799.x: New file.
 
-2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-05-13  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* global-used-types.c, inline2.c, inline3.c: Request dwarf-2 output.
 	* pr37726.c, pr41445-1.c, pr41445-2.c, pr41445-3.c: Likewise.
@@ -104,7 +104,7 @@
 	* pr41695.c, pr43237.c, pr47939-1.c, pr47939-2.c: Likewise.
 	* pr47939-3.c, pr47939-4.c, pr53948.c, struct-loc1.c: Likewise.
 
-2013-05-13  Joern Rennecke <joern.rennecke@embecosm.com>
+2013-05-13  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* testsuite/gcc.c-torture/compile/limits-externdecl.c [target avr-*-*]:
 	Expect "size of array is too large" error.
