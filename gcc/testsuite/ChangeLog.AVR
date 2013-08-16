@@ -5,6 +5,9 @@
 
 	* gcc.dg/tree-ssa/ssa-pre-21.c [! size32plus]: mark as xfail.
 
+	* gcc.dg/tree-ssa/vector-4.c (SItype): New typedef.
+	(v4si): Use it.
+
 2013-08-14  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/pr31261.c [int16]: Change expected unsigned type.
