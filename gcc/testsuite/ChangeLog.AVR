@@ -3,7 +3,7 @@
 	* gcc.dg/tree-ssa/ssa-dom-thread-4.c [avr-*-*]: Expect 6 times
 	"Threaded".
 
-	* gcc.dg/tree-ssa/ssa-pre-21.c [! size32plus]: mark as xfail.
+	* gcc.dg/tree-ssa/ssa-pre-21.c [! size32plus]: Mark as xfail.
 
 	* gcc.dg/tree-ssa/vector-4.c (SItype): New typedef.
 	(v4si): Use it.
