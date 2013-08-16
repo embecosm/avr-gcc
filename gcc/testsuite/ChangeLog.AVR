@@ -3,6 +3,8 @@
 	* gcc.dg/tree-ssa/ssa-dom-thread-4.c [avr-*-*]: Expect 6 times
 	"Threaded".
 
+	* gcc.dg/tree-ssa/ssa-pre-21.c [! size32plus]: mark as xfail.
+
 2013-08-14  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/pr31261.c [int16]: Change expected unsigned type.
