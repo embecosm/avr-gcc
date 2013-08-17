@@ -5,6 +5,8 @@
 	* gcc.dg/tree-ssa/vrp55.c: Use keeps_null_pointer_checks to determine
 	correct test response.
 
+	* gcc.dg/tree-ssa/ssa-pre-30.c: Test requires int32.
+
 2013-08-16  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/ssa-dom-thread-4.c [avr-*-*]: Expect 6 times
