@@ -1,3 +1,7 @@
+2013-08-18  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* gcc.dg/tree-ssa/vrp58.c: Adjust scan expression for int16.
+
 2013-08-17  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.target/avr/progmem-error-1.cpp: Update linenumber of error.
