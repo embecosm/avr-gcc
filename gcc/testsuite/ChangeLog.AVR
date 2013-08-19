@@ -118,3 +118,5 @@
 	* gcc.dg/debug/dwarf2/pr47939-4.c: Likewise.
 	* gcc.dg/debug/dwarf2/pr53948.c: Likewise.
 	* gcc.dg/debug/dwarf2/struct-loc1.c: Likewise.
+      2013-08-19  Joern Rennecke  <joern.rennecke@embecosm.com>
+	* gcc.target/avr/progmem-error-1.cpp: Update linenumber of error.
