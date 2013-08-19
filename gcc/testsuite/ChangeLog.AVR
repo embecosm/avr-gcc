@@ -122,3 +122,5 @@
 	* gcc.target/avr/progmem-error-1.cpp: Update linenumber of error.
 	* gcc.dg/tree-ssa/ssa-dom-thread-4.c [avr-*-*]: Expect 6 times
 	"Threaded".
+	* gcc.dg/tree-ssa/vrp55.c: Use keeps_null_pointer_checks to determine
+	correct test response.
