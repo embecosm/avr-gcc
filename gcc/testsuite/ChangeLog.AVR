@@ -1,3 +1,10 @@
+2013-08-19  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* gcc.dg/tree-ssa/pta-escape-1.c (scan-tree-dump): Remove excess
+	curly brace.
+	* gcc.dg/tree-ssa/pta-escape-2.c: Likewise.
+	* gcc.dg/tree-ssa/pta-escape-3.c: Likewise.
+
 2013-08-18  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.dg/tree-ssa/vrp58.c: Adjust scan expression for int16.
