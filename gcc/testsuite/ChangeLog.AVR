@@ -141,6 +141,7 @@
 	PR target/57516
 	* gcc.target/avr/torture/builtins-4-roundfx.c (test2hr, test2k):
 	Adjust to corrected rounding.
+      Merged from embecosm/avr-gcc-mainline:
       2013-08-19  Joern Rennecke <joern.rennecke@embecosm.com>
 	* gcc.dg/ipa/ipa-pta-14.c (scan-ipa-dump): Don't expect NULL in
 	foo.result set.
