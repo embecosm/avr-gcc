@@ -1,3 +1,10 @@
+2013-09-23  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_can_eliminate): Allow elimination from
+	arg pointer to stack pointer if no frame pointer is needed.
+	* config/avr/avr.h (ELIMINABLE_REGS): Add entry for elimination
+	from arg pointer to stack pointer.
+
 2013-08-26  Joern Rennecke <joern.rennecke@embecosm.com>
       Merged from fsf-gcc/trunk:
       2013-04-10  Senthil Kumar Selvaraj  <senthil_kumar.selvaraj@atmel.com>
