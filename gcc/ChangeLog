@@ -1,3 +1,12 @@
+2013-10-30  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	PR other/58545
+	* reload1.c (update_eliminables_and_spill): New function, broken
+	out of reload.
+	(reload): Use it.  Check for frame size change after frame
+	size alignment, and call update_eliminables_and_spill first
+	if continue-ing.
+
 2013-05-31  Release Manager
 
 	* GCC 4.8.1 released.
