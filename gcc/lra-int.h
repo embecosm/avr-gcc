@@ -1,5 +1,5 @@
 /* Local Register Allocator (LRA) intercommunication header file.
-   Copyright (C) 2010-2013 Free Software Foundation, Inc.
+   Copyright (C) 2010-2014 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -32,16 +32,6 @@ along with GCC; see the file COPYING3.	If not see
    insn operands might require a reload and, if it is a memory, its
    base and index registers might require a reload too.	 */
 #define LRA_MAX_INSN_RELOADS (MAX_RECOG_OPERANDS * 3)
-
-/* Return the hard register which given pseudo REGNO assigned to.
-   Negative value means that the register got memory or we don't know
-   allocation yet.  */
-static inline int
-lra_get_regno_hard_regno (int regno)
-{
-  resize_reg_info ();
-  return reg_renumber[regno];
-}
 
 typedef struct lra_live_range *lra_live_range_t;
 
@@ -217,6 +207,12 @@ struct lra_insn_recog_data
 {
   /* The insn code.  */
   int icode;
+  /* The alternative should be used for the insn, -1 if invalid, or we
+     should try to use any alternative, or the insn is a debug
+     insn.  */
+  int used_insn_alternative;
+  /* SP offset before the insn relative to one at the func start.  */
+  HOST_WIDE_INT sp_offset;
   /* The insn itself.  */
   rtx insn;
   /* Common data for insns with the same ICODE.  Asm insns (their
@@ -232,10 +228,6 @@ struct lra_insn_recog_data
   int *arg_hard_regs;
   /* Alternative enabled for the insn.	NULL for debug insns.  */
   bool *alternative_enabled_p;
-  /* The alternative should be used for the insn, -1 if invalid, or we
-     should try to use any alternative, or the insn is a debug
-     insn.  */
-  int used_insn_alternative;
   /* The following member value is always NULL for a debug insn.  */
   struct lra_insn_reg *regs;
 };
@@ -321,11 +313,13 @@ extern int lra_new_regno_start;
 extern int lra_constraint_new_regno_start;
 extern bitmap_head lra_inheritance_pseudos;
 extern bitmap_head lra_split_regs;
+extern bitmap_head lra_subreg_reload_pseudos;
 extern bitmap_head lra_optional_reload_pseudos;
 extern int lra_constraint_new_insn_uid_start;
 
 /* lra-constraints.c: */
 
+extern void lra_init_equiv (void);
 extern int lra_constraint_offset (int, enum machine_mode);
 
 extern int lra_constraint_iter;
@@ -386,12 +380,37 @@ extern void lra_final_code_change (void);
 
 extern void lra_debug_elim_table (void);
 extern int lra_get_elimination_hard_regno (int);
-extern rtx lra_eliminate_regs_1 (rtx, enum machine_mode, bool, bool, bool);
-extern void lra_eliminate (bool);
+extern rtx lra_eliminate_regs_1 (rtx, rtx, enum machine_mode, bool, bool, bool);
+extern void lra_eliminate (bool, bool);
 
 extern void lra_eliminate_reg_if_possible (rtx *);
 
 
+
+/* Return the hard register which given pseudo REGNO assigned to.
+   Negative value means that the register got memory or we don't know
+   allocation yet.  */
+static inline int
+lra_get_regno_hard_regno (int regno)
+{
+  resize_reg_info ();
+  return reg_renumber[regno];
+}
+
+/* Change class of pseudo REGNO to NEW_CLASS.  Print info about it
+   using TITLE.  Output a new line if NL_P.  */
+static void inline
+lra_change_class (int regno, enum reg_class new_class,
+		  const char *title, bool nl_p)
+{
+  lra_assert (regno >= FIRST_PSEUDO_REGISTER);
+  if (lra_dump_file != NULL)
+    fprintf (lra_dump_file, "%s class %s for r%d",
+	     title, reg_class_names[new_class], regno);
+  setup_reg_classes (regno, new_class, NO_REGS, new_class);
+  if (lra_dump_file != NULL && nl_p)
+    fprintf (lra_dump_file, "\n");
+}
 
 /* Update insn operands which are duplication of NOP operand.  The
    insn is represented by its LRA internal representation ID.  */

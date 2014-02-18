@@ -1,5 +1,5 @@
 /* Intrinsic translation
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>
    and Steven Bosscher <s.bosscher@student.tudelft.nl>
 
@@ -26,6 +26,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"		/* For UNITS_PER_WORD.  */
 #include "tree.h"
+#include "stringpool.h"
+#include "tree-nested.h"
+#include "stor-layout.h"
 #include "ggc.h"
 #include "diagnostic-core.h"	/* For internal_error.  */
 #include "toplev.h"	/* For rest_of_decl_compilation.  */
@@ -39,6 +42,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "trans-array.h"
 /* Only for gfc_trans_assign and gfc_trans_pointer_assign.  */
 #include "trans-stmt.h"
+#include "tree-nested.h"
 
 /* This maps Fortran intrinsic math functions to external library or GCC
    builtin functions.  */
@@ -4685,8 +4689,10 @@ static void
 gfc_conv_intrinsic_ichar (gfc_se * se, gfc_expr * expr)
 {
   tree args[2], type, pchartype;
+  int nargs;
 
-  gfc_conv_intrinsic_function_args (se, expr, args, 2);
+  nargs = gfc_intrinsic_argument_list_length (expr);
+  gfc_conv_intrinsic_function_args (se, expr, args, nargs);
   gcc_assert (POINTER_TYPE_P (TREE_TYPE (args[1])));
   pchartype = gfc_get_pchar_type (expr->value.function.actual->expr->ts.kind);
   args[1] = fold_build1_loc (input_location, NOP_EXPR, pchartype, args[1]);
@@ -5249,12 +5255,10 @@ static void
 gfc_conv_intrinsic_storage_size (gfc_se *se, gfc_expr *expr)
 {
   gfc_expr *arg;
-  gfc_se argse,eight;
+  gfc_se argse;
   tree type, result_type, tmp;
 
   arg = expr->value.function.actual->expr;
-  gfc_init_se (&eight, NULL);
-  gfc_conv_expr (&eight, gfc_get_int_expr (expr->ts.kind, NULL, 8));
   
   gfc_init_se (&argse, NULL);
   result_type = gfc_get_int_type (expr->ts.kind);
@@ -5285,11 +5289,12 @@ gfc_conv_intrinsic_storage_size (gfc_se *se, gfc_expr *expr)
   if (arg->ts.type == BT_CHARACTER)
     tmp = size_of_string_in_bytes (arg->ts.kind, argse.string_length);
   else
-    tmp = fold_convert (result_type, size_in_bytes (type)); 
+    tmp = size_in_bytes (type); 
+  tmp = fold_convert (result_type, tmp);
 
 done:
   se->expr = fold_build2_loc (input_location, MULT_EXPR, result_type, tmp,
-			      eight.expr);
+			      build_int_cst (result_type, BITS_PER_UNIT));
   gfc_add_block_to_block (&se->pre, &argse.pre);
 }
 
@@ -5653,8 +5658,7 @@ scalar_transfer:
 
   if (expr->ts.type == BT_CHARACTER)
     {
-      tree direct;
-      tree indirect;
+      tree direct, indirect, free;
 
       ptr = convert (gfc_get_pchar_type (expr->ts.kind), source);
       tmpdecl = gfc_create_var (gfc_get_pchar_type (expr->ts.kind),
@@ -5686,6 +5690,13 @@ scalar_transfer:
 			     dest_word_len, source_bytes);
       tmp = build3_v (COND_EXPR, tmp, direct, indirect);
       gfc_add_expr_to_block (&se->pre, tmp);
+
+      /* Free the temporary string, if necessary.  */
+      free = gfc_call_free (tmpdecl);
+      tmp = fold_build2_loc (input_location, GT_EXPR, boolean_type_node,
+			     dest_word_len, source_bytes);
+      tmp = build3_v (COND_EXPR, tmp, free, build_empty_stmt (input_location));
+      gfc_add_expr_to_block (&se->post, tmp);
 
       se->expr = tmpdecl;
       se->string_length = fold_convert (gfc_charlen_type_node, dest_word_len);
@@ -7634,7 +7645,8 @@ conv_intrinsic_move_alloc (gfc_code *code)
 				  from_se.expr));
 
               /* Reset _vptr component to declared type.  */
-	      if (UNLIMITED_POLY (from_expr))
+	      if (vtab == NULL)
+		/* Unlimited polymorphic.  */
 		gfc_add_modify_loc (input_location, &block, from_se.expr,
 				    fold_convert (TREE_TYPE (from_se.expr),
 						  null_pointer_node));
@@ -7647,10 +7659,7 @@ conv_intrinsic_move_alloc (gfc_code *code)
 	    }
 	  else
 	    {
-	      if (from_expr->ts.type != BT_DERIVED)
-		vtab = gfc_find_intrinsic_vtab (&from_expr->ts);
-	      else
-		vtab = gfc_find_derived_vtab (from_expr->ts.u.derived);
+	      vtab = gfc_find_vtab (&from_expr->ts);
 	      gcc_assert (vtab);
 	      tmp = gfc_build_addr_expr (NULL_TREE, gfc_get_symbol_decl (vtab));
 	      gfc_add_modify_loc (input_location, &block, to_se.expr,
@@ -7690,7 +7699,8 @@ conv_intrinsic_move_alloc (gfc_code *code)
 			      from_se.expr));
 
 	  /* Reset _vptr component to declared type.  */
-	  if (UNLIMITED_POLY (from_expr))
+	  if (vtab == NULL)
+	    /* Unlimited polymorphic.  */
 	    gfc_add_modify_loc (input_location, &block, from_se.expr,
 				fold_convert (TREE_TYPE (from_se.expr),
 					      null_pointer_node));
@@ -7703,10 +7713,7 @@ conv_intrinsic_move_alloc (gfc_code *code)
 	}
       else
 	{
-	  if (from_expr->ts.type != BT_DERIVED)
-	    vtab = gfc_find_intrinsic_vtab (&from_expr->ts);
-	  else
-	    vtab = gfc_find_derived_vtab (from_expr->ts.u.derived);
+	  vtab = gfc_find_vtab (&from_expr->ts);
 	  gcc_assert (vtab);
 	  tmp = gfc_build_addr_expr (NULL_TREE, gfc_get_symbol_decl (vtab));
 	  gfc_add_modify_loc (input_location, &block, to_se.expr,

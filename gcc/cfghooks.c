@@ -1,5 +1,5 @@
 /* Hooks for cfg representation specific functions.
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <s.pop@laposte.net>
 
 This file is part of GCC.
@@ -26,7 +26,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree.h"
 #include "rtl.h"
 #include "basic-block.h"
-#include "tree-flow.h"
+#include "tree-ssa.h"
 #include "timevar.h"
 #include "diagnostic-core.h"
 #include "cfgloop.h"
@@ -98,15 +98,15 @@ verify_flow_info (void)
   basic_block *last_visited;
 
   timevar_push (TV_CFG_VERIFY);
-  last_visited = XCNEWVEC (basic_block, last_basic_block);
-  edge_checksum = XCNEWVEC (size_t, last_basic_block);
+  last_visited = XCNEWVEC (basic_block, last_basic_block_for_fn (cfun));
+  edge_checksum = XCNEWVEC (size_t, last_basic_block_for_fn (cfun));
 
   /* Check bb chain & numbers.  */
-  last_bb_seen = ENTRY_BLOCK_PTR;
-  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR->next_bb, NULL, next_bb)
+  last_bb_seen = ENTRY_BLOCK_PTR_FOR_FN (cfun);
+  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb, NULL, next_bb)
     {
-      if (bb != EXIT_BLOCK_PTR
-	  && bb != BASIC_BLOCK (bb->index))
+      if (bb != EXIT_BLOCK_PTR_FOR_FN (cfun)
+	  && bb != BASIC_BLOCK_FOR_FN (cfun, bb->index))
 	{
 	  error ("bb %d on wrong place", bb->index);
 	  err = 1;
@@ -123,7 +123,7 @@ verify_flow_info (void)
     }
 
   /* Now check the basic blocks (boundaries etc.) */
-  FOR_EACH_BB_REVERSE (bb)
+  FOR_EACH_BB_REVERSE_FN (bb, cfun)
     {
       int n_fallthru = 0;
       edge e;
@@ -234,21 +234,21 @@ verify_flow_info (void)
     edge e;
     edge_iterator ei;
 
-    FOR_EACH_EDGE (e, ei, ENTRY_BLOCK_PTR->succs)
+    FOR_EACH_EDGE (e, ei, ENTRY_BLOCK_PTR_FOR_FN (cfun)->succs)
       edge_checksum[e->dest->index] += (size_t) e;
 
-    FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR->preds)
+    FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR_FOR_FN (cfun)->preds)
       edge_checksum[e->dest->index] -= (size_t) e;
   }
 
-  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR, NULL, next_bb)
+  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun), NULL, next_bb)
     if (edge_checksum[bb->index])
       {
 	error ("basic block %i edge lists are corrupted", bb->index);
 	err = 1;
       }
 
-  last_bb_seen = ENTRY_BLOCK_PTR;
+  last_bb_seen = ENTRY_BLOCK_PTR_FOR_FN (cfun);
 
   /* Clean up.  */
   free (last_visited);
@@ -323,8 +323,9 @@ dump_flow_info (FILE *file, int flags)
 {
   basic_block bb;
 
-  fprintf (file, "\n%d basic blocks, %d edges.\n", n_basic_blocks, n_edges);
-  FOR_ALL_BB (bb)
+  fprintf (file, "\n%d basic blocks, %d edges.\n", n_basic_blocks_for_fn (cfun),
+	   n_edges_for_fn (cfun));
+  FOR_ALL_BB_FN (bb, cfun)
     dump_bb (file, bb, 0, flags);
 
   putc ('\n', file);
@@ -937,10 +938,11 @@ tidy_fallthru_edges (void)
   if (!cfg_hooks->tidy_fallthru_edge)
     return;
 
-  if (ENTRY_BLOCK_PTR->next_bb == EXIT_BLOCK_PTR)
+  if (ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb == EXIT_BLOCK_PTR_FOR_FN (cfun))
     return;
 
-  FOR_BB_BETWEEN (b, ENTRY_BLOCK_PTR->next_bb, EXIT_BLOCK_PTR->prev_bb, next_bb)
+  FOR_BB_BETWEEN (b, ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb,
+		  EXIT_BLOCK_PTR_FOR_FN (cfun)->prev_bb, next_bb)
     {
       edge s;
 
@@ -1010,7 +1012,7 @@ can_duplicate_block_p (const_basic_block bb)
     internal_error ("%s does not support can_duplicate_block_p",
 		    cfg_hooks->name);
 
-  if (bb == EXIT_BLOCK_PTR || bb == ENTRY_BLOCK_PTR)
+  if (bb == EXIT_BLOCK_PTR_FOR_FN (cfun) || bb == ENTRY_BLOCK_PTR_FOR_FN (cfun))
     return false;
 
   return cfg_hooks->can_duplicate_block_p (bb);
@@ -1282,12 +1284,17 @@ end:
 
 /* Duplicates N basic blocks stored in array BBS.  Newly created basic blocks
    are placed into array NEW_BBS in the same order.  Edges from basic blocks
-   in BBS are also duplicated and copies of those of them
-   that lead into BBS are redirected to appropriate newly created block.  The
-   function assigns bbs into loops (copy of basic block bb is assigned to
-   bb->loop_father->copy loop, so this must be set up correctly in advance)
-   and updates dominators locally (LOOPS structure that contains the information
-   about dominators is passed to enable this).
+   in BBS are also duplicated and copies of those that lead into BBS are
+   redirected to appropriate newly created block.  The function assigns bbs
+   into loops (copy of basic block bb is assigned to bb->loop_father->copy
+   loop, so this must be set up correctly in advance)
+
+   If UPDATE_DOMINANCE is true then this function updates dominators locally
+   (LOOPS structure that contains the information about dominators is passed
+   to enable this), otherwise it does not update the dominator information
+   and it assumed that the caller will do this, perhaps by destroying and
+   recreating it instead of trying to do an incremental update like this
+   function does when update_dominance is true.
 
    BASE is the superloop to that basic block belongs; if its header or latch
    is copied, we do not set the new blocks as header or latch.
@@ -1301,7 +1308,7 @@ end:
 void
 copy_bbs (basic_block *bbs, unsigned n, basic_block *new_bbs,
 	  edge *edges, unsigned num_edges, edge *new_edges,
-	  struct loop *base, basic_block after)
+	  struct loop *base, basic_block after, bool update_dominance)
 {
   unsigned i, j;
   basic_block bb, new_bb, dom_bb;
@@ -1327,16 +1334,19 @@ copy_bbs (basic_block *bbs, unsigned n, basic_block *new_bbs,
     }
 
   /* Set dominators.  */
-  for (i = 0; i < n; i++)
+  if (update_dominance)
     {
-      bb = bbs[i];
-      new_bb = new_bbs[i];
-
-      dom_bb = get_immediate_dominator (CDI_DOMINATORS, bb);
-      if (dom_bb->flags & BB_DUPLICATED)
+      for (i = 0; i < n; i++)
 	{
-	  dom_bb = get_bb_copy (dom_bb);
-	  set_immediate_dominator (CDI_DOMINATORS, new_bb, dom_bb);
+	  bb = bbs[i];
+	  new_bb = new_bbs[i];
+
+	  dom_bb = get_immediate_dominator (CDI_DOMINATORS, bb);
+	  if (dom_bb->flags & BB_DUPLICATED)
+	    {
+	      dom_bb = get_bb_copy (dom_bb);
+	      set_immediate_dominator (CDI_DOMINATORS, new_bb, dom_bb);
+	    }
 	}
     }
 
@@ -1398,10 +1408,10 @@ account_profile_record (struct profile_record *record, int after_pass)
   int sum;
   gcov_type lsum;
 
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
    {
-      if (bb != EXIT_BLOCK_PTR_FOR_FUNCTION (cfun)
-	  && profile_status != PROFILE_ABSENT)
+      if (bb != EXIT_BLOCK_PTR_FOR_FN (cfun)
+	  && profile_status_for_fn (cfun) != PROFILE_ABSENT)
 	{
 	  sum = 0;
 	  FOR_EACH_EDGE (e, ei, bb->succs)
@@ -1415,8 +1425,8 @@ account_profile_record (struct profile_record *record, int after_pass)
 	      && (lsum - bb->count > 100 || lsum - bb->count < -100))
 	    record->num_mismatched_count_out[after_pass]++;
 	}
-      if (bb != ENTRY_BLOCK_PTR_FOR_FUNCTION (cfun)
-	  && profile_status != PROFILE_ABSENT)
+      if (bb != ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	  && profile_status_for_fn (cfun) != PROFILE_ABSENT)
 	{
 	  sum = 0;
 	  FOR_EACH_EDGE (e, ei, bb->preds)
@@ -1431,10 +1441,10 @@ account_profile_record (struct profile_record *record, int after_pass)
 	  if (lsum - bb->count > 100 || lsum - bb->count < -100)
 	    record->num_mismatched_count_in[after_pass]++;
 	}
-      if (bb == ENTRY_BLOCK_PTR_FOR_FUNCTION (cfun)
-	  || bb == EXIT_BLOCK_PTR_FOR_FUNCTION (cfun))
+      if (bb == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	  || bb == EXIT_BLOCK_PTR_FOR_FN (cfun))
 	continue;
       gcc_assert (cfg_hooks->account_profile_record);
-      cfg_hooks->account_profile_record(bb, after_pass, record);
+      cfg_hooks->account_profile_record (bb, after_pass, record);
    }
 }

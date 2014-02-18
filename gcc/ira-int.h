@@ -1,5 +1,5 @@
 /* Integrated Register Allocator (IRA) intercommunication header file.
-   Copyright (C) 2006-2013 Free Software Foundation, Inc.
+   Copyright (C) 2006-2014 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -43,8 +43,9 @@ along with GCC; see the file COPYING3.  If not see
    executed, frequency is always equivalent.  Otherwise rescale the
    edge frequency.  */
 #define REG_FREQ_FROM_EDGE_FREQ(freq)					   \
-  (optimize_size || (flag_branch_probabilities && !ENTRY_BLOCK_PTR->count) \
-   ? REG_FREQ_MAX : (freq * REG_FREQ_MAX / BB_FREQ_MAX)			   \
+  (optimize_size || (flag_branch_probabilities				   \
+		     && !ENTRY_BLOCK_PTR_FOR_FN (cfun)->count)		   \
+   ? REG_FREQ_MAX : (freq * REG_FREQ_MAX / BB_FREQ_MAX)		   \
    ? (freq * REG_FREQ_MAX / BB_FREQ_MAX) : 1)
 
 /* A modified value of flag `-fira-verbose' used internally.  */
@@ -57,6 +58,7 @@ extern FILE *ira_dump_file;
    allocnos.  */
 typedef struct live_range *live_range_t;
 typedef struct ira_allocno *ira_allocno_t;
+typedef struct ira_allocno_pref *ira_pref_t;
 typedef struct ira_allocno_copy *ira_copy_t;
 typedef struct ira_object *ira_object_t;
 
@@ -346,6 +348,8 @@ struct ira_allocno
      register class living at the point than number of hard-registers
      of the class available for the allocation.  */
   int excess_pressure_points_num;
+  /* Allocno hard reg preferences.  */
+  ira_pref_t allocno_prefs;
   /* Copies to other non-conflicting allocnos.  The copies can
      represent move insn or potential move insn usually because of two
      operand insn constraints.  */
@@ -426,6 +430,7 @@ struct ira_allocno
 #define ALLOCNO_BAD_SPILL_P(A) ((A)->bad_spill_p)
 #define ALLOCNO_ASSIGNED_P(A) ((A)->assigned_p)
 #define ALLOCNO_MODE(A) ((A)->mode)
+#define ALLOCNO_PREFS(A) ((A)->allocno_prefs)
 #define ALLOCNO_COPIES(A) ((A)->allocno_copies)
 #define ALLOCNO_HARD_REG_COSTS(A) ((A)->hard_reg_costs)
 #define ALLOCNO_UPDATED_HARD_REG_COSTS(A) ((A)->updated_hard_reg_costs)
@@ -515,6 +520,33 @@ extern ira_object_t *ira_object_id_map;
 
 /* The size of the previous array.  */
 extern int ira_objects_num;
+
+/* The following structure represents a hard register prefererence of
+   allocno.  The preference represent move insns or potential move
+   insns usually because of two operand insn constraints.  One move
+   operand is a hard register.  */
+struct ira_allocno_pref
+{
+  /* The unique order number of the preference node starting with 0.  */
+  int num;
+  /* Preferred hard register.  */
+  int hard_regno;
+  /* Accumulated execution frequency of insns from which the
+     preference created.  */
+  int freq;
+  /* Given allocno.  */
+  ira_allocno_t allocno;
+  /* All prefernces with the same allocno are linked by the following
+     member.  */
+  ira_pref_t next_pref;
+};
+
+/* Array of references to all allocno preferences.  The order number
+   of the preference corresponds to the index in the array.  */
+extern ira_pref_t *ira_prefs;
+
+/* Size of the previous array.  */
+extern int ira_prefs_num;
 
 /* The following structure represents a copy of two allocnos.  The
    copies represent move insns or potential move insns usually because
@@ -656,7 +688,7 @@ extern int ira_move_loops_num, ira_additional_jumps_num;
 #endif
 
 /* The iterator for min/max sets.  */
-typedef struct {
+struct minmax_set_iterator {
 
   /* Array containing the bit vector.  */
   IRA_INT_TYPE *vec;
@@ -675,7 +707,7 @@ typedef struct {
 
   /* The word of the bit vector currently visited.  */
   unsigned IRA_INT_TYPE word;
-} minmax_set_iterator;
+};
 
 /* Initialize the iterator I for bit vector VEC containing minimal and
    maximal values MIN and MAX.  */
@@ -925,12 +957,18 @@ extern void ira_print_disposition (FILE *);
 extern void ira_debug_disposition (void);
 extern void ira_debug_allocno_classes (void);
 extern void ira_init_register_move_cost (enum machine_mode);
+extern void ira_setup_alts (rtx insn, HARD_REG_SET &alts);
+extern int ira_get_dup_out_num (int op_num, HARD_REG_SET &alts);
 
 /* ira-build.c */
 
 /* The current loop tree node and its regno allocno map.  */
 extern ira_loop_tree_node_t ira_curr_loop_tree_node;
 extern ira_allocno_t *ira_curr_regno_allocno_map;
+
+extern void ira_debug_pref (ira_pref_t);
+extern void ira_debug_prefs (void);
+extern void ira_debug_allocno_prefs (ira_allocno_t);
 
 extern void ira_debug_copy (ira_copy_t);
 extern void debug (ira_allocno_copy &ref);
@@ -963,10 +1001,12 @@ extern bool ira_live_ranges_intersect_p (live_range_t, live_range_t);
 extern void ira_finish_live_range (live_range_t);
 extern void ira_finish_live_range_list (live_range_t);
 extern void ira_free_allocno_updated_costs (ira_allocno_t);
+extern ira_pref_t ira_create_pref (ira_allocno_t, int, int);
+extern void ira_add_allocno_pref (ira_allocno_t, int, int);
+extern void ira_remove_pref (ira_pref_t);
+extern void ira_remove_allocno_prefs (ira_allocno_t);
 extern ira_copy_t ira_create_copy (ira_allocno_t, ira_allocno_t,
 				   int, bool, rtx, ira_loop_tree_node_t);
-extern void ira_add_allocno_copy_to_list (ira_copy_t);
-extern void ira_swap_allocno_copy_ends_if_necessary (ira_copy_t);
 extern ira_copy_t ira_add_allocno_copy (ira_allocno_t, ira_allocno_t, int,
 					bool, rtx, ira_loop_tree_node_t);
 
@@ -1041,10 +1081,10 @@ ira_init_register_move_cost_if_necessary (enum machine_mode mode)
 
 
 /* The iterator for all allocnos.  */
-typedef struct {
+struct ira_allocno_iterator {
   /* The number of the current element in IRA_ALLOCNOS.  */
   int n;
-} ira_allocno_iterator;
+};
 
 /* Initialize the iterator I.  */
 static inline void
@@ -1078,10 +1118,10 @@ ira_allocno_iter_cond (ira_allocno_iterator *i, ira_allocno_t *a)
        ira_allocno_iter_cond (&(ITER), &(A));)
 
 /* The iterator for all objects.  */
-typedef struct {
+struct ira_object_iterator {
   /* The number of the current element in ira_object_id_map.  */
   int n;
-} ira_object_iterator;
+};
 
 /* Initialize the iterator I.  */
 static inline void
@@ -1115,10 +1155,10 @@ ira_object_iter_cond (ira_object_iterator *i, ira_object_t *obj)
        ira_object_iter_cond (&(ITER), &(OBJ));)
 
 /* The iterator for objects associated with an allocno.  */
-typedef struct {
+struct ira_allocno_object_iterator {
   /* The number of the element the allocno's object array.  */
   int n;
-} ira_allocno_object_iterator;
+};
 
 /* Initialize the iterator I.  */
 static inline void
@@ -1151,11 +1191,49 @@ ira_allocno_object_iter_cond (ira_allocno_object_iterator *i, ira_allocno_t a,
        ira_allocno_object_iter_cond (&(ITER), (A), &(O));)
 
 
+/* The iterator for prefs.  */
+struct ira_pref_iterator {
+  /* The number of the current element in IRA_PREFS.  */
+  int n;
+};
+
+/* Initialize the iterator I.  */
+static inline void
+ira_pref_iter_init (ira_pref_iterator *i)
+{
+  i->n = 0;
+}
+
+/* Return TRUE if we have more prefs to visit, in which case *PREF is
+   set to the pref to be visited.  Otherwise, return FALSE.  */
+static inline bool
+ira_pref_iter_cond (ira_pref_iterator *i, ira_pref_t *pref)
+{
+  int n;
+
+  for (n = i->n; n < ira_prefs_num; n++)
+    if (ira_prefs[n] != NULL)
+      {
+	*pref = ira_prefs[n];
+	i->n = n + 1;
+	return true;
+      }
+  return false;
+}
+
+/* Loop over all prefs.  In each iteration, P is set to the next
+   pref.  ITER is an instance of ira_pref_iterator used to iterate
+   the prefs.  */
+#define FOR_EACH_PREF(P, ITER)				\
+  for (ira_pref_iter_init (&(ITER));			\
+       ira_pref_iter_cond (&(ITER), &(P));)
+
+
 /* The iterator for copies.  */
-typedef struct {
+struct ira_copy_iterator {
   /* The number of the current element in IRA_COPIES.  */
   int n;
-} ira_copy_iterator;
+};
 
 /* Initialize the iterator I.  */
 static inline void
@@ -1189,7 +1267,7 @@ ira_copy_iter_cond (ira_copy_iterator *i, ira_copy_t *cp)
        ira_copy_iter_cond (&(ITER), &(C));)
 
 /* The iterator for object conflicts.  */
-typedef struct {
+struct ira_object_conflict_iterator {
 
   /* TRUE if the conflicts are represented by vector of allocnos.  */
   bool conflict_vec_p;
@@ -1216,7 +1294,7 @@ typedef struct {
   /* The word of bit vector currently visited.  It is defined only if
      OBJECT_CONFLICT_VEC_P is FALSE.  */
   unsigned IRA_INT_TYPE word;
-} ira_object_conflict_iterator;
+};
 
 /* Initialize the iterator I with ALLOCNO conflicts.  */
 static inline void

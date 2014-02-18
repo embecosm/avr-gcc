@@ -1,5 +1,5 @@
 /* Definitions for code generation pass of GNU compiler.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -26,9 +26,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "rtl.h"
 /* For optimize_size */
 #include "flags.h"
-/* For host_integerp, tree_low_cst, fold_convert, size_binop, ssize_int,
-   TREE_CODE, TYPE_SIZE, int_size_in_bytes,    */
-#include "tree.h"
+/* For tree_fits_[su]hwi_p, tree_to_[su]hwi, fold_convert, size_binop,
+   ssize_int, TREE_CODE, TYPE_SIZE, int_size_in_bytes,    */
+#include "tree-core.h"
 /* For GET_MODE_BITSIZE, word_mode */
 #include "machmode.h"
 
@@ -41,7 +41,8 @@ along with GCC; see the file COPYING3.  If not see
     is a constant that is not a legitimate address.
    EXPAND_WRITE means we are only going to write to the resulting rtx.
    EXPAND_MEMORY means we are interested in a memory result, even if
-    the memory is constant and we could have propagated a constant value.  */
+    the memory is constant and we could have propagated a constant value,
+    or the memory is unaligned on a STRICT_ALIGNMENT target.  */
 enum expand_modifier {EXPAND_NORMAL = 0, EXPAND_STACK_PARM, EXPAND_SUM,
 		      EXPAND_CONST_ADDRESS, EXPAND_INITIALIZER, EXPAND_WRITE,
 		      EXPAND_MEMORY};
@@ -94,8 +95,8 @@ struct locate_and_pad_arg_data
 #define ADD_PARM_SIZE(TO, INC)					\
 do {								\
   tree inc = (INC);						\
-  if (host_integerp (inc, 0))					\
-    (TO).constant += tree_low_cst (inc, 0);			\
+  if (tree_fits_shwi_p (inc))					\
+    (TO).constant += tree_to_shwi (inc);			\
   else if ((TO).var == 0)					\
     (TO).var = fold_convert (ssizetype, inc);			\
   else								\
@@ -106,8 +107,8 @@ do {								\
 #define SUB_PARM_SIZE(TO, DEC)					\
 do {								\
   tree dec = (DEC);						\
-  if (host_integerp (dec, 0))					\
-    (TO).constant -= tree_low_cst (dec, 0);			\
+  if (tree_fits_shwi_p (dec))					\
+    (TO).constant -= tree_to_shwi (dec);			\
   else if ((TO).var == 0)					\
     (TO).var = size_binop (MINUS_EXPR, ssize_int (0),		\
 			   fold_convert (ssizetype, dec));	\
@@ -300,7 +301,10 @@ extern void init_block_clear_fn (const char *);
 extern rtx emit_block_move (rtx, rtx, rtx, enum block_op_methods);
 extern rtx emit_block_move_via_libcall (rtx, rtx, rtx, bool);
 extern rtx emit_block_move_hints (rtx, rtx, rtx, enum block_op_methods,
-			          unsigned int, HOST_WIDE_INT);
+			          unsigned int, HOST_WIDE_INT,
+				  unsigned HOST_WIDE_INT,
+				  unsigned HOST_WIDE_INT,
+				  unsigned HOST_WIDE_INT);
 extern bool emit_storent_insn (rtx to, rtx from);
 
 /* Copy all or part of a value X into registers starting at REGNO.
@@ -361,13 +365,19 @@ extern void use_group_regs (rtx *, rtx);
    If OBJECT has BLKmode, SIZE is its length in bytes.  */
 extern rtx clear_storage (rtx, rtx, enum block_op_methods);
 extern rtx clear_storage_hints (rtx, rtx, enum block_op_methods,
-			        unsigned int, HOST_WIDE_INT);
+			        unsigned int, HOST_WIDE_INT,
+				unsigned HOST_WIDE_INT,
+				unsigned HOST_WIDE_INT,
+				unsigned HOST_WIDE_INT);
 /* The same, but always output an library call.  */
 rtx set_storage_via_libcall (rtx, rtx, rtx, bool);
 
 /* Expand a setmem pattern; return true if successful.  */
 extern bool set_storage_via_setmem (rtx, rtx, rtx, unsigned int,
-				    unsigned int, HOST_WIDE_INT);
+				    unsigned int, HOST_WIDE_INT,
+				    unsigned HOST_WIDE_INT,
+				    unsigned HOST_WIDE_INT,
+				    unsigned HOST_WIDE_INT);
 
 extern unsigned HOST_WIDE_INT move_by_pieces_ninsns (unsigned HOST_WIDE_INT,
 						     unsigned int,
@@ -403,6 +413,7 @@ extern rtx emit_move_insn_1 (rtx, rtx);
 
 extern rtx emit_move_complex_push (enum machine_mode, rtx, rtx);
 extern rtx emit_move_complex_parts (rtx, rtx);
+extern rtx emit_move_resolve_push (enum machine_mode, rtx);
 
 /* Push a block of length SIZE (perhaps variable)
    and return an rtx to address the beginning of the block.  */
@@ -428,9 +439,9 @@ extern rtx force_operand (rtx, rtx);
 
 /* Work horses for expand_expr.  */
 extern rtx expand_expr_real (tree, rtx, enum machine_mode,
-			     enum expand_modifier, rtx *);
+			     enum expand_modifier, rtx *, bool);
 extern rtx expand_expr_real_1 (tree, rtx, enum machine_mode,
-			       enum expand_modifier, rtx *);
+			       enum expand_modifier, rtx *, bool);
 extern rtx expand_expr_real_2 (sepops, rtx, enum machine_mode,
 			       enum expand_modifier);
 
@@ -441,13 +452,13 @@ static inline rtx
 expand_expr (tree exp, rtx target, enum machine_mode mode,
 	     enum expand_modifier modifier)
 {
-  return expand_expr_real (exp, target, mode, modifier, NULL);
+  return expand_expr_real (exp, target, mode, modifier, NULL, false);
 }
 
 static inline rtx
 expand_normal (tree exp)
 {
-  return expand_expr_real (exp, NULL_RTX, VOIDmode, EXPAND_NORMAL, NULL);
+  return expand_expr_real (exp, NULL_RTX, VOIDmode, EXPAND_NORMAL, NULL, false);
 }
 
 /* At the start of a function, record that we have no previously-pushed
@@ -463,6 +474,28 @@ extern void clear_pending_stack_adjust (void);
 
 /* Pop any previously-pushed arguments that have not been popped yet.  */
 extern void do_pending_stack_adjust (void);
+
+/* Struct for saving/restoring of pending_stack_adjust/stack_pointer_delta
+   values.  */
+
+struct saved_pending_stack_adjust
+{
+  /* Saved value of pending_stack_adjust.  */
+  int x_pending_stack_adjust;
+
+  /* Saved value of stack_pointer_delta.  */
+  int x_stack_pointer_delta;
+};
+
+/* Remember pending_stack_adjust/stack_pointer_delta.
+   To be used around code that may call do_pending_stack_adjust (),
+   but the generated code could be discarded e.g. using delete_insns_since.  */
+
+extern void save_pending_stack_adjust (saved_pending_stack_adjust *);
+
+/* Restore the saved pending_stack_adjust/stack_pointer_delta.  */
+
+extern void restore_pending_stack_adjust (saved_pending_stack_adjust *);
 
 /* Return the tree node and offset if a given argument corresponds to
    a string constant.  */
@@ -521,8 +554,8 @@ extern rtx expand_divmod (int, enum tree_code, enum machine_mode, rtx, rtx,
 			  rtx, int);
 #endif
 
-extern void locate_and_pad_parm (enum machine_mode, tree, int, int, tree,
-				 struct args_size *,
+extern void locate_and_pad_parm (enum machine_mode, tree, int, int, int,
+				 tree, struct args_size *,
 				 struct locate_and_pad_arg_data *);
 
 /* Return the CODE_LABEL rtx for a LABEL_DECL, creating it if necessary.  */
@@ -704,7 +737,7 @@ extern void store_bit_field (rtx, unsigned HOST_WIDE_INT,
 			     unsigned HOST_WIDE_INT,
 			     enum machine_mode, rtx);
 extern rtx extract_bit_field (rtx, unsigned HOST_WIDE_INT,
-			      unsigned HOST_WIDE_INT, int, bool, rtx,
+			      unsigned HOST_WIDE_INT, int, rtx,
 			      enum machine_mode, enum machine_mode);
 extern rtx extract_low_bits (enum machine_mode, enum machine_mode, rtx);
 extern rtx expand_mult (enum machine_mode, rtx, rtx, rtx, int);
@@ -738,5 +771,24 @@ extern void expand_case (gimple);
 
 /* Like expand_case but special-case for SJLJ exception dispatching.  */
 extern void expand_sjlj_dispatch_table (rtx, vec<tree> );
+
+/* Determine whether the LEN bytes can be moved by using several move
+   instructions.  Return nonzero if a call to move_by_pieces should
+   succeed.  */
+extern int can_move_by_pieces (unsigned HOST_WIDE_INT, unsigned int);
+
+extern unsigned HOST_WIDE_INT highest_pow2_factor (const_tree);
+bool array_at_struct_end_p (tree);
+
+/* Return a tree of sizetype representing the size, in bytes, of the element
+   of EXP, an ARRAY_REF or an ARRAY_RANGE_REF.  */
+extern tree array_ref_element_size (tree);
+
+extern bool categorize_ctor_elements (const_tree, HOST_WIDE_INT *,
+				      HOST_WIDE_INT *, bool *);
+
+/* Return a tree representing the offset, in bytes, of the field referenced
+   by EXP.  This does not include any offset in DECL_FIELD_BIT_OFFSET.  */
+extern tree component_ref_field_offset (tree);
 
 #endif /* GCC_EXPR_H */

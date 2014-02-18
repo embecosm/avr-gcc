@@ -1,5 +1,5 @@
 /* Expand the basic unary and binary arithmetic operations, for GNU compiler.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -29,6 +29,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "insn-config.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "stringpool.h"
+#include "varasm.h"
 #include "tm_p.h"
 #include "flags.h"
 #include "function.h"
@@ -401,8 +404,8 @@ optab_for_tree_code (enum tree_code code, const_tree type,
     case FLOOR_DIV_EXPR:
     case ROUND_DIV_EXPR:
     case EXACT_DIV_EXPR:
-      if (TYPE_SATURATING(type))
-	return TYPE_UNSIGNED(type) ? usdiv_optab : ssdiv_optab;
+      if (TYPE_SATURATING (type))
+	return TYPE_UNSIGNED (type) ? usdiv_optab : ssdiv_optab;
       return TYPE_UNSIGNED (type) ? udiv_optab : sdiv_optab;
 
     case LSHIFT_EXPR:
@@ -413,8 +416,8 @@ optab_for_tree_code (enum tree_code code, const_tree type,
 
 	  gcc_assert (subtype == optab_scalar);
 	}
-      if (TYPE_SATURATING(type))
-	return TYPE_UNSIGNED(type) ? usashl_optab : ssashl_optab;
+      if (TYPE_SATURATING (type))
+	return TYPE_UNSIGNED (type) ? usashl_optab : ssashl_optab;
       return ashl_optab;
 
     case RSHIFT_EXPR:
@@ -556,23 +559,23 @@ optab_for_tree_code (enum tree_code code, const_tree type,
     {
     case POINTER_PLUS_EXPR:
     case PLUS_EXPR:
-      if (TYPE_SATURATING(type))
-	return TYPE_UNSIGNED(type) ? usadd_optab : ssadd_optab;
+      if (TYPE_SATURATING (type))
+	return TYPE_UNSIGNED (type) ? usadd_optab : ssadd_optab;
       return trapv ? addv_optab : add_optab;
 
     case MINUS_EXPR:
-      if (TYPE_SATURATING(type))
-	return TYPE_UNSIGNED(type) ? ussub_optab : sssub_optab;
+      if (TYPE_SATURATING (type))
+	return TYPE_UNSIGNED (type) ? ussub_optab : sssub_optab;
       return trapv ? subv_optab : sub_optab;
 
     case MULT_EXPR:
-      if (TYPE_SATURATING(type))
-	return TYPE_UNSIGNED(type) ? usmul_optab : ssmul_optab;
+      if (TYPE_SATURATING (type))
+	return TYPE_UNSIGNED (type) ? usmul_optab : ssmul_optab;
       return trapv ? smulv_optab : smul_optab;
 
     case NEGATE_EXPR:
-      if (TYPE_SATURATING(type))
-	return TYPE_UNSIGNED(type) ? usneg_optab : ssneg_optab;
+      if (TYPE_SATURATING (type))
+	return TYPE_UNSIGNED (type) ? usneg_optab : ssneg_optab;
       return trapv ? negv_optab : neg_optab;
 
     case ABS_EXPR:
@@ -1563,7 +1566,7 @@ expand_binop (enum machine_mode mode, optab binoptab, rtx op0, rtx op1,
         newop1 = negate_rtx (GET_MODE (op1), op1);
       else
         newop1 = expand_binop (GET_MODE (op1), sub_optab,
-			       GEN_INT (bits), op1,
+			       gen_int_mode (bits, GET_MODE (op1)), op1,
 			       NULL_RTX, unsignedp, OPTAB_DIRECT);
 
       temp = expand_binop_directly (mode, otheroptab, op0, newop1,
@@ -2539,10 +2542,12 @@ widen_leading (enum machine_mode mode, rtx op0, rtx target, optab unoptab)
 	      temp = expand_unop (wider_mode, unoptab, xop0, NULL_RTX,
 				  unoptab != clrsb_optab);
 	      if (temp != 0)
-		temp = expand_binop (wider_mode, sub_optab, temp,
-				     GEN_INT (GET_MODE_PRECISION (wider_mode)
-					      - GET_MODE_PRECISION (mode)),
-				     target, true, OPTAB_DIRECT);
+		temp = expand_binop
+		  (wider_mode, sub_optab, temp,
+		   gen_int_mode (GET_MODE_PRECISION (wider_mode)
+				 - GET_MODE_PRECISION (mode),
+				 wider_mode),
+		   target, true, OPTAB_DIRECT);
 	      if (temp == 0)
 		delete_insns_since (last);
 
@@ -2601,7 +2606,7 @@ expand_doubleword_clz (enum machine_mode mode, rtx op0, rtx target)
   if (!temp)
     goto fail;
   temp = expand_binop (word_mode, add_optab, temp,
-		       GEN_INT (GET_MODE_BITSIZE (word_mode)),
+		       gen_int_mode (GET_MODE_BITSIZE (word_mode), word_mode),
 		       result, true, OPTAB_DIRECT);
   if (!temp)
     goto fail;
@@ -2757,7 +2762,8 @@ expand_ctz (enum machine_mode mode, rtx op0, rtx target)
   if (temp)
     temp = expand_unop_direct (mode, clz_optab, temp, NULL_RTX, true);
   if (temp)
-    temp = expand_binop (mode, sub_optab, GEN_INT (GET_MODE_PRECISION (mode) - 1),
+    temp = expand_binop (mode, sub_optab,
+			 gen_int_mode (GET_MODE_PRECISION (mode) - 1, mode),
 			 temp, target,
 			 true, OPTAB_DIRECT);
   if (temp == 0)
@@ -2838,7 +2844,7 @@ expand_ffs (enum machine_mode mode, rtx op0, rtx target)
 
   /* temp now has a value in the range -1..bitsize-1.  ffs is supposed
      to produce a value in the range 0..bitsize.  */
-  temp = expand_binop (mode, add_optab, temp, GEN_INT (1),
+  temp = expand_binop (mode, add_optab, temp, gen_int_mode (1, mode),
 		       target, false, OPTAB_DIRECT);
   if (!temp)
     goto fail;
@@ -3308,10 +3314,12 @@ expand_unop (enum machine_mode mode, optab unoptab, rtx op0, rtx target,
 		 result.  Similarly for clrsb.  */
 	      if ((unoptab == clz_optab || unoptab == clrsb_optab)
 		  && temp != 0)
-		temp = expand_binop (wider_mode, sub_optab, temp,
-				     GEN_INT (GET_MODE_PRECISION (wider_mode)
-					      - GET_MODE_PRECISION (mode)),
-				     target, true, OPTAB_DIRECT);
+		temp = expand_binop
+		  (wider_mode, sub_optab, temp,
+		   gen_int_mode (GET_MODE_PRECISION (wider_mode)
+				 - GET_MODE_PRECISION (mode),
+				 wider_mode),
+		   target, true, OPTAB_DIRECT);
 
 	      /* Likewise for bswap.  */
 	      if (unoptab == bswap_optab && temp != 0)
@@ -4278,12 +4286,12 @@ emit_cmp_and_jump_insn_1 (rtx test, enum machine_mode mode, rtx label, int prob)
   insn = emit_jump_insn (GEN_FCN (icode) (test, XEXP (test, 0),
                                           XEXP (test, 1), label));
   if (prob != -1
-      && profile_status != PROFILE_ABSENT
+      && profile_status_for_fn (cfun) != PROFILE_ABSENT
       && insn
       && JUMP_P (insn)
       && any_condjump_p (insn)
       && !find_reg_note (insn, REG_BR_PROB, 0))
-    add_reg_note (insn, REG_BR_PROB, GEN_INT (prob));
+    add_int_reg_note (insn, REG_BR_PROB, prob);
 }
 
 /* Generate code to compare X with Y so that the condition codes are
@@ -4558,8 +4566,10 @@ emit_conditional_move (rtx target, enum rtx_code code, rtx op0, rtx op1,
   if (!COMPARISON_P (comparison))
     return NULL_RTX;
 
-  do_pending_stack_adjust ();
+  saved_pending_stack_adjust save;
+  save_pending_stack_adjust (&save);
   last = get_last_insn ();
+  do_pending_stack_adjust ();
   prepare_cmp_insn (XEXP (comparison, 0), XEXP (comparison, 1),
 		    GET_CODE (comparison), NULL_RTX, unsignedp, OPTAB_WIDEN,
 		    &comparison, &cmode);
@@ -4579,6 +4589,7 @@ emit_conditional_move (rtx target, enum rtx_code code, rtx op0, rtx op1,
 	}
     }
   delete_insns_since (last);
+  restore_pending_stack_adjust (&save);
   return NULL_RTX;
 }
 
@@ -5495,7 +5506,8 @@ gen_int_libfunc (optab optable, const char *opname, char suffix,
   if (maxsize < LONG_LONG_TYPE_SIZE)
     maxsize = LONG_LONG_TYPE_SIZE;
   if (GET_MODE_CLASS (mode) != MODE_INT
-      || mode < word_mode || GET_MODE_BITSIZE (mode) > maxsize)
+      || GET_MODE_BITSIZE (mode) < BITS_PER_WORD
+      || GET_MODE_BITSIZE (mode) > maxsize)
     return;
   gen_libfunc (optable, opname, suffix, mode);
 }
@@ -5709,7 +5721,7 @@ gen_interclass_conv_libfunc (convert_optab tab,
   fname = GET_MODE_NAME (fmode);
   tname = GET_MODE_NAME (tmode);
 
-  if (DECIMAL_FLOAT_MODE_P(fmode) || DECIMAL_FLOAT_MODE_P(tmode))
+  if (DECIMAL_FLOAT_MODE_P (fmode) || DECIMAL_FLOAT_MODE_P (tmode))
     {
       libfunc_name = dec_name;
       suffix = dec_suffix;
@@ -5842,7 +5854,7 @@ gen_intraclass_conv_libfunc (convert_optab tab, const char *opname,
   fname = GET_MODE_NAME (fmode);
   tname = GET_MODE_NAME (tmode);
 
-  if (DECIMAL_FLOAT_MODE_P(fmode) || DECIMAL_FLOAT_MODE_P(tmode))
+  if (DECIMAL_FLOAT_MODE_P (fmode) || DECIMAL_FLOAT_MODE_P (tmode))
     {
       libfunc_name = dec_name;
       suffix = dec_suffix;
@@ -6233,7 +6245,7 @@ init_tree_optimization_optabs (tree optnode)
 
   /* If the optabs changed, record it.  */
   if (memcmp (tmp_optabs, this_target_optabs, sizeof (struct target_optabs)))
-    TREE_OPTIMIZATION_OPTABS (optnode) = (unsigned char *) tmp_optabs;
+    TREE_OPTIMIZATION_OPTABS (optnode) = tmp_optabs;
   else
     {
       TREE_OPTIMIZATION_OPTABS (optnode) = NULL;
@@ -6619,8 +6631,8 @@ expand_vec_perm (enum machine_mode mode, rtx v0, rtx v1, rtx sel, rtx target)
 	  icode = direct_optab_handler (vec_perm_const_optab, qimode);
 	  if (icode != CODE_FOR_nothing)
 	    {
-	      tmp = expand_vec_perm_1 (icode, gen_lowpart (qimode, target),
-				       gen_lowpart (qimode, v0),
+	      tmp = mode != qimode ? gen_reg_rtx (qimode) : target;
+	      tmp = expand_vec_perm_1 (icode, tmp, gen_lowpart (qimode, v0),
 				       gen_lowpart (qimode, v1), sel_qi);
 	      if (tmp)
 		return gen_lowpart (mode, tmp);
@@ -6684,8 +6696,8 @@ expand_vec_perm (enum machine_mode mode, rtx v0, rtx v1, rtx sel, rtx target)
       gcc_assert (sel_qi != NULL);
     }
 
-  tmp = expand_vec_perm_1 (icode, gen_lowpart (qimode, target),
-			   gen_lowpart (qimode, v0),
+  tmp = mode != qimode ? gen_reg_rtx (qimode) : target;
+  tmp = expand_vec_perm_1 (icode, tmp, gen_lowpart (qimode, v0),
 			   gen_lowpart (qimode, v1), sel_qi);
   if (tmp)
     tmp = gen_lowpart (mode, tmp);
@@ -6904,6 +6916,45 @@ expand_mult_highpart (enum machine_mode mode, rtx op0, rtx op1,
 
   return expand_vec_perm (mode, m1, m2, perm, target);
 }
+
+/* Return true if target supports vector masked load/store for mode.  */
+bool
+can_vec_mask_load_store_p (enum machine_mode mode, bool is_load)
+{
+  optab op = is_load ? maskload_optab : maskstore_optab;
+  enum machine_mode vmode;
+  unsigned int vector_sizes;
+
+  /* If mode is vector mode, check it directly.  */
+  if (VECTOR_MODE_P (mode))
+    return optab_handler (op, mode) != CODE_FOR_nothing;
+
+  /* Otherwise, return true if there is some vector mode with
+     the mask load/store supported.  */
+
+  /* See if there is any chance the mask load or store might be
+     vectorized.  If not, punt.  */
+  vmode = targetm.vectorize.preferred_simd_mode (mode);
+  if (!VECTOR_MODE_P (vmode))
+    return false;
+
+  if (optab_handler (op, vmode) != CODE_FOR_nothing)
+    return true;
+
+  vector_sizes = targetm.vectorize.autovectorize_vector_sizes ();
+  while (vector_sizes != 0)
+    {
+      unsigned int cur = 1 << floor_log2 (vector_sizes);
+      vector_sizes &= ~cur;
+      if (cur <= GET_MODE_SIZE (mode))
+	continue;
+      vmode = mode_for_vector (mode, cur / GET_MODE_SIZE (mode));
+      if (VECTOR_MODE_P (vmode)
+	  && optab_handler (op, vmode) != CODE_FOR_nothing)
+	return true;
+    }
+  return false;
+}
 
 /* Return true if there is a compare_and_swap pattern.  */
 
@@ -7035,8 +7086,7 @@ maybe_emit_atomic_exchange (rtx target, rtx mem, rtx val, enum memmodel model)
 
       create_output_operand (&ops[0], target, mode);
       create_fixed_operand (&ops[1], mem);
-      /* VAL may have been promoted to a wider mode.  Shrink it if so.  */
-      create_convert_operand_to (&ops[2], val, mode, true);
+      create_input_operand (&ops[2], val, mode);
       create_integer_operand (&ops[3], model);
       if (maybe_expand_insn (icode, 4, ops))
 	return ops[0].value;
@@ -7075,8 +7125,7 @@ maybe_emit_sync_lock_test_and_set (rtx target, rtx mem, rtx val,
       struct expand_operand ops[3];
       create_output_operand (&ops[0], target, mode);
       create_fixed_operand (&ops[1], mem);
-      /* VAL may have been promoted to a wider mode.  Shrink it if so.  */
-      create_convert_operand_to (&ops[2], val, mode, true);
+      create_input_operand (&ops[2], val, mode);
       if (maybe_expand_insn (icode, 3, ops))
 	return ops[0].value;
     }
@@ -7118,8 +7167,6 @@ maybe_emit_compare_and_swap_exchange_loop (rtx target, rtx mem, rtx val)
     {
       if (!target || !register_operand (target, mode))
 	target = gen_reg_rtx (mode);
-      if (GET_MODE (val) != VOIDmode && GET_MODE (val) != mode)
-	val = convert_modes (mode, GET_MODE (val), val, 1);
       if (expand_compare_and_swap_loop (mem, target, val, NULL_RTX))
 	return target;
     }
@@ -7331,17 +7378,18 @@ expand_atomic_compare_and_swap (rtx *ptarget_bool, rtx *ptarget_oval,
       create_output_operand (&ops[0], target_bool, bool_mode);
       create_output_operand (&ops[1], target_oval, mode);
       create_fixed_operand (&ops[2], mem);
-      create_convert_operand_to (&ops[3], expected, mode, true);
-      create_convert_operand_to (&ops[4], desired, mode, true);
+      create_input_operand (&ops[3], expected, mode);
+      create_input_operand (&ops[4], desired, mode);
       create_integer_operand (&ops[5], is_weak);
       create_integer_operand (&ops[6], succ_model);
       create_integer_operand (&ops[7], fail_model);
-      expand_insn (icode, 8, ops);
-
-      /* Return success/failure.  */
-      target_bool = ops[0].value;
-      target_oval = ops[1].value;
-      goto success;
+      if (maybe_expand_insn (icode, 8, ops))
+	{
+	  /* Return success/failure.  */
+	  target_bool = ops[0].value;
+	  target_oval = ops[1].value;
+	  goto success;
+	}
     }
 
   /* Otherwise fall back to the original __sync_val_compare_and_swap
@@ -7353,8 +7401,8 @@ expand_atomic_compare_and_swap (rtx *ptarget_bool, rtx *ptarget_oval,
 
       create_output_operand (&ops[0], target_oval, mode);
       create_fixed_operand (&ops[1], mem);
-      create_convert_operand_to (&ops[2], expected, mode, true);
-      create_convert_operand_to (&ops[3], desired, mode, true);
+      create_input_operand (&ops[2], expected, mode);
+      create_input_operand (&ops[3], desired, mode);
       if (!maybe_expand_insn (icode, 4, ops))
 	return false;
 
@@ -7580,7 +7628,7 @@ expand_atomic_store (rtx mem, rtx val, enum memmodel model, bool use_release)
   /* If the size of the object is greater than word size on this target,
      a default store will not be atomic, Try a mem_exchange and throw away
      the result.  If that doesn't work, don't do anything.  */
-  if (GET_MODE_PRECISION(mode) > BITS_PER_WORD)
+  if (GET_MODE_PRECISION (mode) > BITS_PER_WORD)
     {
       rtx target = maybe_emit_atomic_exchange (NULL_RTX, mem, val, model);
       if (!target)
@@ -8228,6 +8276,10 @@ maybe_gen_insn (enum insn_code icode, unsigned int nops,
       return GEN_FCN (icode) (ops[0].value, ops[1].value, ops[2].value,
 			      ops[3].value, ops[4].value, ops[5].value,
 			      ops[6].value, ops[7].value);
+    case 9:
+      return GEN_FCN (icode) (ops[0].value, ops[1].value, ops[2].value,
+			      ops[3].value, ops[4].value, ops[5].value,
+			      ops[6].value, ops[7].value, ops[8].value);
     }
   gcc_unreachable ();
 }

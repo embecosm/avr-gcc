@@ -1,6 +1,6 @@
 /* Subroutines for insn-output.c for Windows NT.
    Contributed by Douglas Rupp (drupp@cs.washington.edu)
-   Copyright (C) 1995-2013 Free Software Foundation, Inc.
+   Copyright (C) 1995-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -27,14 +27,27 @@ along with GCC; see the file COPYING3.  If not see
 #include "hard-reg-set.h"
 #include "output.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "varasm.h"
 #include "flags.h"
 #include "tm_p.h"
 #include "diagnostic-core.h"
-#include "hashtab.h"
+#include "hash-table.h"
 #include "langhooks.h"
 #include "ggc.h"
 #include "target.h"
 #include "except.h"
+#include "pointer-set.h"
+#include "hash-table.h"
+#include "vec.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-fold.h"
+#include "tree-eh.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
 #include "lto-streamer.h"
 
 /* i386/PE specific attribute support.
@@ -109,6 +122,11 @@ i386_pe_determine_dllexport_p (tree decl)
   /* Don't export local clones of dllexports.  */
   if (!TREE_PUBLIC (decl))
     return false;
+
+  if (TREE_CODE (decl) == FUNCTION_DECL
+      && DECL_DECLARED_INLINE_P (decl)
+      && !flag_keep_inline_dllexport)
+    return false; 
 
   if (lookup_attribute ("dllexport", DECL_ATTRIBUTES (decl)))
     return true;
@@ -449,7 +467,7 @@ i386_pe_reloc_rw_mask (void)
 unsigned int
 i386_pe_section_type_flags (tree decl, const char *name, int reloc)
 {
-  static htab_t htab;
+  static hash_table <pointer_hash <unsigned int> > htab;
   unsigned int flags;
   unsigned int **slot;
 
@@ -460,8 +478,8 @@ i386_pe_section_type_flags (tree decl, const char *name, int reloc)
   /* The names we put in the hashtable will always be the unique
      versions given to us by the stringtable, so we can just use
      their addresses as the keys.  */
-  if (!htab)
-    htab = htab_create (31, htab_hash_pointer, htab_eq_pointer, NULL);
+  if (!htab.is_created ())
+    htab.create (31);
 
   if (decl && TREE_CODE (decl) == FUNCTION_DECL)
     flags = SECTION_CODE;
@@ -476,11 +494,11 @@ i386_pe_section_type_flags (tree decl, const char *name, int reloc)
 	flags |= SECTION_PE_SHARED;
     }
 
-  if (decl && DECL_ONE_ONLY (decl))
+  if (decl && DECL_P (decl) && DECL_ONE_ONLY (decl))
     flags |= SECTION_LINKONCE;
 
   /* See if we already have an entry for this section.  */
-  slot = (unsigned int **) htab_find_slot (htab, name, INSERT);
+  slot = htab.find_slot ((const unsigned int *)name, INSERT);
   if (!*slot)
     {
       *slot = (unsigned int *) xmalloc (sizeof (unsigned int));
@@ -547,8 +565,9 @@ i386_pe_asm_named_section (const char *name, unsigned int flags,
 	 sets 'discard' characteristic, rather than telling linker
 	 to warn of size or content mismatch, so do the same.  */ 
       bool discard = (flags & SECTION_CODE)
-		      || lookup_attribute ("selectany",
-					   DECL_ATTRIBUTES (decl));	 
+		      || (TREE_CODE (decl) != IDENTIFIER_NODE
+			  && lookup_attribute ("selectany",
+					       DECL_ATTRIBUTES (decl)));
       fprintf (asm_out_file, "\t.linkonce %s\n",
 	       (discard  ? "discard" : "same_size"));
     }
@@ -714,12 +733,29 @@ i386_pe_record_stub (const char *name)
 
 #ifdef CXX_WRAP_SPEC_LIST
 
+/* Hashtable helpers.  */
+
+struct wrapped_symbol_hasher : typed_noop_remove <char>
+{
+  typedef char value_type;
+  typedef char compare_type;
+  static inline hashval_t hash (const value_type *);
+  static inline bool equal (const value_type *, const compare_type *);
+  static inline void remove (value_type *);
+};
+
+inline hashval_t
+wrapped_symbol_hasher::hash (const value_type *v)
+{
+  return htab_hash_string (v);
+}
+
 /*  Hash table equality helper function.  */
 
-static int
-wrapper_strcmp (const void *x, const void *y)
+inline bool
+wrapped_symbol_hasher::equal (const value_type *x, const compare_type *y)
 {
-  return !strcmp ((const char *) x, (const char *) y);
+  return !strcmp (x, y);
 }
 
 /* Search for a function named TARGET in the list of library wrappers
@@ -733,7 +769,7 @@ static const char *
 i386_find_on_wrapper_list (const char *target)
 {
   static char first_time = 1;
-  static htab_t wrappers;
+  static hash_table <wrapped_symbol_hasher> wrappers;
 
   if (first_time)
     {
@@ -746,8 +782,7 @@ i386_find_on_wrapper_list (const char *target)
       char *bufptr;
       /* Breaks up the char array into separated strings
          strings and enter them into the hash table.  */
-      wrappers = htab_create_alloc (8, htab_hash_string, wrapper_strcmp,
-	0, xcalloc, free);
+      wrappers.create (8);
       for (bufptr = wrapper_list_buffer; *bufptr; ++bufptr)
 	{
 	  char *found = NULL;
@@ -760,12 +795,12 @@ i386_find_on_wrapper_list (const char *target)
 	  if (*bufptr)
 	    *bufptr = 0;
 	  if (found)
-	    *htab_find_slot (wrappers, found, INSERT) = found;
+	    *wrappers.find_slot (found, INSERT) = found;
 	}
       first_time = 0;
     }
 
-  return (const char *) htab_find (wrappers, target);
+  return wrappers.find (target);
 }
 
 #endif /* CXX_WRAP_SPEC_LIST */
@@ -1157,10 +1192,10 @@ i386_pe_seh_unwind_emit (FILE *asm_out_file, rtx insn)
 
   for (note = REG_NOTES (insn); note ; note = XEXP (note, 1))
     {
-      pat = XEXP (note, 0);
       switch (REG_NOTE_KIND (note))
 	{
 	case REG_FRAME_RELATED_EXPR:
+	  pat = XEXP (note, 0);
 	  goto found;
 
 	case REG_CFA_DEF_CFA:
@@ -1174,6 +1209,7 @@ i386_pe_seh_unwind_emit (FILE *asm_out_file, rtx insn)
 	  gcc_unreachable ();
 
 	case REG_CFA_ADJUST_CFA:
+	  pat = XEXP (note, 0);
 	  if (pat == NULL)
 	    {
 	      pat = PATTERN (insn);
@@ -1185,6 +1221,7 @@ i386_pe_seh_unwind_emit (FILE *asm_out_file, rtx insn)
 	  break;
 
 	case REG_CFA_OFFSET:
+	  pat = XEXP (note, 0);
 	  if (pat == NULL)
 	    pat = single_set (insn);
 	  seh_cfa_offset (asm_out_file, seh, pat);

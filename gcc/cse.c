@@ -1,5 +1,5 @@
 /* Common subexpression elimination for GNU compiler.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -468,7 +468,7 @@ struct table_elt
    a cost of 2.  Aside from these special cases, call `rtx_cost'.  */
 
 #define CHEAP_REGNO(N)							\
-  (REGNO_PTR_FRAME_P(N)							\
+  (REGNO_PTR_FRAME_P (N)						\
    || (HARD_REGISTER_NUM_P (N)						\
        && FIXED_REGNO_P (N) && REGNO_REG_CLASS (N) != NO_REGS))
 
@@ -1354,6 +1354,11 @@ try_const_anchors (rtx src_const, enum machine_mode mode)
   rtx lower_exp = NULL_RTX, upper_exp = NULL_RTX;
   unsigned lower_old, upper_old;
 
+  /* CONST_INT is used for CC modes, but we should leave those alone.  */
+  if (GET_MODE_CLASS (mode) == MODE_CC)
+    return NULL_RTX;
+
+  gcc_assert (SCALAR_INT_MODE_P (mode));
   if (!compute_const_anchors (src_const, &lower_base, &lower_offs,
 			      &upper_base, &upper_offs))
     return NULL_RTX;
@@ -1837,7 +1842,7 @@ check_dependence (rtx *x, void *data)
 {
   struct check_dependence_data *d = (struct check_dependence_data *) data;
   if (*x && MEM_P (*x))
-    return canon_anti_dependence (d->exp, d->mode, d->addr, *x);
+    return canon_anti_dependence (*x, true, d->exp, d->mode, d->addr);
   else
     return 0;
 }
@@ -3283,8 +3288,8 @@ fold_rtx (rtx x, rtx insn)
 	  break;
 
 	new_rtx = simplify_unary_operation (code, mode,
-					const_arg0 ? const_arg0 : folded_arg0,
-					mode_arg0);
+					    const_arg0 ? const_arg0 : folded_arg0,
+					    mode_arg0);
       }
       break;
 
@@ -4834,7 +4839,7 @@ cse_insn (rtx insn)
 
 	  /* Set what we are trying to extend and the operation it might
 	     have been extended with.  */
-	  memset (memory_extend_rtx, 0, sizeof(*memory_extend_rtx));
+	  memset (memory_extend_rtx, 0, sizeof (*memory_extend_rtx));
 	  PUT_CODE (memory_extend_rtx, LOAD_EXTEND_OP (mode));
 	  XEXP (memory_extend_rtx, 0) = src;
 
@@ -5381,7 +5386,7 @@ cse_insn (rtx insn)
 	      && CONST_INT_P (width)
 	      && INTVAL (width) < HOST_BITS_PER_WIDE_INT
 	      && ! (INTVAL (src_const)
-		    & ((HOST_WIDE_INT) (-1) << INTVAL (width))))
+		    & (HOST_WIDE_INT_M1U << INTVAL (width))))
 	    /* Exception: if the value is constant,
 	       and it won't be truncated, record it.  */
 	    ;
@@ -6063,9 +6068,12 @@ cse_process_notes_1 (rtx x, rtx object, bool *changed)
       return x;
 
     case EXPR_LIST:
-    case INSN_LIST:
       if (REG_NOTE_KIND (x) == REG_EQUAL)
 	XEXP (x, 0) = cse_process_notes (XEXP (x, 0), NULL_RTX, changed);
+      /* Fall through.  */
+
+    case INSN_LIST:
+    case INT_LIST:
       if (XEXP (x, 1))
 	XEXP (x, 1) = cse_process_notes (XEXP (x, 1), NULL_RTX, changed);
       return x;
@@ -6078,6 +6086,18 @@ cse_process_notes_1 (rtx x, rtx object, bool *changed)
 	/* We don't substitute VOIDmode constants into these rtx,
 	   since they would impede folding.  */
 	if (GET_MODE (new_rtx) != VOIDmode)
+	  validate_change (object, &XEXP (x, 0), new_rtx, 0);
+	return x;
+      }
+
+    case UNSIGNED_FLOAT:
+      {
+	rtx new_rtx = cse_process_notes (XEXP (x, 0), object, changed);
+	/* We don't substitute negative VOIDmode constants into these rtx,
+	   since they would impede folding.  */
+	if (GET_MODE (new_rtx) != VOIDmode
+	    || (CONST_INT_P (new_rtx) && INTVAL (new_rtx) >= 0)
+	    || (CONST_DOUBLE_P (new_rtx) && CONST_DOUBLE_HIGH (new_rtx) >= 0))
 	  validate_change (object, &XEXP (x, 0), new_rtx, 0);
 	return x;
       }
@@ -6192,7 +6212,7 @@ cse_find_path (basic_block first_bb, struct cse_basic_block_data *data,
 	      && e == BRANCH_EDGE (previous_bb_in_path))
 	    {
 	      bb = FALLTHRU_EDGE (previous_bb_in_path)->dest;
-	      if (bb != EXIT_BLOCK_PTR
+	      if (bb != EXIT_BLOCK_PTR_FOR_FN (cfun)
 		  && single_pred_p (bb)
 		  /* We used to assert here that we would only see blocks
 		     that we have not visited yet.  But we may end up
@@ -6246,7 +6266,7 @@ cse_find_path (basic_block first_bb, struct cse_basic_block_data *data,
 
 	  if (e
 	      && !((e->flags & EDGE_ABNORMAL_CALL) && cfun->has_nonlocal_label)
-	      && e->dest != EXIT_BLOCK_PTR
+	      && e->dest != EXIT_BLOCK_PTR_FOR_FN (cfun)
 	      && single_pred_p (e->dest)
 	      /* Avoid visiting basic blocks twice.  The large comment
 		 above explains why this can happen.  */
@@ -6514,7 +6534,7 @@ cse_main (rtx f ATTRIBUTE_UNUSED, int nregs)
 {
   struct cse_basic_block_data ebb_data;
   basic_block bb;
-  int *rc_order = XNEWVEC (int, last_basic_block);
+  int *rc_order = XNEWVEC (int, last_basic_block_for_fn (cfun));
   int i, n_blocks;
 
   df_set_flags (DF_LR_RUN_DCE);
@@ -6543,7 +6563,7 @@ cse_main (rtx f ATTRIBUTE_UNUSED, int nregs)
   reg_eqv_table = XNEWVEC (struct reg_eqv_elem, nregs);
 
   /* Set up the table of already visited basic blocks.  */
-  cse_visited_basic_blocks = sbitmap_alloc (last_basic_block);
+  cse_visited_basic_blocks = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (cse_visited_basic_blocks);
 
   /* Loop over basic blocks in reverse completion order (RPO),
@@ -6556,7 +6576,7 @@ cse_main (rtx f ATTRIBUTE_UNUSED, int nregs)
 	 processed before.  */
       do
 	{
-	  bb = BASIC_BLOCK (rc_order[i++]);
+	  bb = BASIC_BLOCK_FOR_FN (cfun, rc_order[i++]);
 	}
       while (bitmap_bit_p (cse_visited_basic_blocks, bb->index)
 	     && i < n_blocks);
@@ -6731,6 +6751,7 @@ count_reg_usage (rtx x, int *counts, rtx dest, int incr)
       return;
 
     case INSN_LIST:
+    case INT_LIST:
       gcc_unreachable ();
 
     default:
@@ -7157,7 +7178,7 @@ cse_cc_succs (basic_block bb, basic_block orig_bb, rtx cc_reg, rtx cc_src,
 	continue;
 
       if (EDGE_COUNT (e->dest->preds) != 1
-	  || e->dest == EXIT_BLOCK_PTR
+	  || e->dest == EXIT_BLOCK_PTR_FOR_FN (cfun)
 	  /* Avoid endless recursion on unreachable blocks.  */
 	  || e->dest == orig_bb)
 	continue;
@@ -7326,7 +7347,7 @@ cse_condition_code_reg (void)
   else
     cc_reg_2 = NULL_RTX;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       rtx last_insn;
       rtx cc_reg;
@@ -7449,26 +7470,44 @@ rest_of_handle_cse (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_cse =
+namespace {
+
+const pass_data pass_data_cse =
 {
- {
-  RTL_PASS,
-  "cse1",                               /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_cse,                      /* gate */
-  rest_of_handle_cse,			/* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_CSE,                               /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing |
-  TODO_verify_flow                      /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "cse1", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_CSE, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing
+    | TODO_verify_flow ), /* todo_flags_finish */
 };
+
+class pass_cse : public rtl_opt_pass
+{
+public:
+  pass_cse (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_cse, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_cse (); }
+  unsigned int execute () { return rest_of_handle_cse (); }
+
+}; // class pass_cse
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_cse (gcc::context *ctxt)
+{
+  return new pass_cse (ctxt);
+}
 
 
 static bool
@@ -7511,26 +7550,44 @@ rest_of_handle_cse2 (void)
 }
 
 
-struct rtl_opt_pass pass_cse2 =
+namespace {
+
+const pass_data pass_data_cse2 =
 {
- {
-  RTL_PASS,
-  "cse2",                               /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_cse2,                     /* gate */
-  rest_of_handle_cse2,			/* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_CSE2,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing |
-  TODO_verify_flow                      /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "cse2", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_CSE2, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing
+    | TODO_verify_flow ), /* todo_flags_finish */
 };
+
+class pass_cse2 : public rtl_opt_pass
+{
+public:
+  pass_cse2 (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_cse2, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_cse2 (); }
+  unsigned int execute () { return rest_of_handle_cse2 (); }
+
+}; // class pass_cse2
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_cse2 (gcc::context *ctxt)
+{
+  return new pass_cse2 (ctxt);
+}
 
 static bool
 gate_handle_cse_after_global_opts (void)
@@ -7571,23 +7628,43 @@ rest_of_handle_cse_after_global_opts (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_cse_after_global_opts =
+namespace {
+
+const pass_data pass_data_cse_after_global_opts =
 {
- {
-  RTL_PASS,
-  "cse_local",                          /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_cse_after_global_opts,    /* gate */
-  rest_of_handle_cse_after_global_opts, /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_CSE,                               /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing |
-  TODO_verify_flow                      /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "cse_local", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_CSE, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing
+    | TODO_verify_flow ), /* todo_flags_finish */
 };
+
+class pass_cse_after_global_opts : public rtl_opt_pass
+{
+public:
+  pass_cse_after_global_opts (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_cse_after_global_opts, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_cse_after_global_opts (); }
+  unsigned int execute () {
+    return rest_of_handle_cse_after_global_opts ();
+  }
+
+}; // class pass_cse_after_global_opts
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_cse_after_global_opts (gcc::context *ctxt)
+{
+  return new pass_cse_after_global_opts (ctxt);
+}

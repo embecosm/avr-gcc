@@ -1,5 +1,5 @@
 /* Simplify intrinsic functions at compile-time.
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught & Katherine Holcomb
 
 This file is part of GCC.
@@ -333,13 +333,15 @@ init_result_expr (gfc_expr *e, int init, gfc_expr *array)
 }
 
 
-/* Helper function for gfc_simplify_dot_product() and gfc_simplify_matmul.  */
+/* Helper function for gfc_simplify_dot_product() and gfc_simplify_matmul;
+   if conj_a is true, the matrix_a is complex conjugated.  */
 
 static gfc_expr *
 compute_dot_product (gfc_expr *matrix_a, int stride_a, int offset_a,
-		     gfc_expr *matrix_b, int stride_b, int offset_b)
+		     gfc_expr *matrix_b, int stride_b, int offset_b,
+		     bool conj_a)
 {
-  gfc_expr *result, *a, *b;
+  gfc_expr *result, *a, *b, *c;
 
   result = gfc_get_constant_expr (matrix_a->ts.type, matrix_a->ts.kind,
 				  &matrix_a->where);
@@ -362,9 +364,11 @@ compute_dot_product (gfc_expr *matrix_a, int stride_a, int offset_a,
 	  case BT_INTEGER:
 	  case BT_REAL:
 	  case BT_COMPLEX:
-	    result = gfc_add (result,
-			      gfc_multiply (gfc_copy_expr (a),
-					    gfc_copy_expr (b)));
+	    if (conj_a && a->ts.type == BT_COMPLEX)
+	      c = gfc_simplify_conjg (a);
+	    else
+	      c = gfc_copy_expr (a);
+	    result = gfc_add (result, gfc_multiply (c, gfc_copy_expr (b)));
 	    break;
 
 	  default:
@@ -1882,7 +1886,7 @@ gfc_simplify_dot_product (gfc_expr *vector_a, gfc_expr *vector_b)
   gcc_assert (vector_b->rank == 1);
   gcc_assert (gfc_compare_types (&vector_a->ts, &vector_b->ts));
 
-  return compute_dot_product (vector_a, 1, 0, vector_b, 1, 0);
+  return compute_dot_product (vector_a, 1, 0, vector_b, 1, 0, true);
 }
 
 
@@ -2296,7 +2300,8 @@ gfc_simplify_same_type_as (gfc_expr *a, gfc_expr *b)
 
   /* Return .false. if the dynamic type can never be the
      same.  */
-  if ((a->ts.type == BT_CLASS || b->ts.type == BT_CLASS)
+  if (((a->ts.type == BT_CLASS && gfc_expr_attr (a).class_ok)
+       || (b->ts.type == BT_CLASS && gfc_expr_attr (b).class_ok))
       && !gfc_type_compatible (&a->ts, &b->ts)
       && !gfc_type_compatible (&b->ts, &a->ts))
     return gfc_get_logical_expr (gfc_default_logical_kind, &a->where, false);
@@ -2342,16 +2347,26 @@ gfc_expr *
 gfc_simplify_fraction (gfc_expr *x)
 {
   gfc_expr *result;
+
+#if MPFR_VERSION < MPFR_VERSION_NUM(3,1,0)
   mpfr_t absv, exp, pow2;
+#else
+  mpfr_exp_t e;
+#endif
 
   if (x->expr_type != EXPR_CONSTANT)
     return NULL;
 
   result = gfc_get_constant_expr (BT_REAL, x->ts.kind, &x->where);
 
+#if MPFR_VERSION < MPFR_VERSION_NUM(3,1,0)
+
+  /* MPFR versions before 3.1.0 do not include mpfr_frexp.  
+     TODO: remove the kludge when MPFR 3.1.0 or newer will be required */
+
   if (mpfr_sgn (x->value.real) == 0)
     {
-      mpfr_set_ui (result->value.real, 0, GFC_RND_MODE);
+      mpfr_set (result->value.real, x->value.real, GFC_RND_MODE);
       return result;
     }
 
@@ -2368,9 +2383,15 @@ gfc_simplify_fraction (gfc_expr *x)
 
   mpfr_ui_pow (pow2, 2, exp, GFC_RND_MODE);
 
-  mpfr_div (result->value.real, absv, pow2, GFC_RND_MODE);
+  mpfr_div (result->value.real, x->value.real, pow2, GFC_RND_MODE);
 
   mpfr_clears (exp, absv, pow2, NULL);
+
+#else
+
+  mpfr_frexp (&e, result->value.real, x->value.real, GFC_RND_MODE);
+
+#endif
 
   return range_check (result, "FRACTION");
 }
@@ -3894,7 +3915,7 @@ gfc_simplify_matmul (gfc_expr *matrix_a, gfc_expr *matrix_b)
       for (row = 0; row < result_rows; ++row)
 	{
 	  gfc_expr *e = compute_dot_product (matrix_a, stride_a, offset_a,
-					     matrix_b, 1, offset_b);
+					     matrix_b, 1, offset_b, false);
 	  gfc_constructor_append_expr (&result->value.constructor,
 				       e, NULL);
 
@@ -5717,7 +5738,7 @@ gfc_simplify_storage_size (gfc_expr *x,
   if (x->ts.type == BT_CLASS || x->ts.deferred)
     return NULL;
 
-  if (x->ts.type == BT_CHARACTER
+  if (x->ts.type == BT_CHARACTER && x->expr_type != EXPR_CONSTANT
       && (!x->ts.u.cl || !x->ts.u.cl->length
 	  || x->ts.u.cl->length->expr_type != EXPR_CONSTANT))
     return NULL;

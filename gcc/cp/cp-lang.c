@@ -1,5 +1,5 @@
 /* Language-dependent hooks for C++.
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2014 Free Software Foundation, Inc.
    Contributed by Alexandre Oliva  <aoliva@redhat.com>
 
 This file is part of GCC.
@@ -127,7 +127,8 @@ cxx_dwarf_name (tree t, int verbosity)
 static enum classify_record
 cp_classify_record (tree type)
 {
-  if (CLASSTYPE_DECLARED_CLASS (type))
+  if (TYPE_LANG_SPECIFIC (type)
+      && CLASSTYPE_DECLARED_CLASS (type))
     return RECORD_IS_CLASS;
 
   return RECORD_IS_STRUCT;

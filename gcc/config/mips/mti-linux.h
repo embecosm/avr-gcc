@@ -1,5 +1,5 @@
 /* Target macros for mips*-mti-linux* targets.
-   Copyright (C) 2012-2013 Free Software Foundation, Inc.
+   Copyright (C) 2012-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,7 +20,7 @@ along with GCC; see the file COPYING3.  If not see
 /* This target is a multilib target, specify the sysroot paths.  */
 #undef SYSROOT_SUFFIX_SPEC
 #define SYSROOT_SUFFIX_SPEC \
-    "%{mips32:/mips32}%{mips64:/mips64}%{mips64r2:/mips64r2}%{mabi=64:/64}%{mel|EL:/el}%{msoft-float:/sof}"
+    "%{mips32:/mips32}%{mips64:/mips64}%{mips64r2:/mips64r2}%{mips16:/mips16}%{mmicromips:/micromips}%{mabi=64:/64}%{mel|EL:/el}%{msoft-float:/sof}%{mfp64:/fp64}%{mnan=2008:/nan2008}"
 
 #undef DRIVER_SELF_SPECS
 #define DRIVER_SELF_SPECS						\

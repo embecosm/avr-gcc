@@ -1,6 +1,6 @@
 /* PR preprocessor/41543 */
 /* { dg-do compile } */
-/* { dg-options "-save-temps -gdwarf-2 -O0 -dA -fno-merge-debug-strings" } */
+/* { dg-options "-save-temps -gdwarf -O0 -dA -fno-merge-debug-strings" } */
 
 #include <stdarg.h>
 

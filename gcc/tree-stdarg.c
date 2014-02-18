@@ -1,5 +1,5 @@
 /* Pass computing data for optimizing stdarg functions.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
    Contributed by Jakub Jelinek <jakub@redhat.com>
 
 This file is part of GCC.
@@ -27,7 +27,21 @@ along with GCC; see the file COPYING3.  If not see
 #include "langhooks.h"
 #include "gimple-pretty-print.h"
 #include "target.h"
-#include "tree-flow.h"
+#include "bitmap.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-walk.h"
+#include "gimple-ssa.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "sbitmap.h"
 #include "tree-pass.h"
 #include "tree-stdarg.h"
 
@@ -58,7 +72,7 @@ reachable_at_most_once (basic_block va_arg_bb, basic_block va_start_bb)
   if (! dominated_by_p (CDI_DOMINATORS, va_arg_bb, va_start_bb))
     return false;
 
-  visited = sbitmap_alloc (last_basic_block);
+  visited = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (visited);
   ret = true;
 
@@ -88,7 +102,7 @@ reachable_at_most_once (basic_block va_arg_bb, basic_block va_start_bb)
 	  break;
 	}
 
-      gcc_assert (src != ENTRY_BLOCK_PTR);
+      gcc_assert (src != ENTRY_BLOCK_PTR_FOR_FN (cfun));
 
       if (! bitmap_bit_p (visited, src->index))
 	{
@@ -105,7 +119,7 @@ reachable_at_most_once (basic_block va_arg_bb, basic_block va_start_bb)
 
 
 /* For statement COUNTER = RHS, if RHS is COUNTER + constant,
-   return constant, otherwise return (unsigned HOST_WIDE_INT) -1.
+   return constant, otherwise return HOST_WIDE_INT_M1U.
    GPR_P is true if this is GPR counter.  */
 
 static unsigned HOST_WIDE_INT
@@ -149,7 +163,7 @@ va_list_counter_bump (struct stdarg_info *si, tree counter, tree rhs,
       stmt = SSA_NAME_DEF_STMT (lhs);
 
       if (!is_gimple_assign (stmt) || gimple_assign_lhs (stmt) != lhs)
-	return (unsigned HOST_WIDE_INT) -1;
+	return HOST_WIDE_INT_M1U;
 
       rhs_code = gimple_assign_rhs_code (stmt);
       rhs1 = gimple_assign_rhs1 (stmt);
@@ -164,9 +178,9 @@ va_list_counter_bump (struct stdarg_info *si, tree counter, tree rhs,
       if ((rhs_code == POINTER_PLUS_EXPR
 	   || rhs_code == PLUS_EXPR)
 	  && TREE_CODE (rhs1) == SSA_NAME
-	  && host_integerp (gimple_assign_rhs2 (stmt), 1))
+	  && tree_fits_uhwi_p (gimple_assign_rhs2 (stmt)))
 	{
-	  ret += tree_low_cst (gimple_assign_rhs2 (stmt), 1);
+	  ret += tree_to_uhwi (gimple_assign_rhs2 (stmt));
 	  lhs = rhs1;
 	  continue;
 	}
@@ -174,29 +188,29 @@ va_list_counter_bump (struct stdarg_info *si, tree counter, tree rhs,
       if (rhs_code == ADDR_EXPR 
 	  && TREE_CODE (TREE_OPERAND (rhs1, 0)) == MEM_REF
 	  && TREE_CODE (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 0)) == SSA_NAME
-	  && host_integerp (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1), 1))
+	  && tree_fits_uhwi_p (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1)))
 	{
-	  ret += tree_low_cst (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1), 1);
+	  ret += tree_to_uhwi (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1));
 	  lhs = TREE_OPERAND (TREE_OPERAND (rhs1, 0), 0);
 	  continue;
 	}
 
       if (get_gimple_rhs_class (rhs_code) != GIMPLE_SINGLE_RHS)
-	return (unsigned HOST_WIDE_INT) -1;
+	return HOST_WIDE_INT_M1U;
 
       rhs = gimple_assign_rhs1 (stmt);
       if (TREE_CODE (counter) != TREE_CODE (rhs))
-	return (unsigned HOST_WIDE_INT) -1;
+	return HOST_WIDE_INT_M1U;
 
       if (TREE_CODE (counter) == COMPONENT_REF)
 	{
 	  if (get_base_address (counter) != get_base_address (rhs)
 	      || TREE_CODE (TREE_OPERAND (rhs, 1)) != FIELD_DECL
 	      || TREE_OPERAND (counter, 1) != TREE_OPERAND (rhs, 1))
-	    return (unsigned HOST_WIDE_INT) -1;
+	    return HOST_WIDE_INT_M1U;
 	}
       else if (counter != rhs)
-	return (unsigned HOST_WIDE_INT) -1;
+	return HOST_WIDE_INT_M1U;
 
       lhs = NULL;
     }
@@ -231,9 +245,9 @@ va_list_counter_bump (struct stdarg_info *si, tree counter, tree rhs,
       if ((rhs_code == POINTER_PLUS_EXPR
 	   || rhs_code == PLUS_EXPR)
 	  && TREE_CODE (rhs1) == SSA_NAME
-	  && host_integerp (gimple_assign_rhs2 (stmt), 1))
+	  && tree_fits_uhwi_p (gimple_assign_rhs2 (stmt)))
 	{
-	  val -= tree_low_cst (gimple_assign_rhs2 (stmt), 1);
+	  val -= tree_to_uhwi (gimple_assign_rhs2 (stmt));
 	  lhs = rhs1;
 	  continue;
 	}
@@ -241,9 +255,9 @@ va_list_counter_bump (struct stdarg_info *si, tree counter, tree rhs,
       if (rhs_code == ADDR_EXPR 
 	  && TREE_CODE (TREE_OPERAND (rhs1, 0)) == MEM_REF
 	  && TREE_CODE (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 0)) == SSA_NAME
-	  && host_integerp (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1), 1))
+	  && tree_fits_uhwi_p (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1)))
 	{
-	  val -= tree_low_cst (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1), 1);
+	  val -= tree_to_uhwi (TREE_OPERAND (TREE_OPERAND (rhs1, 0), 1));
 	  lhs = TREE_OPERAND (TREE_OPERAND (rhs1, 0), 0);
 	  continue;
 	}
@@ -401,7 +415,7 @@ va_list_ptr_read (struct stdarg_info *si, tree ap, tree tem)
   if (! si->compute_sizes)
     return false;
 
-  if (va_list_counter_bump (si, ap, tem, true) == (unsigned HOST_WIDE_INT) -1)
+  if (va_list_counter_bump (si, ap, tem, true) == HOST_WIDE_INT_M1U)
     return false;
 
   /* Note the temporary, as we need to track whether it doesn't escape
@@ -504,7 +518,7 @@ check_va_list_escapes (struct stdarg_info *si, tree lhs, tree rhs)
     }
 
   if (va_list_counter_bump (si, si->va_start_ap, lhs, true)
-      == (unsigned HOST_WIDE_INT) -1)
+      == HOST_WIDE_INT_M1U)
     {
       si->va_list_escapes = true;
       return;
@@ -522,7 +536,7 @@ check_all_va_list_escapes (struct stdarg_info *si)
 {
   basic_block bb;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator i;
 
@@ -581,15 +595,15 @@ check_all_va_list_escapes (struct stdarg_info *si)
 		  if (rhs_code == MEM_REF
 		      && TREE_OPERAND (rhs, 0) == use
 		      && TYPE_SIZE_UNIT (TREE_TYPE (rhs))
-		      && host_integerp (TYPE_SIZE_UNIT (TREE_TYPE (rhs)), 1)
+		      && tree_fits_uhwi_p (TYPE_SIZE_UNIT (TREE_TYPE (rhs)))
 		      && si->offsets[SSA_NAME_VERSION (use)] != -1)
 		    {
 		      unsigned HOST_WIDE_INT gpr_size;
 		      tree access_size = TYPE_SIZE_UNIT (TREE_TYPE (rhs));
 
 		      gpr_size = si->offsets[SSA_NAME_VERSION (use)]
-			  	 + tree_low_cst (TREE_OPERAND (rhs, 1), 0)
-				 + tree_low_cst (access_size, 1);
+			  	 + tree_to_shwi (TREE_OPERAND (rhs, 1))
+				 + tree_to_uhwi (access_size);
 		      if (gpr_size >= VA_LIST_MAX_GPR_SIZE)
 			cfun->va_list_gpr_size = VA_LIST_MAX_GPR_SIZE;
 		      else if (gpr_size > cfun->va_list_gpr_size)
@@ -689,7 +703,7 @@ execute_optimize_stdarg (void)
 			   || TREE_TYPE (cfun_va_list) == char_type_node);
   gcc_assert (is_gimple_reg_type (cfun_va_list) == va_list_simple_ptr);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator i;
 
@@ -799,7 +813,7 @@ execute_optimize_stdarg (void)
   memset (&wi, 0, sizeof (wi));
   wi.info = si.va_list_vars;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator i;
 
@@ -985,22 +999,40 @@ finish:
 }
 
 
-struct gimple_opt_pass pass_stdarg =
+namespace {
+
+const pass_data pass_data_stdarg =
 {
- {
-  GIMPLE_PASS,
-  "stdarg",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_optimize_stdarg,			/* gate */
-  execute_optimize_stdarg,		/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_NONE,				/* tv_id */
-  PROP_cfg | PROP_ssa,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  0             			/* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "stdarg", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_stdarg : public gimple_opt_pass
+{
+public:
+  pass_stdarg (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_stdarg, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_optimize_stdarg (); }
+  unsigned int execute () { return execute_optimize_stdarg (); }
+
+}; // class pass_stdarg
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_stdarg (gcc::context *ctxt)
+{
+  return new pass_stdarg (ctxt);
+}

@@ -1,6 +1,6 @@
 /* Breadth-first and depth-first routines for
    searching multiple-inheritance lattice for GNU C++.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -1889,22 +1889,16 @@ check_final_overrider (tree overrider, tree basefn)
 		fail = 1;
 	    }
 	}
-      else if (!pedantic
-	       && can_convert (TREE_TYPE (base_type), TREE_TYPE (over_type),
-			       tf_warning_or_error))
+      else if (can_convert_standard (TREE_TYPE (base_type),
+				     TREE_TYPE (over_type),
+				     tf_warning_or_error))
 	/* GNU extension, allow trivial pointer conversions such as
 	   converting to void *, or qualification conversion.  */
 	{
-	  /* can_convert will permit user defined conversion from a
-	     (reference to) class type. We must reject them.  */
-	  if (CLASS_TYPE_P (non_reference (over_return)))
-	    fail = 2;
-	  else
-	    {
-	      warning (0, "deprecated covariant return type for %q+#D",
-			     overrider);
-	      warning (0, "  overriding %q+#D", basefn);
-	    }
+	  if (pedwarn (DECL_SOURCE_LOCATION (overrider), 0,
+		       "invalid covariant return type for %q#D", overrider))
+	    inform (DECL_SOURCE_LOCATION (basefn),
+		    "  overriding %q+#D", basefn);
 	}
       else
 	fail = 2;
@@ -2512,7 +2506,7 @@ lookup_conversions (tree type)
   tree list = NULL_TREE;
 
   complete_type (type);
-  if (!TYPE_BINFO (type))
+  if (!CLASS_TYPE_P (type) || !TYPE_BINFO (type))
     return NULL_TREE;
 
   lookup_conversions_r (TYPE_BINFO (type), 0, 0,

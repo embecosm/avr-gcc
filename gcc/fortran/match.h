@@ -1,5 +1,5 @@
 /* All matcher functions.
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
    Contributed by Steven Bosscher
 
 This file is part of GCC.
@@ -59,6 +59,8 @@ match gfc_match_char (char);
 match gfc_match (const char *, ...);
 match gfc_match_iterator (gfc_iterator *, int);
 match gfc_match_parens (void);
+match gfc_match_type_spec (gfc_typespec *);
+
 
 /* Statement matchers.  */
 match gfc_match_program (void);

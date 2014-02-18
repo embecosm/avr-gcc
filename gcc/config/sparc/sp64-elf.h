@@ -1,5 +1,5 @@
 /* Definitions of target machine for GCC, for SPARC64, ELF.
-   Copyright (C) 1994-2013 Free Software Foundation, Inc.
+   Copyright (C) 1994-2014 Free Software Foundation, Inc.
    Contributed by Doug Evans, dje@cygnus.com.
 
 This file is part of GCC.
@@ -29,10 +29,6 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Don't assume anything about the header files.  */
 #define NO_IMPLICIT_EXTERN_C
-
-/* __svr4__ is used by the C library (FIXME) */
-#undef CPP_SUBTARGET_SPEC
-#define CPP_SUBTARGET_SPEC "-D__svr4__"
 
 #undef ASM_SPEC
 #define ASM_SPEC "\

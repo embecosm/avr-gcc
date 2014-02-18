@@ -1,7 +1,7 @@
 /* Routines for saving various data types to a file stream.  This deals
    with various data types like strings, integers, enums, etc.
 
-   Copyright (C) 2011-2013 Free Software Foundation, Inc.
+   Copyright (C) 2011-2014 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@google.com>
 
 This file is part of GCC.
@@ -23,6 +23,13 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "tree.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
 #include "data-streamer.h"
 
 /* Return index used to reference STRING of LEN characters in the string table
@@ -187,6 +194,11 @@ void
 streamer_write_uhwi_stream (struct lto_output_stream *obs,
                             unsigned HOST_WIDE_INT work)
 {
+  if (obs->left_in_block == 0)
+    lto_append_block (obs);
+  char *current_pointer = obs->current_pointer;
+  unsigned int left_in_block = obs->left_in_block;
+  unsigned int size = 0;
   do
     {
       unsigned int byte = (work & 0x7f);
@@ -195,9 +207,34 @@ streamer_write_uhwi_stream (struct lto_output_stream *obs,
 	/* More bytes to follow.  */
 	byte |= 0x80;
 
-      streamer_write_char_stream (obs, byte);
+      *(current_pointer++) = byte;
+      left_in_block--;
+      size++;
     }
-  while (work != 0);
+  while (work != 0 && left_in_block > 0);
+  if (work != 0)
+    {
+      obs->left_in_block = 0;
+      lto_append_block (obs);
+      current_pointer = obs->current_pointer;
+      left_in_block = obs->left_in_block;
+      do
+	{
+	  unsigned int byte = (work & 0x7f);
+	  work >>= 7;
+	  if (work != 0)
+	    /* More bytes to follow.  */
+	    byte |= 0x80;
+
+	  *(current_pointer++) = byte;
+	  left_in_block--;
+	  size++;
+	}
+      while (work != 0);
+    }
+  obs->current_pointer = current_pointer;
+  obs->left_in_block = left_in_block;
+  obs->total_size += size;
 }
 
 
@@ -206,21 +243,56 @@ streamer_write_uhwi_stream (struct lto_output_stream *obs,
 void
 streamer_write_hwi_stream (struct lto_output_stream *obs, HOST_WIDE_INT work)
 {
-  int more, byte;
-
+  if (obs->left_in_block == 0)
+    lto_append_block (obs);
+  char *current_pointer = obs->current_pointer;
+  unsigned int left_in_block = obs->left_in_block;
+  unsigned int size = 0;
+  bool more;
   do
     {
-      byte = (work & 0x7f);
-      /* arithmetic shift */
-      work >>= 7;
-      more = !((work == 0 && (byte & 0x40) == 0)
-	       || (work == -1 && (byte & 0x40) != 0));
+      unsigned int byte = (work & 0x7f);
+      /* If the lower 7-bits are sign-extended 0 or -1 we are finished.  */
+      work >>= 6;
+      more = !(work == 0 || work == -1);
       if (more)
-	byte |= 0x80;
+	{
+	  /* More bits to follow.  */
+	  work >>= 1;
+	  byte |= 0x80;
+	}
 
-      streamer_write_char_stream (obs, byte);
+      *(current_pointer++) = byte;
+      left_in_block--;
+      size++;
     }
-  while (more);
+  while (more && left_in_block > 0);
+  if (more)
+    {
+      obs->left_in_block = 0;
+      lto_append_block (obs);
+      current_pointer = obs->current_pointer;
+      left_in_block = obs->left_in_block;
+      do
+	{
+	  unsigned int byte = (work & 0x7f);
+	  work >>= 6;
+	  more = !(work == 0 || work == -1);
+	  if (more)
+	    {
+	      work >>= 1;
+	      byte |= 0x80;
+	    }
+
+	  *(current_pointer++) = byte;
+	  left_in_block--;
+	  size++;
+	}
+      while (more);
+    }
+  obs->current_pointer = current_pointer;
+  obs->left_in_block = left_in_block;
+  obs->total_size += size;
 }
 
 /* Write a GCOV counter value WORK to OBS.  */

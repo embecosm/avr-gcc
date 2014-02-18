@@ -1,5 +1,5 @@
 /* Perform instruction reorganizations for delay slot filling.
-   Copyright (C) 1992-2013 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
    Contributed by Richard Kenner (kenner@vlsi1.ultra.nyu.edu).
    Hacked by Michael Tiemann (tiemann@cygnus.com).
 
@@ -134,6 +134,46 @@ along with GCC; see the file COPYING3.  If not see
 #define eligible_for_annul_false(INSN, SLOTS, TRIAL, FLAGS) 0
 #endif
 
+
+/* First, some functions that were used before GCC got a control flow graph.
+   These functions are now only used here in reorg.c, and have therefore
+   been moved here to avoid inadvertent misuse elsewhere in the compiler.  */
+
+/* Return the last label to mark the same position as LABEL.  Return LABEL
+   itself if it is null or any return rtx.  */
+
+static rtx
+skip_consecutive_labels (rtx label)
+{
+  rtx insn;
+
+  if (label && ANY_RETURN_P (label))
+    return label;
+
+  for (insn = label; insn != 0 && !INSN_P (insn); insn = NEXT_INSN (insn))
+    if (LABEL_P (insn))
+      label = insn;
+
+  return label;
+}
+
+#ifdef HAVE_cc0
+/* INSN uses CC0 and is being moved into a delay slot.  Set up REG_CC_SETTER
+   and REG_CC_USER notes so we can find it.  */
+
+static void
+link_cc0_insns (rtx insn)
+{
+  rtx user = next_nonnote_insn (insn);
+
+  if (NONJUMP_INSN_P (user) && GET_CODE (PATTERN (user)) == SEQUENCE)
+    user = XVECEXP (PATTERN (user), 0, 0);
+
+  add_reg_note (user, REG_CC_SETTER, insn);
+  add_reg_note (insn, REG_CC_USER, user);
+}
+#endif
+
 /* Insns which have delay slots that have not yet been filled.  */
 
 static struct obstack unfilled_slots_obstack;
@@ -276,7 +316,6 @@ static int
 resource_conflicts_p (struct resources *res1, struct resources *res2)
 {
   if ((res1->cc && res2->cc) || (res1->memory && res2->memory)
-      || (res1->unch_memory && res2->unch_memory)
       || res1->volatil || res2->volatil)
     return 1;
 
@@ -837,7 +876,7 @@ mostly_true_jump (rtx jump_insn)
   rtx note = find_reg_note (jump_insn, REG_BR_PROB, 0);
   if (note)
     {
-      int prob = INTVAL (XEXP (note, 0));
+      int prob = XINT (note, 0);
 
       if (prob >= REG_BR_PROB_BASE * 9 / 10)
 	return 2;
@@ -1054,6 +1093,7 @@ steal_delay_list_from_target (rtx insn, rtx condition, rtx seq,
   int used_annul = 0;
   int i;
   struct resources cc_set;
+  bool *redundant;
 
   /* We can't do anything if there are more delay slots in SEQ than we
      can handle, or if we don't know that it will be a taken branch.
@@ -1094,6 +1134,7 @@ steal_delay_list_from_target (rtx insn, rtx condition, rtx seq,
     return delay_list;
 #endif
 
+  redundant = XALLOCAVEC (bool, XVECLEN (seq, 0));
   for (i = 1; i < XVECLEN (seq, 0); i++)
     {
       rtx trial = XVECEXP (seq, 0, i);
@@ -1115,7 +1156,8 @@ steal_delay_list_from_target (rtx insn, rtx condition, rtx seq,
 
       /* If this insn was already done (usually in a previous delay slot),
 	 pretend we put it in our delay slot.  */
-      if (redundant_insn (trial, insn, new_delay_list))
+      redundant[i] = redundant_insn (trial, insn, new_delay_list);
+      if (redundant[i])
 	continue;
 
       /* We will end up re-vectoring this branch, so compute flags
@@ -1147,6 +1189,12 @@ steal_delay_list_from_target (rtx insn, rtx condition, rtx seq,
       else
 	return delay_list;
     }
+
+  /* Record the effect of the instructions that were redundant and which
+     we therefore decided not to copy.  */
+  for (i = 1; i < XVECLEN (seq, 0); i++)
+    if (redundant[i])
+      update_block (XVECEXP (seq, 0, i), insn);
 
   /* Show the place to which we will be branching.  */
   *pnew_thread = first_active_target_insn (JUMP_LABEL (XVECEXP (seq, 0, 0)));
@@ -1211,6 +1259,7 @@ steal_delay_list_from_fallthrough (rtx insn, rtx condition, rtx seq,
       /* If this insn was already done, we don't need it.  */
       if (redundant_insn (trial, insn, delay_list))
 	{
+	  update_block (trial, insn);
 	  delete_from_delay_slot (trial);
 	  continue;
 	}
@@ -1463,7 +1512,10 @@ redundant_insn (rtx insn, rtx target, rtx delay_list)
        trial && insns_to_search > 0;
        trial = PREV_INSN (trial))
     {
-      if (LABEL_P (trial))
+      /* (use (insn))s can come immediately after a barrier if the
+	 label that used to precede them has been deleted as dead.
+	 See delete_related_insns.  */
+      if (LABEL_P (trial) || BARRIER_P (trial))
 	return 0;
 
       if (!INSN_P (trial))
@@ -1542,7 +1594,6 @@ redundant_insn (rtx insn, rtx target, rtx delay_list)
   /* Insns we pass may not set either NEEDED or SET, so merge them for
      simpler tests.  */
   needed.memory |= set.memory;
-  needed.unch_memory |= set.unch_memory;
   IOR_HARD_REG_SET (needed.regs, set.regs);
 
   /* This insn isn't redundant if it conflicts with an insn that either is
@@ -1818,10 +1869,15 @@ update_reg_unused_notes (rtx insn, rtx redundant_insn)
     }
 }
 
-/* Return the label before INSN, or put a new label there.  */
+static vec <rtx> sibling_labels;
+
+/* Return the label before INSN, or put a new label there.  If SIBLING is
+   non-zero, it is another label associated with the new label (if any),
+   typically the former target of the jump that will be redirected to
+   the new label.  */
 
 static rtx
-get_label_before (rtx insn)
+get_label_before (rtx insn, rtx sibling)
 {
   rtx label;
 
@@ -1836,6 +1892,11 @@ get_label_before (rtx insn)
       label = gen_label_rtx ();
       emit_label_after (label, prev);
       LABEL_NUSES (label) = 0;
+      if (sibling)
+	{
+	  sibling_labels.safe_push (label);
+	  sibling_labels.safe_push (sibling);
+	}
     }
   return label;
 }
@@ -2125,7 +2186,7 @@ fill_simple_delay_slots (int non_jumps_p)
 		  && ! (maybe_never && may_trap_or_fault_p (pat))
 		  && (trial = try_split (pat, trial, 0))
 		  && eligible_for_delay (insn, slots_filled, trial, flags)
-		  && ! can_throw_internal(trial))
+		  && ! can_throw_internal (trial))
 		{
 		  next_trial = next_nonnote_insn (trial);
 		  delay_list = add_to_delay_list (trial, delay_list);
@@ -2181,7 +2242,7 @@ fill_simple_delay_slots (int non_jumps_p)
 	      rtx new_label = next_real_insn (next_trial);
 
 	      if (new_label != 0)
-		new_label = get_label_before (new_label);
+		new_label = get_label_before (new_label, JUMP_LABEL (trial));
 	      else
 		new_label = find_end_label (simple_return_rtx);
 
@@ -2254,15 +2315,16 @@ follow_jumps (rtx label, rtx jump, bool *crossing)
        depth++)
     {
       rtx this_label = JUMP_LABEL (insn);
-      rtx tem;
 
       /* If we have found a cycle, make the insn jump to itself.  */
       if (this_label == label)
 	return label;
+
+      /* Cannot follow returns and cannot look through tablejumps.  */
       if (ANY_RETURN_P (this_label))
 	return this_label;
-      tem = next_active_insn (this_label);
-      if (tem && JUMP_TABLE_DATA_P (tem))
+      if (NEXT_INSN (this_label)
+	  && JUMP_TABLE_DATA_P (NEXT_INSN (this_label)))
 	break;
 
       if (!targetm.can_follow_jump (jump, insn))
@@ -2315,8 +2377,8 @@ fill_slots_from_thread (rtx insn, rtx condition, rtx thread,
   int flags;
 
   /* Validate our arguments.  */
-  gcc_assert(condition != const_true_rtx || thread_if_true);
-  gcc_assert(own_thread || thread_if_true);
+  gcc_assert (condition != const_true_rtx || thread_if_true);
+  gcc_assert (own_thread || thread_if_true);
 
   flags = get_jump_flags (insn, JUMP_LABEL (insn));
 
@@ -2732,7 +2794,7 @@ fill_slots_from_thread (rtx insn, rtx condition, rtx thread,
       else if (LABEL_P (new_thread))
 	label = new_thread;
       else
-	label = get_label_before (new_thread);
+	label = get_label_before (new_thread, JUMP_LABEL (insn));
 
       if (label)
 	{
@@ -3187,6 +3249,7 @@ relax_delay_slots (rtx first)
 	 to reprocess this insn.  */
       if (redundant_insn (XVECEXP (pat, 0, 1), delay_insn, 0))
 	{
+	  update_block (XVECEXP (pat, 0, 1), insn);
 	  delete_from_delay_slot (XVECEXP (pat, 0, 1));
 	  next = prev_active_insn (next);
 	  continue;
@@ -3283,7 +3346,7 @@ relax_delay_slots (rtx first)
 	      
 	      /* Now emit a label before the special USE insn, and
 		 redirect our jump to the new label.  */
-	      target_label = get_label_before (PREV_INSN (tmp));
+	      target_label = get_label_before (PREV_INSN (tmp), target_label);
 	      reorg_redirect_jump (delay_insn, target_label);
 	      next = insn;
 	      continue;
@@ -3306,6 +3369,7 @@ relax_delay_slots (rtx first)
 	      && redirect_with_delay_slots_safe_p (delay_insn, target_label,
 						   insn))
 	    {
+	      update_block (XVECEXP (PATTERN (trial), 0, 1), insn);
 	      reorg_redirect_jump (delay_insn, target_label);
 	      next = insn;
 	      continue;
@@ -3457,7 +3521,7 @@ make_return_insns (rtx first)
   for (insn = first; insn; insn = NEXT_INSN (insn))
     if (JUMP_P (insn) && ANY_RETURN_P (PATTERN (insn)))
       {
-	rtx t = get_label_before (insn);
+	rtx t = get_label_before (insn, NULL_RTX);
 	if (PATTERN (insn) == ret_rtx)
 	  real_return_label = t;
 	else
@@ -3594,7 +3658,7 @@ dbr_schedule (rtx first)
 
   /* If the current function has no insns other than the prologue and
      epilogue, then do not try to fill any delay slots.  */
-  if (n_basic_blocks == NUM_FIXED_BLOCKS)
+  if (n_basic_blocks_for_fn (cfun) == NUM_FIXED_BLOCKS)
     return;
 
   /* Find the highest INSN_UID and allocate and initialize our map from
@@ -3787,6 +3851,12 @@ dbr_schedule (rtx first)
       fprintf (dump_file, "\n");
     }
 
+  if (!sibling_labels.is_empty ())
+    {
+      update_alignments (sibling_labels);
+      sibling_labels.release ();
+    }
+
   free_resource_info ();
   free (uid_to_ruid);
   crtl->dbr_scheduled_p = true;
@@ -3814,25 +3884,43 @@ rest_of_handle_delay_slots (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_delay_slots =
+namespace {
+
+const pass_data pass_data_delay_slots =
 {
- {
-  RTL_PASS,
-  "dbr",                                /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_delay_slots,              /* gate */
-  rest_of_handle_delay_slots,           /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_DBR_SCHED,                         /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  0                                     /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "dbr", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_DBR_SCHED, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_delay_slots : public rtl_opt_pass
+{
+public:
+  pass_delay_slots (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_delay_slots, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_delay_slots (); }
+  unsigned int execute () { return rest_of_handle_delay_slots (); }
+
+}; // class pass_delay_slots
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_delay_slots (gcc::context *ctxt)
+{
+  return new pass_delay_slots (ctxt);
+}
 
 /* Machine dependent reorg pass.  */
 static bool
@@ -3849,22 +3937,40 @@ rest_of_handle_machine_reorg (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_machine_reorg =
+namespace {
+
+const pass_data pass_data_machine_reorg =
 {
- {
-  RTL_PASS,
-  "mach",                               /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_machine_reorg,            /* gate */
-  rest_of_handle_machine_reorg,         /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_MACH_DEP,                          /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  0                                     /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "mach", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_MACH_DEP, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_machine_reorg : public rtl_opt_pass
+{
+public:
+  pass_machine_reorg (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_machine_reorg, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_machine_reorg (); }
+  unsigned int execute () { return rest_of_handle_machine_reorg (); }
+
+}; // class pass_machine_reorg
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_machine_reorg (gcc::context *ctxt)
+{
+  return new pass_machine_reorg (ctxt);
+}

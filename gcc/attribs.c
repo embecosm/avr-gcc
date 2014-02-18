@@ -1,5 +1,5 @@
 /* Functions dealing with attribute handling, used by most front ends.
-   Copyright (C) 1992-2013 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,6 +22,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "attribs.h"
+#include "stor-layout.h"
 #include "flags.h"
 #include "diagnostic-core.h"
 #include "ggc.h"
@@ -297,7 +300,7 @@ register_scoped_attribute (const struct attribute_spec *attr,
 /* Return the spec for the scoped attribute with namespace NS and
    name NAME.   */
 
-const struct attribute_spec *
+static const struct attribute_spec *
 lookup_scoped_attribute_spec (const_tree ns, const_tree name)
 {
   struct substring attr;
@@ -334,7 +337,23 @@ lookup_attribute_spec (const_tree name)
   return lookup_scoped_attribute_spec (ns, name);
 }
 
-
+
+/* Return the namespace of the attribute ATTR.  This accessor works on
+   GNU and C++11 (scoped) attributes.  On GNU attributes,
+   it returns an identifier tree for the string "gnu".
+
+   Please read the comments of cxx11_attribute_p to understand the
+   format of attributes.  */
+
+static tree
+get_attribute_namespace (const_tree attr)
+{
+  if (cxx11_attribute_p (attr))
+    return TREE_PURPOSE (TREE_PURPOSE (attr));
+  return get_identifier ("gnu");
+}
+
+
 /* Process the attributes listed in ATTRIBUTES and install them in *NODE,
    which is either a DECL (including a TYPE_DECL) or a TYPE.  If a DECL,
    it should be modified in place; if a TYPE, a copy should be created
@@ -657,21 +676,6 @@ get_attribute_name (const_tree attr)
   if (cxx11_attribute_p (attr))
     return TREE_VALUE (TREE_PURPOSE (attr));
   return TREE_PURPOSE (attr);
-}
-
-/* Return the namespace of the attribute ATTR.  This accessor works on
-   GNU and C++11 (scoped) attributes.  On GNU attributes,
-   it returns an identifier tree for the string "gnu".
-
-   Please read the comments of cxx11_attribute_p to understand the
-   format of attributes.  */
-
-tree
-get_attribute_namespace (const_tree attr)
-{
-  if (cxx11_attribute_p (attr))
-    return TREE_PURPOSE (TREE_PURPOSE (attr));
-  return get_identifier ("gnu");
 }
 
 /* Subroutine of set_method_tm_attributes.  Apply TM attribute ATTR

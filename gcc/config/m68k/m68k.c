@@ -1,5 +1,5 @@
 /* Subroutines for insn-output.c for Motorola 68000 family.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,6 +22,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "calls.h"
+#include "stor-layout.h"
+#include "varasm.h"
 #include "rtl.h"
 #include "function.h"
 #include "regs.h"
@@ -514,7 +517,7 @@ m68k_option_override (void)
     {
       enum target_device dev;
       dev = all_microarchs[M68K_DEFAULT_TUNE].device;
-      m68k_tune_flags = all_devices[dev]->flags;
+      m68k_tune_flags = all_devices[dev].flags;
     }
 #endif
   else
@@ -3325,12 +3328,12 @@ handle_move_double (rtx operands[2],
 	latehalf[1] = adjust_address (operands[1], SImode, 0);
     }
 
-  /* If insn is effectively movd N(sp),-(sp) then we will do the
-     high word first.  We should use the adjusted operand 1 (which is N+4(sp))
-     for the low word as well, to compensate for the first decrement of sp.  */
+  /* If insn is effectively movd N(REG),-(REG) then we will do the high
+     word first.  We should use the adjusted operand 1 (which is N+4(REG))
+     for the low word as well, to compensate for the first decrement of
+     REG.  */
   if (optype0 == PUSHOP
-      && REGNO (XEXP (XEXP (operands[0], 0), 0)) == STACK_POINTER_REGNUM
-      && reg_overlap_mentioned_p (stack_pointer_rtx, operands[1]))
+      && reg_overlap_mentioned_p (XEXP (XEXP (operands[0], 0), 0), operands[1]))
     operands[1] = middlehalf[1] = latehalf[1];
 
   /* For (set (reg:DI N) (mem:DI ... (reg:SI N) ...)),
@@ -4208,6 +4211,13 @@ notice_update_cc (rtx exp, rtx insn)
   if (cc_status.value1 && GET_CODE (cc_status.value1) == REG
       && cc_status.value2
       && reg_overlap_mentioned_p (cc_status.value1, cc_status.value2))
+    cc_status.value2 = 0;
+  /* Check for PRE_DEC in dest modifying a register used in src.  */
+  if (cc_status.value1 && GET_CODE (cc_status.value1) == MEM
+      && GET_CODE (XEXP (cc_status.value1, 0)) == PRE_DEC
+      && cc_status.value2
+      && reg_overlap_mentioned_p (XEXP (XEXP (cc_status.value1, 0), 0),
+				  cc_status.value2))
     cc_status.value2 = 0;
   if (((cc_status.value1 && FP_REG_P (cc_status.value1))
        || (cc_status.value2 && FP_REG_P (cc_status.value2))))

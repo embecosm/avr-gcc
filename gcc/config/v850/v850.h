@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler. NEC V850 series
-   Copyright (C) 1996-2013 Free Software Foundation, Inc.
+   Copyright (C) 1996-2014 Free Software Foundation, Inc.
    Contributed by Jeff Law (law@cygnus.com).
 
    This file is part of GCC.
@@ -953,10 +953,6 @@ extern tree GHS_current_section_names [(int) COUNT_OF_GHS_SECTION_KINDS];
 /* The assembler op to start the file.  */
 
 #define FILE_ASM_OP "\t.file\n"
-
-/* Enable the register move pass to improve code.  */
-#define ENABLE_REGMOVE_PASS
-
 
 /* Implement ZDA, TDA, and SDA */
 

@@ -1,5 +1,5 @@
 /* General-purpose hooks.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -331,6 +331,12 @@ hook_bool_rtx_int_int_int_intp_bool_false (rtx a ATTRIBUTE_UNUSED,
   return false;
 }
 
+bool
+hook_bool_dint_dint_uint_bool_true (double_int, double_int, unsigned int, bool)
+{
+  return true;
+}
+
 /* Generic hook that takes an rtx and returns it.  */
 rtx
 hook_rtx_rtx_identity (rtx x)
@@ -350,6 +356,13 @@ rtx
 hook_rtx_tree_int_null (tree a ATTRIBUTE_UNUSED, int b ATTRIBUTE_UNUSED)
 {
   return NULL;
+}
+
+/* Generic hook that takes a machine mode and returns an unsigned int 0.  */
+unsigned int
+hook_uint_mode_0 (enum machine_mode m ATTRIBUTE_UNUSED)
+{
+  return 0;
 }
 
 /* Generic hook that takes three trees and returns the last one as is.  */

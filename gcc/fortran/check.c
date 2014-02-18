@@ -1,5 +1,5 @@
 /* Check functions
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught & Katherine Holcomb
 
 This file is part of GCC.
@@ -606,9 +606,6 @@ dim_rank_check (gfc_expr *dim, gfc_expr *array, int allow_assumed)
     return true;
 
   if (dim->expr_type != EXPR_CONSTANT)
-    return true;
-
-  if (array->ts.type == BT_CLASS)
     return true;
 
   if (array->expr_type == EXPR_FUNCTION && array->value.function.isym
@@ -2328,16 +2325,85 @@ gfc_check_logical (gfc_expr *a, gfc_expr *kind)
 /* Min/max family.  */
 
 static bool
-min_max_args (gfc_actual_arglist *arg)
+min_max_args (gfc_actual_arglist *args)
 {
-  if (arg == NULL || arg->next == NULL)
+  gfc_actual_arglist *arg;
+  int i, j, nargs, *nlabels, nlabelless;
+  bool a1 = false, a2 = false;
+
+  if (args == NULL || args->next == NULL)
     {
       gfc_error ("Intrinsic '%s' at %L must have at least two arguments",
 		 gfc_current_intrinsic, gfc_current_intrinsic_where);
       return false;
     }
 
+  if (!args->name)
+    a1 = true;
+
+  if (!args->next->name)
+    a2 = true;
+
+  nargs = 0;
+  for (arg = args; arg; arg = arg->next)
+    if (arg->name)
+      nargs++;
+
+  if (nargs == 0)
+    return true;
+
+  /* Note: Having a keywordless argument after an "arg=" is checked before.  */
+  nlabelless = 0;
+  nlabels = XALLOCAVEC (int, nargs);
+  for (arg = args, i = 0; arg; arg = arg->next, i++)
+    if (arg->name)
+      {
+	int n;
+	char *endp;
+
+	if (arg->name[0] != 'a' || arg->name[1] < '1' || arg->name[1] > '9')
+	  goto unknown;
+	n = strtol (&arg->name[1], &endp, 10);
+	if (endp[0] != '\0')
+	  goto unknown;
+	if (n <= 0)
+	  goto unknown;
+	if (n <= nlabelless)
+	  goto duplicate;
+	nlabels[i] = n;
+	if (n == 1)
+	  a1 = true;
+	if (n == 2)
+	  a2 = true;
+      }
+    else
+      nlabelless++;
+
+  if (!a1 || !a2)
+    {
+      gfc_error ("Missing '%s' argument to the %s intrinsic at %L",
+	         !a1 ? "a1" : "a2", gfc_current_intrinsic,
+		 gfc_current_intrinsic_where);
+      return false;
+    }
+
+  /* Check for duplicates.  */
+  for (i = 0; i < nargs; i++)
+    for (j = i + 1; j < nargs; j++)
+      if (nlabels[i] == nlabels[j])
+	goto duplicate;
+
   return true;
+
+duplicate:
+  gfc_error ("Duplicate argument '%s' at %L to intrinsic %s", arg->name,
+	     &arg->expr->where, gfc_current_intrinsic);
+  return false;
+
+unknown:
+  gfc_error ("Unknown argument '%s' at %L to intrinsic %s", arg->name,
+	     &arg->expr->where, gfc_current_intrinsic);
+  return false;
 }
 
 
@@ -2345,7 +2411,6 @@ static bool
 check_rest (bt type, int kind, gfc_actual_arglist *arglist)
 {
   gfc_actual_arglist *arg, *tmp;
-
   gfc_expr *x;
   int m, n;
 
@@ -2793,12 +2858,7 @@ gfc_check_move_alloc (gfc_expr *from, gfc_expr *to)
 
   /* CLASS arguments: Make sure the vtab of from is present.  */
   if (to->ts.type == BT_CLASS && !UNLIMITED_POLY (from))
-    {
-      if (from->ts.type == BT_CLASS || from->ts.type == BT_DERIVED)
-	gfc_find_derived_vtab (from->ts.u.derived);
-      else
-	gfc_find_intrinsic_vtab (&from->ts);
-    }
+    gfc_find_vtab (&from->ts);
 
   return true;
 }
@@ -3212,7 +3272,7 @@ gfc_check_reshape (gfc_expr *source, gfc_expr *shape,
 		 "than %d elements", &shape->where, GFC_MAX_DIMENSIONS);
       return false;
     }
-  else if (shape->expr_type == EXPR_ARRAY)
+  else if (shape->expr_type == EXPR_ARRAY && gfc_is_constant_expr (shape))
     {
       gfc_expr *e;
       int i, extent;
@@ -3650,10 +3710,11 @@ gfc_check_sizeof (gfc_expr *arg)
    otherwise, it is set to NULL.  The msg string can be used in diagnostics.
    If c_loc is true, character with len > 1 are allowed (cf. Fortran
    2003corr5); additionally, assumed-shape/assumed-rank/deferred-shape
-   arrays are permitted.  */
+   arrays are permitted. And if c_f_ptr is true, deferred-shape arrays
+   are permitted. */
 
 static bool
-is_c_interoperable (gfc_expr *expr, const char **msg, bool c_loc)
+is_c_interoperable (gfc_expr *expr, const char **msg, bool c_loc, bool c_f_ptr)
 {
   *msg = NULL;
 
@@ -3734,7 +3795,8 @@ is_c_interoperable (gfc_expr *expr, const char **msg, bool c_loc)
 	  *msg = "Only whole-arrays are interoperable";
 	  return false;
 	}
-      if (ar->as->type != AS_EXPLICIT && ar->as->type != AS_ASSUMED_SIZE)
+      if (!c_f_ptr && ar->as->type != AS_EXPLICIT
+	  && ar->as->type != AS_ASSUMED_SIZE)
 	{
 	  *msg = "Only explicit-size and assumed-size arrays are interoperable";
 	  return false;
@@ -3750,7 +3812,7 @@ gfc_check_c_sizeof (gfc_expr *arg)
 {
   const char *msg;
 
-  if (!is_c_interoperable (arg, &msg, false))
+  if (!is_c_interoperable (arg, &msg, false, false))
     {
       gfc_error ("'%s' argument of '%s' intrinsic at %L must be an "
 		 "interoperable data entity: %s",
@@ -3900,7 +3962,7 @@ gfc_check_c_f_pointer (gfc_expr *cptr, gfc_expr *fptr, gfc_expr *shape)
       return false;
     }
 
-  if (!is_c_interoperable (fptr, &msg, false) && fptr->rank)
+  if (!is_c_interoperable (fptr, &msg, false, true))
     return gfc_notify_std (GFC_STD_F2008_TS, "Noninteroperable array FPTR "
 			   "at %L to C_F_POINTER: %s", &fptr->where, msg);
 
@@ -4029,7 +4091,7 @@ gfc_check_c_loc (gfc_expr *x)
       return false;
     }
 
-  if (!is_c_interoperable (x, &msg, true))
+  if (!is_c_interoperable (x, &msg, true, false))
     {
       if (x->ts.type == BT_CLASS)
 	{

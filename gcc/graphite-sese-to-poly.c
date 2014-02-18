@@ -1,5 +1,5 @@
 /* Conversion of SESE regions to Polyhedra.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <sebastian.pop@amd.com>.
 
 This file is part of GCC.
@@ -33,7 +33,26 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "system.h"
 #include "coretypes.h"
-#include "tree-flow.h"
+#include "tree.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimplify.h"
+#include "gimplify-me.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "tree-ssa-loop-manip.h"
+#include "tree-ssa-loop-niter.h"
+#include "tree-ssa-loop.h"
+#include "tree-into-ssa.h"
 #include "tree-pass.h"
 #include "cfgloop.h"
 #include "tree-chrec.h"
@@ -41,8 +60,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-scalar-evolution.h"
 #include "domwalk.h"
 #include "sese.h"
+#include "tree-ssa-propagate.h"
 
 #ifdef HAVE_cloog
+#include "expr.h"
 #include "graphite-poly.h"
 #include "graphite-sese-to-poly.h"
 
@@ -90,7 +111,6 @@ remove_simple_copy_phi (gimple_stmt_iterator *psi)
 
   remove_phi_node (psi, false);
   gsi_insert_on_edge_immediate (e, stmt);
-  SSA_NAME_DEF_STMT (res) = stmt;
 }
 
 /* Removes an invariant phi node at position PSI by inserting on the
@@ -403,7 +423,7 @@ build_scop_bbs_1 (scop_p scop, sbitmap visited, basic_block bb)
 static void
 build_scop_bbs (scop_p scop)
 {
-  sbitmap visited = sbitmap_alloc (last_basic_block);
+  sbitmap visited = sbitmap_alloc (last_basic_block_for_fn (cfun));
   sese region = SCOP_REGION (scop);
 
   bitmap_clear (visited);
@@ -665,7 +685,7 @@ extract_affine_name (scop_p s, tree e, __isl_take isl_space *space)
 
   id = isl_id_for_ssa_name (s, e);
   dimension = isl_space_find_dim_by_id (space, isl_dim_param, id);
-  isl_id_free(id);
+  isl_id_free (id);
   dom = isl_set_universe (isl_space_copy (space));
   aff = isl_aff_zero_on_domain (isl_local_space_from_space (space));
   aff = isl_aff_add_coefficient_si (aff, isl_dim_param, dimension, 1);
@@ -994,7 +1014,7 @@ build_loop_iteration_domains (scop_p scop, struct loop *loop,
   if (TREE_CODE (nb_iters) == INTEGER_CST)
     {
       c = isl_inequality_alloc
-	  (isl_local_space_from_space(isl_space_copy (space)));
+	  (isl_local_space_from_space (isl_space_copy (space)));
       c = isl_constraint_set_coefficient_si (c, isl_dim_set, pos, -1);
       tree_int_to_gmp (nb_iters, g);
       isl_int_set_gmp (v, g);
@@ -1132,8 +1152,8 @@ add_condition_to_pbb (poly_bb_p pbb, gimple stmt, enum tree_code code)
 	break;
 
       default:
-	isl_pw_aff_free(lhs);
-	isl_pw_aff_free(rhs);
+	isl_pw_aff_free (lhs);
+	isl_pw_aff_free (rhs);
 	return;
     }
 
@@ -1191,14 +1211,6 @@ add_conditions_to_constraints (scop_p scop)
     add_conditions_to_domain (pbb);
 }
 
-/* Structure used to pass data to dom_walk.  */
-
-struct bsc
-{
-  vec<gimple> *conditions, *cases;
-  sese region;
-};
-
 /* Returns a COND_EXPR statement when BB has a single predecessor, the
    edge between BB and its predecessor is not a loop exit edge, and
    the last statement of the single predecessor is a COND_EXPR.  */
@@ -1224,20 +1236,34 @@ single_pred_cond_non_loop_exit (basic_block bb)
   return NULL;
 }
 
+class sese_dom_walker : public dom_walker
+{
+public:
+  sese_dom_walker (cdi_direction, sese);
+
+  virtual void before_dom_children (basic_block);
+  virtual void after_dom_children (basic_block);
+
+private:
+  auto_vec<gimple, 3> m_conditions, m_cases;
+  sese m_region;
+};
+
+sese_dom_walker::sese_dom_walker (cdi_direction direction, sese region)
+  : dom_walker (direction), m_region (region)
+{
+}
+
 /* Call-back for dom_walk executed before visiting the dominated
    blocks.  */
 
-static void
-build_sese_conditions_before (struct dom_walk_data *dw_data,
-			      basic_block bb)
+void
+sese_dom_walker::before_dom_children (basic_block bb)
 {
-  struct bsc *data = (struct bsc *) dw_data->global_data;
-  vec<gimple> *conditions = data->conditions;
-  vec<gimple> *cases = data->cases;
   gimple_bb_p gbb;
   gimple stmt;
 
-  if (!bb_in_sese_p (bb, data->region))
+  if (!bb_in_sese_p (bb, m_region))
     return;
 
   stmt = single_pred_cond_non_loop_exit (bb);
@@ -1246,73 +1272,37 @@ build_sese_conditions_before (struct dom_walk_data *dw_data,
     {
       edge e = single_pred_edge (bb);
 
-      conditions->safe_push (stmt);
+      m_conditions.safe_push (stmt);
 
       if (e->flags & EDGE_TRUE_VALUE)
-	cases->safe_push (stmt);
+	m_cases.safe_push (stmt);
       else
-	cases->safe_push (NULL);
+	m_cases.safe_push (NULL);
     }
 
   gbb = gbb_from_bb (bb);
 
   if (gbb)
     {
-      GBB_CONDITIONS (gbb) = conditions->copy ();
-      GBB_CONDITION_CASES (gbb) = cases->copy ();
+      GBB_CONDITIONS (gbb) = m_conditions.copy ();
+      GBB_CONDITION_CASES (gbb) = m_cases.copy ();
     }
 }
 
 /* Call-back for dom_walk executed after visiting the dominated
    blocks.  */
 
-static void
-build_sese_conditions_after (struct dom_walk_data *dw_data,
-			     basic_block bb)
+void
+sese_dom_walker::after_dom_children (basic_block bb)
 {
-  struct bsc *data = (struct bsc *) dw_data->global_data;
-  vec<gimple> *conditions = data->conditions;
-  vec<gimple> *cases = data->cases;
-
-  if (!bb_in_sese_p (bb, data->region))
+  if (!bb_in_sese_p (bb, m_region))
     return;
 
   if (single_pred_cond_non_loop_exit (bb))
     {
-      conditions->pop ();
-      cases->pop ();
+      m_conditions.pop ();
+      m_cases.pop ();
     }
-}
-
-/* Record all conditions in REGION.  */
-
-static void
-build_sese_conditions (sese region)
-{
-  struct dom_walk_data walk_data;
-  vec<gimple> conditions;
-  conditions.create (3);
-  vec<gimple> cases;
-  cases.create (3);
-  struct bsc data;
-
-  data.conditions = &conditions;
-  data.cases = &cases;
-  data.region = region;
-
-  walk_data.dom_direction = CDI_DOMINATORS;
-  walk_data.initialize_block_local_data = NULL;
-  walk_data.before_dom_children = build_sese_conditions_before;
-  walk_data.after_dom_children = build_sese_conditions_after;
-  walk_data.global_data = &data;
-  walk_data.block_local_data_size = 0;
-
-  init_walk_dominator_tree (&walk_data);
-  walk_dominator_tree (&walk_data, SESE_ENTRY_BB (region));
-  fini_walk_dominator_tree (&walk_data);
-
-  conditions.release ();
-  cases.release ();
 }
 
 /* Add constraints on the possible values of parameter P from the type
@@ -1525,9 +1515,9 @@ pdr_add_data_dimensions (isl_set *extent, scop_p scop, data_reference_p dr)
          subscript - low >= 0 and high - subscript >= 0 in case one of
 	 the two bounds isn't known.  Do the same here?  */
 
-      if (host_integerp (low, 0)
+      if (tree_fits_shwi_p (low)
 	  && high
-	  && host_integerp (high, 0)
+	  && tree_fits_shwi_p (high)
 	  /* 1-element arrays at end of structures may extend over
 	     their declared size.  */
 	  && !(array_at_struct_end_p (ref)
@@ -1900,8 +1890,7 @@ build_scop_drs (scop_p scop)
   int i, j;
   poly_bb_p pbb;
   data_reference_p dr;
-  vec<data_reference_p> drs;
-  drs.create (3);
+  auto_vec<data_reference_p, 3> drs;
 
   /* Remove all the PBBs that do not have data references: these basic
      blocks are not handled in the polyhedral representation.  */
@@ -1999,8 +1988,7 @@ insert_stmts (scop_p scop, gimple stmt, gimple_seq stmts,
 	      gimple_stmt_iterator insert_gsi)
 {
   gimple_stmt_iterator gsi;
-  vec<gimple> x;
-  x.create (3);
+  auto_vec<gimple, 3> x;
 
   gimple_seq_add_stmt (&stmts, stmt);
   for (gsi = gsi_start (stmts); !gsi_end_p (gsi); gsi_next (&gsi))
@@ -2008,7 +1996,6 @@ insert_stmts (scop_p scop, gimple stmt, gimple_seq stmts,
 
   gsi_insert_seq_before (&insert_gsi, stmts, GSI_SAME_STMT);
   analyze_drs_in_stmts (scop, gsi_bb (insert_gsi), x);
-  x.release ();
 }
 
 /* Insert the assignment "RES := EXPR" just after AFTER_STMT.  */
@@ -2020,8 +2007,7 @@ insert_out_of_ssa_copy (scop_p scop, tree res, tree expr, gimple after_stmt)
   gimple_stmt_iterator gsi;
   tree var = force_gimple_operand (expr, &stmts, true, NULL_TREE);
   gimple stmt = gimple_build_assign (unshare_expr (res), var);
-  vec<gimple> x;
-  x.create (3);
+  auto_vec<gimple, 3> x;
 
   gimple_seq_add_stmt (&stmts, stmt);
   for (gsi = gsi_start (stmts); !gsi_end_p (gsi); gsi_next (&gsi))
@@ -2039,7 +2025,6 @@ insert_out_of_ssa_copy (scop_p scop, tree res, tree expr, gimple after_stmt)
     }
 
   analyze_drs_in_stmts (scop, gimple_bb (after_stmt), x);
-  x.release ();
 }
 
 /* Creates a poly_bb_p for basic_block BB from the existing PBB.  */
@@ -2077,8 +2062,7 @@ insert_out_of_ssa_copy_on_edge (scop_p scop, edge e, tree res, tree expr)
   tree var = force_gimple_operand (expr, &stmts, true, NULL_TREE);
   gimple stmt = gimple_build_assign (unshare_expr (res), var);
   basic_block bb;
-  vec<gimple> x;
-  x.create (3);
+  auto_vec<gimple, 3> x;
 
   gimple_seq_add_stmt (&stmts, stmt);
   for (gsi = gsi_start (stmts); !gsi_end_p (gsi); gsi_next (&gsi))
@@ -2095,7 +2079,6 @@ insert_out_of_ssa_copy_on_edge (scop_p scop, edge e, tree res, tree expr)
     new_pbb_from_pbb (scop, pbb_from_bb (e->src), bb);
 
   analyze_drs_in_stmts (scop, bb, x);
-  x.release ();
 }
 
 /* Creates a zero dimension array of the same type as VAR.  */
@@ -2200,7 +2183,6 @@ rewrite_close_phi_out_of_ssa (scop_p scop, gimple_stmt_iterator *psi)
       stmt = gimple_build_assign (res, arg);
       remove_phi_node (psi, false);
       gsi_insert_before (&gsi, stmt, GSI_NEW_STMT);
-      SSA_NAME_DEF_STMT (res) = stmt;
       return;
     }
 
@@ -2277,7 +2259,6 @@ rewrite_phi_out_of_ssa (scop_p scop, gimple_stmt_iterator *psi)
 
   stmt = gimple_build_assign (res, unshare_expr (zero_dim_array));
   remove_phi_node (psi, false);
-  SSA_NAME_DEF_STMT (res) = stmt;
   insert_stmts (scop, stmt, NULL, gsi_after_labels (bb));
 }
 
@@ -2300,7 +2281,6 @@ rewrite_degenerate_phi (gimple_stmt_iterator *psi)
 
   stmt = gimple_build_assign (res, rhs);
   remove_phi_node (psi, false);
-  SSA_NAME_DEF_STMT (res) = stmt;
 
   gsi = gsi_after_labels (bb);
   gsi_insert_before (&gsi, stmt, GSI_NEW_STMT);
@@ -2315,7 +2295,7 @@ rewrite_reductions_out_of_ssa (scop_p scop)
   gimple_stmt_iterator psi;
   sese region = SCOP_REGION (scop);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     if (bb_in_sese_p (bb, region))
       for (psi = gsi_start_phis (bb); !gsi_end_p (psi);)
 	{
@@ -2407,7 +2387,6 @@ handle_scalar_deps_crossing_scop_limits (scop_p scop, tree def, gimple stmt)
       gimple assign = gimple_build_assign (new_name, def);
       gimple_stmt_iterator psi = gsi_after_labels (SESE_EXIT (region)->dest);
 
-      SSA_NAME_DEF_STMT (new_name) = assign;
       update_stmt (assign);
       gsi_insert_before (&psi, assign, GSI_SAME_STMT);
     }
@@ -2510,7 +2489,7 @@ rewrite_cross_bb_scalar_deps_out_of_ssa (scop_p scop)
   /* Create an extra empty BB after the scop.  */
   split_edge (SESE_EXIT (region));
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     if (bb_in_sese_p (bb, region))
       for (psi = gsi_start_bb (bb); !gsi_end_p (psi); gsi_next (&psi))
 	changed |= rewrite_cross_bb_scalar_deps (scop, &psi);
@@ -2891,8 +2870,7 @@ remove_phi (gimple phi)
   tree def;
   use_operand_p use_p;
   gimple_stmt_iterator gsi;
-  vec<gimple> update;
-  update.create (3);
+  auto_vec<gimple, 3> update;
   unsigned int i;
   gimple stmt;
 
@@ -2910,8 +2888,6 @@ remove_phi (gimple phi)
 
   FOR_EACH_VEC_ELT (update, i, stmt)
     update_stmt (stmt);
-
-  update.release ();
 
   gsi = gsi_for_phi_node (phi);
   remove_phi_node (&gsi, false);
@@ -3052,18 +3028,14 @@ rewrite_commutative_reductions_out_of_ssa_close_phi (scop_p scop,
 						     gimple close_phi)
 {
   bool res;
-  vec<gimple> in;
-  in.create (10);
-  vec<gimple> out;
-  out.create (10);
+  auto_vec<gimple, 10> in;
+  auto_vec<gimple, 10> out;
 
   detect_commutative_reduction (scop, close_phi, &in, &out);
   res = in.length () > 1;
   if (res)
     translate_scalar_reduction_to_array (scop, in, out);
 
-  in.release ();
-  out.release ();
   return res;
 }
 
@@ -3097,12 +3069,11 @@ rewrite_commutative_reductions_out_of_ssa_loop (scop_p scop,
 static void
 rewrite_commutative_reductions_out_of_ssa (scop_p scop)
 {
-  loop_iterator li;
   loop_p loop;
   bool changed = false;
   sese region = SCOP_REGION (scop);
 
-  FOR_EACH_LOOP (li, loop, 0)
+  FOR_EACH_LOOP (loop, 0)
     if (loop_in_sese_p (loop, region))
       changed |= rewrite_commutative_reductions_out_of_ssa_loop (scop, loop);
 
@@ -3124,12 +3095,11 @@ rewrite_commutative_reductions_out_of_ssa (scop_p scop)
 static bool
 scop_ivs_can_be_represented (scop_p scop)
 {
-  loop_iterator li;
   loop_p loop;
   gimple_stmt_iterator psi;
   bool result = true;
 
-  FOR_EACH_LOOP (li, loop, 0)
+  FOR_EACH_LOOP (loop, 0)
     {
       if (!loop_in_sese_p (loop, SCOP_REGION (scop)))
 	continue;
@@ -3149,7 +3119,7 @@ scop_ivs_can_be_represented (scop_p scop)
 	    }
 	}
       if (!result)
-	FOR_EACH_LOOP_BREAK (li);
+	break;
     }
 
   return result;
@@ -3179,7 +3149,8 @@ build_poly_scop (scop_p scop)
     rewrite_commutative_reductions_out_of_ssa (scop);
 
   build_sese_loop_nests (region);
-  build_sese_conditions (region);
+  /* Record all conditions in REGION.  */
+  sese_dom_walker (CDI_DOMINATORS, region).walk (cfun->cfg->x_entry_block_ptr);
   find_scop_parameters (scop);
 
   max_dim = PARAM_VALUE (PARAM_GRAPHITE_MAX_NB_SCOP_PARAMS);

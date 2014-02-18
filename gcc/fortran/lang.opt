@@ -1,5 +1,5 @@
 ; Options for the Fortran 95 front end.
-; Copyright (C) 2003-2013 Free Software Foundation, Inc.
+; Copyright (C) 2003-2014 Free Software Foundation, Inc.
 ;
 ; This file is part of GCC.
 ;
@@ -213,6 +213,10 @@ Wc-binding-type
 Fortran Warning
 Warn if the type of a variable might be not interoperable with C
 
+Wdate-time
+Fortran
+; Documented in C
+
 Wcharacter-truncation
 Fortran Warning
 Warn about truncated character expressions
@@ -253,6 +257,10 @@ Wintrinsics-std
 Fortran Warning
 Warn on intrinsics not part of the selected standard
 
+Wopenmp-simd
+Fortran
+; Documented in C
+
 Wreal-q-constant
 Fortran Warning
 Warn about real-literal-constants with 'q' exponent-letter
@@ -292,6 +300,10 @@ Warn if a user-procedure has the same name as an intrinsic
 Wunused-dummy-argument
 Fortran Warning
 Warn about unused dummy arguments.
+
+Wzerotrip
+Fortran Warning
+Warn about zero-trip DO loops
 
 cpp
 Fortran Negative(nocpp)
@@ -441,6 +453,10 @@ ffpe-trap=
 Fortran RejectNegative JoinedOrMissing
 -ffpe-trap=[...]	Stop on following floating point exceptions
 
+ffpe-summary=
+Fortran RejectNegative JoinedOrMissing
+-ffpe-summary=[...]	Print summary of floating point exceptions
+
 ffree-form
 Fortran RejectNegative
 Assume that the source file is free form
@@ -506,6 +522,10 @@ Fortran
 Set default accessibility of module entities to PRIVATE.
 
 fopenmp
+Fortran
+; Documented in C
+
+fopenmp-simd
 Fortran
 ; Documented in C
 

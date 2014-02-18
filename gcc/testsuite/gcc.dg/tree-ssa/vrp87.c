@@ -1,7 +1,8 @@
-/* { dg-do compile { target { ! "m68k*-*-* mmix*-*-* mep*-*-* bfin*-*-* v850*-*-* picochip*-*-* moxie*-*-* cris*-*-* m32c*-*-* fr30*-*-* mcore*-*-* powerpc*-*-* xtensa*-*-*"} } } */
+/* Setting LOGICAL_OP_NON_SHORT_CIRCUIT to 0 leads to two conditional jumps
+   when evaluating an && condition.  VRP is not able to optimize this.  */
+/* { dg-do compile { target { ! { logical_op_short_circuit || { m68k*-*-* mmix*-*-* mep*-*-* bfin*-*-* v850*-*-* picochip*-*-* moxie*-*-* cris*-*-* m32c*-*-* fr30*-*-* mcore*-*-* powerpc*-*-* xtensa*-*-* hppa*-*-* } } } } } */
 
 /* { dg-options "-O2 -fdump-tree-vrp2-details -fdump-tree-cddce2-details" } */
-/* { dg-additional-options "-mbranch-cost=2" { target avr-*-* } } */
 
 struct bitmap_head_def;
 typedef struct bitmap_head_def *bitmap;

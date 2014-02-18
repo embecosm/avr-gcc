@@ -1,5 +1,5 @@
 /* Copy propagation on hard registers for the GNU compiler.
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -747,6 +747,7 @@ copyprop_hardreg_forward_1 (basic_block bb, struct value_data *vd)
       int n_ops, i, alt, predicated;
       bool is_asm, any_replacements;
       rtx set;
+      rtx link;
       bool replaced[MAX_RECOG_OPERANDS];
       bool changed = false;
       struct kill_set_value_data ksvd;
@@ -814,6 +815,23 @@ copyprop_hardreg_forward_1 (basic_block bb, struct value_data *vd)
       for (i = 0; i < n_ops; i++)
 	if (recog_op_alt[i][alt].earlyclobber)
 	  kill_value (recog_data.operand[i], vd);
+
+      /* If we have dead sets in the insn, then we need to note these as we
+	 would clobbers.  */
+      for (link = REG_NOTES (insn); link; link = XEXP (link, 1))
+	{
+	  if (REG_NOTE_KIND (link) == REG_UNUSED)
+	    {
+	      kill_value (XEXP (link, 0), vd);
+	      /* Furthermore, if the insn looked like a single-set,
+		 but the dead store kills the source value of that
+		 set, then we can no-longer use the plain move
+		 special case below.  */
+	      if (set
+		  && reg_overlap_mentioned_p (XEXP (link, 0), SET_SRC (set)))
+		set = NULL;
+	    }
+	}
 
       /* Special-case plain move instructions, since we may well
 	 be able to do the move from a different register class.  */
@@ -1048,9 +1066,9 @@ copyprop_hardreg_forward (void)
   sbitmap visited;
   bool analyze_called = false;
 
-  all_vd = XNEWVEC (struct value_data, last_basic_block);
+  all_vd = XNEWVEC (struct value_data, last_basic_block_for_fn (cfun));
 
-  visited = sbitmap_alloc (last_basic_block);
+  visited = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (visited);
 
   if (MAY_HAVE_DEBUG_INSNS)
@@ -1058,7 +1076,7 @@ copyprop_hardreg_forward (void)
       = create_alloc_pool ("debug insn changes pool",
 			   sizeof (struct queued_debug_insn_change), 256);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       bitmap_set_bit (visited, bb->index);
 
@@ -1094,7 +1112,7 @@ copyprop_hardreg_forward (void)
 
   if (MAY_HAVE_DEBUG_INSNS)
     {
-      FOR_EACH_BB (bb)
+      FOR_EACH_BB_FN (bb, cfun)
 	if (bitmap_bit_p (visited, bb->index)
 	    && all_vd[bb->index].n_debug_insn_changes)
 	  {
@@ -1236,23 +1254,40 @@ gate_handle_cprop (void)
 }
 
 
-struct rtl_opt_pass pass_cprop_hardreg =
+namespace {
+
+const pass_data pass_data_cprop_hardreg =
 {
- {
-  RTL_PASS,
-  "cprop_hardreg",                      /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_cprop,                    /* gate */
-  copyprop_hardreg_forward,             /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_CPROP_REGISTERS,                   /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish
-  | TODO_verify_rtl_sharing		/* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "cprop_hardreg", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_CPROP_REGISTERS, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing ), /* todo_flags_finish */
 };
+
+class pass_cprop_hardreg : public rtl_opt_pass
+{
+public:
+  pass_cprop_hardreg (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_cprop_hardreg, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_cprop (); }
+  unsigned int execute () { return copyprop_hardreg_forward (); }
+
+}; // class pass_cprop_hardreg
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_cprop_hardreg (gcc::context *ctxt)
+{
+  return new pass_cprop_hardreg (ctxt);
+}

@@ -10,21 +10,20 @@
 // Shadow memory poisoning by ASan RTL and by user application.
 //===----------------------------------------------------------------------===//
 
-#include "asan_interceptors.h"
-#include "asan_internal.h"
-#include "asan_mapping.h"
+#include "asan_poisoning.h"
 #include "sanitizer_common/sanitizer_libc.h"
+#include "sanitizer_common/sanitizer_flags.h"
 
 namespace __asan {
 
 void PoisonShadow(uptr addr, uptr size, u8 value) {
   if (!flags()->poison_heap) return;
   CHECK(AddrIsAlignedByGranularity(addr));
+  CHECK(AddrIsInMem(addr));
   CHECK(AddrIsAlignedByGranularity(addr + size));
-  uptr shadow_beg = MemToShadow(addr);
-  uptr shadow_end = MemToShadow(addr + size - SHADOW_GRANULARITY) + 1;
-  CHECK(REAL(memset) != 0);
-  REAL(memset)((void*)shadow_beg, value, shadow_end - shadow_beg);
+  CHECK(AddrIsInMem(addr + size - SHADOW_GRANULARITY));
+  CHECK(REAL(memset));
+  FastPoisonShadow(addr, size, value);
 }
 
 void PoisonShadowPartialRightRedzone(uptr addr,
@@ -33,19 +32,9 @@ void PoisonShadowPartialRightRedzone(uptr addr,
                                      u8 value) {
   if (!flags()->poison_heap) return;
   CHECK(AddrIsAlignedByGranularity(addr));
-  u8 *shadow = (u8*)MemToShadow(addr);
-  for (uptr i = 0; i < redzone_size;
-       i += SHADOW_GRANULARITY, shadow++) {
-    if (i + SHADOW_GRANULARITY <= size) {
-      *shadow = 0;  // fully addressable
-    } else if (i >= size) {
-      *shadow = (SHADOW_GRANULARITY == 128) ? 0xff : value;  // unaddressable
-    } else {
-      *shadow = size - i;  // first size-i bytes are addressable
-    }
-  }
+  CHECK(AddrIsInMem(addr));
+  FastPoisonShadowPartialRightRedzone(addr, size, redzone_size, value);
 }
-
 
 struct ShadowSegmentEndpoint {
   u8 *chunk;
@@ -78,7 +67,7 @@ void __asan_poison_memory_region(void const volatile *addr, uptr size) {
   if (!flags()->allow_user_poisoning || size == 0) return;
   uptr beg_addr = (uptr)addr;
   uptr end_addr = beg_addr + size;
-  if (flags()->verbosity >= 1) {
+  if (common_flags()->verbosity >= 1) {
     Printf("Trying to poison memory region [%p, %p)\n",
            (void*)beg_addr, (void*)end_addr);
   }
@@ -120,7 +109,7 @@ void __asan_unpoison_memory_region(void const volatile *addr, uptr size) {
   if (!flags()->allow_user_poisoning || size == 0) return;
   uptr beg_addr = (uptr)addr;
   uptr end_addr = beg_addr + size;
-  if (flags()->verbosity >= 1) {
+  if (common_flags()->verbosity >= 1) {
     Printf("Trying to unpoison memory region [%p, %p)\n",
            (void*)beg_addr, (void*)end_addr);
   }
@@ -179,6 +168,55 @@ uptr __asan_region_is_poisoned(uptr beg, uptr size) {
   return 0;
 }
 
+#define CHECK_SMALL_REGION(p, size, isWrite)                  \
+  do {                                                        \
+    uptr __p = reinterpret_cast<uptr>(p);                     \
+    uptr __size = size;                                       \
+    if (UNLIKELY(__asan::AddressIsPoisoned(__p) ||            \
+        __asan::AddressIsPoisoned(__p + __size - 1))) {       \
+      GET_CURRENT_PC_BP_SP;                                   \
+      uptr __bad = __asan_region_is_poisoned(__p, __size);    \
+      __asan_report_error(pc, bp, sp, __bad, isWrite, __size);\
+    }                                                         \
+  } while (false);                                            \
+
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+u16 __sanitizer_unaligned_load16(const uu16 *p) {
+  CHECK_SMALL_REGION(p, sizeof(*p), false);
+  return *p;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+u32 __sanitizer_unaligned_load32(const uu32 *p) {
+  CHECK_SMALL_REGION(p, sizeof(*p), false);
+  return *p;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+u64 __sanitizer_unaligned_load64(const uu64 *p) {
+  CHECK_SMALL_REGION(p, sizeof(*p), false);
+  return *p;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void __sanitizer_unaligned_store16(uu16 *p, u16 x) {
+  CHECK_SMALL_REGION(p, sizeof(*p), true);
+  *p = x;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void __sanitizer_unaligned_store32(uu32 *p, u32 x) {
+  CHECK_SMALL_REGION(p, sizeof(*p), true);
+  *p = x;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void __sanitizer_unaligned_store64(uu64 *p, u64 x) {
+  CHECK_SMALL_REGION(p, sizeof(*p), true);
+  *p = x;
+}
+
 // This is a simplified version of __asan_(un)poison_memory_region, which
 // assumes that left border of region to be poisoned is properly aligned.
 static void PoisonAlignedStackMemory(uptr addr, uptr size, bool do_poison) {
@@ -205,13 +243,57 @@ static void PoisonAlignedStackMemory(uptr addr, uptr size, bool do_poison) {
 }
 
 void __asan_poison_stack_memory(uptr addr, uptr size) {
-  if (flags()->verbosity > 0)
+  if (common_flags()->verbosity > 0)
     Report("poisoning: %p %zx\n", (void*)addr, size);
   PoisonAlignedStackMemory(addr, size, true);
 }
 
 void __asan_unpoison_stack_memory(uptr addr, uptr size) {
-  if (flags()->verbosity > 0)
+  if (common_flags()->verbosity > 0)
     Report("unpoisoning: %p %zx\n", (void*)addr, size);
   PoisonAlignedStackMemory(addr, size, false);
+}
+
+void __sanitizer_annotate_contiguous_container(const void *beg_p,
+                                               const void *end_p,
+                                               const void *old_mid_p,
+                                               const void *new_mid_p) {
+  if (common_flags()->verbosity >= 2)
+    Printf("contiguous_container: %p %p %p %p\n", beg_p, end_p, old_mid_p,
+           new_mid_p);
+  uptr beg = reinterpret_cast<uptr>(beg_p);
+  uptr end= reinterpret_cast<uptr>(end_p);
+  uptr old_mid = reinterpret_cast<uptr>(old_mid_p);
+  uptr new_mid = reinterpret_cast<uptr>(new_mid_p);
+  uptr granularity = SHADOW_GRANULARITY;
+  CHECK(beg <= old_mid && beg <= new_mid && old_mid <= end && new_mid <= end &&
+        IsAligned(beg, granularity));
+  CHECK_LE(end - beg,
+           FIRST_32_SECOND_64(1UL << 30, 1UL << 34)); // Sanity check.
+
+  uptr a = RoundDownTo(Min(old_mid, new_mid), granularity);
+  uptr c = RoundUpTo(Max(old_mid, new_mid), granularity);
+  uptr d1 = RoundDownTo(old_mid, granularity);
+  uptr d2 = RoundUpTo(old_mid, granularity);
+  // Currently we should be in this state:
+  // [a, d1) is good, [d2, c) is bad, [d1, d2) is partially good.
+  // Make a quick sanity check that we are indeed in this state.
+  if (d1 != d2)
+    CHECK_EQ(*(u8*)MemToShadow(d1), old_mid - d1);
+  if (a + granularity <= d1)
+    CHECK_EQ(*(u8*)MemToShadow(a), 0);
+  if (d2 + granularity <= c && c <= end)
+    CHECK_EQ(*(u8 *)MemToShadow(c - granularity),
+             kAsanContiguousContainerOOBMagic);
+
+  uptr b1 = RoundDownTo(new_mid, granularity);
+  uptr b2 = RoundUpTo(new_mid, granularity);
+  // New state:
+  // [a, b1) is good, [b2, c) is bad, [b1, b2) is partially good.
+  PoisonShadow(a, b1 - a, 0);
+  PoisonShadow(b2, c - b2, kAsanContiguousContainerOOBMagic);
+  if (b1 != b2) {
+    CHECK_EQ(b2 - b1, granularity);
+    *(u8*)MemToShadow(b1) = static_cast<u8>(new_mid - b1);
+  }
 }

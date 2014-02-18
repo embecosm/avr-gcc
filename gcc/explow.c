@@ -1,5 +1,5 @@
 /* Subroutines for manipulating rtx's in semantically interesting ways.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic-core.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "tm_p.h"
 #include "flags.h"
 #include "except.h"
@@ -186,7 +187,7 @@ plus_constant (enum machine_mode mode, rtx x, HOST_WIDE_INT c)
     }
 
   if (c != 0)
-    x = gen_rtx_PLUS (mode, x, GEN_INT (c));
+    x = gen_rtx_PLUS (mode, x, gen_int_mode (c, mode));
 
   if (GET_CODE (x) == SYMBOL_REF || GET_CODE (x) == LABEL_REF)
     return x;
@@ -235,6 +236,18 @@ eliminate_constant_term (rtx x, rtx *constptr)
   return x;
 }
 
+/* Returns a tree for the size of EXP in bytes.  */
+
+static tree
+tree_expr_size (const_tree exp)
+{
+  if (DECL_P (exp)
+      && DECL_SIZE_UNIT (exp) != 0)
+    return DECL_SIZE_UNIT (exp);
+  else
+    return size_in_bytes (TREE_TYPE (exp));
+}
+
 /* Return an rtx for the size in bytes of the value of EXP.  */
 
 rtx
@@ -270,10 +283,10 @@ int_expr_size (tree exp)
       gcc_assert (size);
     }
 
-  if (size == 0 || !host_integerp (size, 0))
+  if (size == 0 || !tree_fits_shwi_p (size))
     return -1;
 
-  return tree_low_cst (size, 0);
+  return tree_to_shwi (size);
 }
 
 /* Return a copy of X in which all memory references
@@ -1355,7 +1368,8 @@ allocate_dynamic_stack_space (rtx size, unsigned size_align,
       else
 	{
 	  ask = expand_binop (Pmode, add_optab, size,
-			      GEN_INT (required_align / BITS_PER_UNIT - 1),
+			      gen_int_mode (required_align / BITS_PER_UNIT - 1,
+					    Pmode),
 			      NULL_RTX, 1, OPTAB_LIB_WIDEN);
 	  must_align = true;
 	}
@@ -1481,13 +1495,16 @@ allocate_dynamic_stack_space (rtx size, unsigned size_align,
 	 but we know it can't.  So add ourselves and then do
 	 TRUNC_DIV_EXPR.  */
       target = expand_binop (Pmode, add_optab, target,
-			     GEN_INT (required_align / BITS_PER_UNIT - 1),
+			     gen_int_mode (required_align / BITS_PER_UNIT - 1,
+					   Pmode),
 			     NULL_RTX, 1, OPTAB_LIB_WIDEN);
       target = expand_divmod (0, TRUNC_DIV_EXPR, Pmode, target,
-			      GEN_INT (required_align / BITS_PER_UNIT),
+			      gen_int_mode (required_align / BITS_PER_UNIT,
+					    Pmode),
 			      NULL_RTX, 1);
       target = expand_mult (Pmode, target,
-			    GEN_INT (required_align / BITS_PER_UNIT),
+			    gen_int_mode (required_align / BITS_PER_UNIT,
+					  Pmode),
 			    NULL_RTX, 1);
     }
 
@@ -1632,7 +1649,8 @@ probe_stack_range (HOST_WIDE_INT first, rtx size)
 
       /* ROUNDED_SIZE = SIZE & -PROBE_INTERVAL  */
       rounded_size
-	= simplify_gen_binary (AND, Pmode, size, GEN_INT (-PROBE_INTERVAL));
+	= simplify_gen_binary (AND, Pmode, size,
+			       gen_int_mode (-PROBE_INTERVAL, Pmode));
       rounded_size_op = force_operand (rounded_size, NULL_RTX);
 
 
@@ -1641,7 +1659,8 @@ probe_stack_range (HOST_WIDE_INT first, rtx size)
       /* TEST_ADDR = SP + FIRST.  */
       test_addr = force_operand (gen_rtx_fmt_ee (STACK_GROW_OP, Pmode,
 					 	 stack_pointer_rtx,
-					 	 GEN_INT (first)), NULL_RTX);
+						 gen_int_mode (first, Pmode)),
+				 NULL_RTX);
 
       /* LAST_ADDR = SP + FIRST + ROUNDED_SIZE.  */
       last_addr = force_operand (gen_rtx_fmt_ee (STACK_GROW_OP, Pmode,
@@ -1668,7 +1687,7 @@ probe_stack_range (HOST_WIDE_INT first, rtx size)
 
       /* TEST_ADDR = TEST_ADDR + PROBE_INTERVAL.  */
       temp = expand_binop (Pmode, STACK_GROW_OPTAB, test_addr,
-			   GEN_INT (PROBE_INTERVAL), test_addr,
+			   gen_int_mode (PROBE_INTERVAL, Pmode), test_addr,
 			   1, OPTAB_WIDEN);
 
       gcc_assert (temp == test_addr);
@@ -1775,7 +1794,8 @@ anti_adjust_stack_and_probe (rtx size, bool adjust_back)
 
       /* ROUNDED_SIZE = SIZE & -PROBE_INTERVAL  */
       rounded_size
-	= simplify_gen_binary (AND, Pmode, size, GEN_INT (-PROBE_INTERVAL));
+	= simplify_gen_binary (AND, Pmode, size,
+			       gen_int_mode (-PROBE_INTERVAL, Pmode));
       rounded_size_op = force_operand (rounded_size, NULL_RTX);
 
 

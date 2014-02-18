@@ -1,5 +1,5 @@
 /* Subroutines for insn-output.c for ATMEL AVR micro controllers
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
    Contributed by Denis Chertykov (chertykov@gmail.com)
 
    This file is part of GCC.
@@ -32,6 +32,10 @@
 #include "flags.h"
 #include "reload.h"
 #include "tree.h"
+#include "print-tree.h"
+#include "calls.h"
+#include "stor-layout.h"
+#include "stringpool.h"
 #include "output.h"
 #include "expr.h"
 #include "c-family/c-common.h"
@@ -310,6 +314,15 @@ avr_option_override (void)
       flag_omit_frame_pointer = 0;
     }
 
+  if (flag_pic == 1)
+    warning (OPT_fpic, "-fpic is not supported");
+  if (flag_pic == 2)
+    warning (OPT_fPIC, "-fPIC is not supported");
+  if (flag_pie == 1)
+    warning (OPT_fpie, "-fpie is not supported");
+  if (flag_pie == 2)
+    warning (OPT_fPIE, "-fPIE is not supported");
+
   avr_current_device = &avr_mcu_types[avr_mcu_index];
   avr_current_arch = &avr_arch_types[avr_current_device->arch];
 
@@ -584,7 +597,12 @@ avr_set_current_function (tree decl)
     {
       tree args = TYPE_ARG_TYPES (TREE_TYPE (decl));
       tree ret = TREE_TYPE (TREE_TYPE (decl));
-      const char *name = IDENTIFIER_POINTER (DECL_NAME (decl));
+      const char *name;
+
+      name = DECL_ASSEMBLER_NAME_SET_P (decl)
+        /* Remove the leading '*' added in set_user_assembler_name.  */
+        ? 1 + IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (decl))
+        : IDENTIFIER_POINTER (DECL_NAME (decl));
 
       /* Silently ignore 'signal' if 'interrupt' is present.  AVR-LibC startet
          using this when it switched from SIGNAL and INTERRUPT to ISR.  */
@@ -1112,7 +1130,7 @@ avr_prologue_setup_frame (HOST_WIDE_INT size, HARD_REG_SET set)
               leaf function and thus X has already been saved.  */
 
           int irq_state = -1;
-          HOST_WIDE_INT size_cfa = size;
+          HOST_WIDE_INT size_cfa = size, neg_size;
           rtx fp_plus_insns, fp, my_fp;
 
           gcc_assert (frame_pointer_needed
@@ -1151,6 +1169,7 @@ avr_prologue_setup_frame (HOST_WIDE_INT size, HARD_REG_SET set)
             }
 
           size = trunc_int_for_mode (size, GET_MODE (my_fp));
+          neg_size = trunc_int_for_mode (-size, GET_MODE (my_fp));
 
           /************  Method 1: Adjust frame pointer  ************/
 
@@ -1171,7 +1190,8 @@ avr_prologue_setup_frame (HOST_WIDE_INT size, HARD_REG_SET set)
             }
 
           insn = emit_move_insn (my_fp, plus_constant (GET_MODE (my_fp),
-                                                       my_fp, -size));
+                                                       my_fp, neg_size));
+
           if (frame_pointer_needed)
             {
               RTX_FRAME_RELATED_P (insn) = 1;
@@ -3072,14 +3092,10 @@ avr_out_xload (rtx insn ATTRIBUTE_UNUSED, rtx *op, int *plen)
   xop[2] = lpm_addr_reg_rtx;
   xop[3] = AVR_HAVE_LPMX ? op[0] : lpm_reg_rtx;
 
-  if (plen)
-    *plen = 0;
+  avr_asm_len (AVR_HAVE_LPMX ? "lpm %3,%a2" : "lpm", xop, plen, -1);
 
   avr_asm_len ("sbrc %1,7" CR_TAB
-               "ld %3,%a2" CR_TAB
-               "sbrs %1,7", xop, plen, 3);
-
-  avr_asm_len (AVR_HAVE_LPMX ? "lpm %3,%a2" : "lpm", xop, plen, 1);
+               "ld %3,%a2", xop, plen, 2);
 
   if (REGNO (xop[0]) != REGNO (xop[3]))
     avr_asm_len ("mov %0,%3", xop, plen, 1);
@@ -6225,11 +6241,14 @@ lshrsi3_out (rtx insn, rtx operands[], int *len)
    the subtrahend in the original insn, provided it is a compile time constant.
    In all other cases, SIGN is 0.
 
-   Return "".  */
+   If OUT_LABEL is true, print the final 0: label which is needed for
+   saturated addition / subtraction.  The only case where OUT_LABEL = false
+   is useful is for saturated addition / subtraction performed during
+   fixed-point rounding, cf. `avr_out_round'.  */
 
 static void
 avr_out_plus_1 (rtx *xop, int *plen, enum rtx_code code, int *pcc,
-                enum rtx_code code_sat = UNKNOWN, int sign = 0)
+                enum rtx_code code_sat, int sign, bool out_label)
 {
   /* MODE of the operation.  */
   enum machine_mode mode = GET_MODE (xop[0]);
@@ -6668,7 +6687,8 @@ avr_out_plus_1 (rtx *xop, int *plen, enum rtx_code code, int *pcc,
                      "mov %r0+5,%0", xop, plen, 4);
     }
 
-  avr_asm_len ("0:", op, plen, 0);
+  if (out_label)
+    avr_asm_len ("0:", op, plen, 0);
 }
 
 
@@ -6706,8 +6726,8 @@ avr_out_plus_symbol (rtx *xop, enum rtx_code code, int *plen, int *pcc)
 
 /* Prepare operands of addition/subtraction to be used with avr_out_plus_1.
 
-   INSN is a single_set insn with a binary operation as SET_SRC that is
-   one of:  PLUS, SS_PLUS, US_PLUS, MINUS, SS_MINUS, US_MINUS.
+   INSN is a single_set insn or an insn pattern with a binary operation as
+   SET_SRC that is one of: PLUS, SS_PLUS, US_PLUS, MINUS, SS_MINUS, US_MINUS.
 
    XOP are the operands of INSN.  In the case of 64-bit operations with
    constant XOP[] has just one element:  The summand/subtrahend in XOP[0].
@@ -6722,19 +6742,22 @@ avr_out_plus_symbol (rtx *xop, enum rtx_code code, int *plen, int *pcc)
 
    PLEN and PCC default to NULL.
 
+   OUT_LABEL defaults to TRUE.  For a description, see AVR_OUT_PLUS_1.
+
    Return ""  */
 
 const char*
-avr_out_plus (rtx insn, rtx *xop, int *plen, int *pcc)
+avr_out_plus (rtx insn, rtx *xop, int *plen, int *pcc, bool out_label)
 {
   int cc_plus, cc_minus, cc_dummy;
   int len_plus, len_minus;
   rtx op[4];
-  rtx xdest = SET_DEST (single_set (insn));
+  rtx xpattern = INSN_P (insn) ? single_set (insn) : insn;
+  rtx xdest = SET_DEST (xpattern);
   enum machine_mode mode = GET_MODE (xdest);
   enum machine_mode imode = int_mode_for_mode (mode);
   int n_bytes = GET_MODE_SIZE (mode);
-  enum rtx_code code_sat = GET_CODE (SET_SRC (single_set (insn)));
+  enum rtx_code code_sat = GET_CODE (SET_SRC (xpattern));
   enum rtx_code code
     = (PLUS == code_sat || SS_PLUS == code_sat || US_PLUS == code_sat
        ? PLUS : MINUS);
@@ -6749,7 +6772,7 @@ avr_out_plus (rtx insn, rtx *xop, int *plen, int *pcc)
 
   if (n_bytes <= 4 && REG_P (xop[2]))
     {
-      avr_out_plus_1 (xop, plen, code, pcc, code_sat);
+      avr_out_plus_1 (xop, plen, code, pcc, code_sat, 0, out_label);
       return "";
     }
 
@@ -6776,7 +6799,8 @@ avr_out_plus (rtx insn, rtx *xop, int *plen, int *pcc)
   /* Saturations and 64-bit operations don't have a clobber operand.
      For the other cases, the caller will provide a proper XOP[3].  */
 
-  op[3] = PARALLEL == GET_CODE (PATTERN (insn)) ? xop[3] : NULL_RTX;
+  xpattern = INSN_P (insn) ? PATTERN (insn) : insn;
+  op[3] = PARALLEL == GET_CODE (xpattern) ? xop[3] : NULL_RTX;
 
   /* Saturation will need the sign of the original operand.  */
 
@@ -6791,8 +6815,8 @@ avr_out_plus (rtx insn, rtx *xop, int *plen, int *pcc)
 
   /* Work out the shortest sequence.  */
 
-  avr_out_plus_1 (op, &len_minus, MINUS, &cc_plus, code_sat, sign);
-  avr_out_plus_1 (op, &len_plus, PLUS, &cc_minus, code_sat, sign);
+  avr_out_plus_1 (op, &len_minus, MINUS, &cc_plus, code_sat, sign, out_label);
+  avr_out_plus_1 (op, &len_plus, PLUS, &cc_minus, code_sat, sign, out_label);
 
   if (plen)
     {
@@ -6800,9 +6824,9 @@ avr_out_plus (rtx insn, rtx *xop, int *plen, int *pcc)
       *pcc  = (len_minus <= len_plus) ? cc_minus : cc_plus;
     }
   else if (len_minus <= len_plus)
-    avr_out_plus_1 (op, NULL, MINUS, pcc, code_sat, sign);
+    avr_out_plus_1 (op, NULL, MINUS, pcc, code_sat, sign, out_label);
   else
-    avr_out_plus_1 (op, NULL, PLUS, pcc, code_sat, sign);
+    avr_out_plus_1 (op, NULL, PLUS, pcc, code_sat, sign, out_label);
 
   return "";
 }
@@ -6816,13 +6840,15 @@ avr_out_plus (rtx insn, rtx *xop, int *plen, int *pcc)
    and return "".  If PLEN == NULL, print assembler instructions to perform the
    operation; otherwise, set *PLEN to the length of the instruction sequence
    (in words) printed with PLEN == NULL.  XOP[3] is either an 8-bit clobber
-   register or SCRATCH if no clobber register is needed for the operation.  */
+   register or SCRATCH if no clobber register is needed for the operation.
+   INSN is an INSN_P or a pattern of an insn.  */
 
 const char*
 avr_out_bitop (rtx insn, rtx *xop, int *plen)
 {
   /* CODE and MODE of the operation.  */
-  enum rtx_code code = GET_CODE (SET_SRC (single_set (insn)));
+  rtx xpattern = INSN_P (insn) ? single_set (insn) : insn;
+  enum rtx_code code = GET_CODE (SET_SRC (xpattern));
   enum machine_mode mode = GET_MODE (xop[0]);
 
   /* Number of bytes to operate on.  */
@@ -7519,6 +7545,67 @@ avr_out_fract (rtx insn, rtx operands[], bool intsigned, int *plen)
 }
 
 
+/* Output fixed-point rounding.  XOP[0] = XOP[1] is the operand to round.
+   XOP[2] is the rounding point, a CONST_INT.  The function prints the
+   instruction sequence if PLEN = NULL and computes the length in words
+   of the sequence if PLEN != NULL.  Most of this function deals with
+   preparing operands for calls to `avr_out_plus' and `avr_out_bitop'.  */
+
+const char*
+avr_out_round (rtx insn ATTRIBUTE_UNUSED, rtx *xop, int *plen)
+{
+  enum machine_mode mode = GET_MODE (xop[0]);
+  enum machine_mode imode = int_mode_for_mode (mode);
+  // The smallest fractional bit not cleared by the rounding is 2^(-RP).
+  int fbit = (int) GET_MODE_FBIT (mode);
+  double_int i_add = double_int_zero.set_bit (fbit-1 - INTVAL (xop[2]));
+  // Lengths of PLUS and AND parts.
+  int len_add = 0, *plen_add = plen ? &len_add : NULL;
+  int len_and = 0, *plen_and = plen ? &len_and : NULL;
+
+  // Add-Saturate  1/2 * 2^(-RP).  Don't print the label "0:" when printing
+  // the saturated addition so that we can emit the "rjmp 1f" before the
+  // "0:" below.
+
+  rtx xadd = const_fixed_from_double_int (i_add, mode);
+  rtx xpattern, xsrc, op[4];
+
+  xsrc = SIGNED_FIXED_POINT_MODE_P (mode)
+    ? gen_rtx_SS_PLUS (mode, xop[1], xadd)
+    : gen_rtx_US_PLUS (mode, xop[1], xadd);
+  xpattern = gen_rtx_SET (VOIDmode, xop[0], xsrc);
+
+  op[0] = xop[0];
+  op[1] = xop[1];
+  op[2] = xadd;
+  avr_out_plus (xpattern, op, plen_add, NULL, false /* Don't print "0:" */);
+
+  avr_asm_len ("rjmp 1f" CR_TAB
+               "0:", NULL, plen_add, 1);
+
+  // Keep  all bits from RP and higher:   ... 2^(-RP)
+  // Clear all bits from RP+1 and lower:              2^(-RP-1) ...
+  // Rounding point                           ^^^^^^^
+  // Added above                                      ^^^^^^^^^
+  rtx xreg = simplify_gen_subreg (imode, xop[0], mode, 0);
+  rtx xmask = immed_double_int_const (-i_add - i_add, imode);
+
+  xpattern = gen_rtx_SET (VOIDmode, xreg, gen_rtx_AND (imode, xreg, xmask));
+
+  op[0] = xreg;
+  op[1] = xreg;
+  op[2] = xmask;
+  op[3] = gen_rtx_SCRATCH (QImode);
+  avr_out_bitop (xpattern, op, plen_and);
+  avr_asm_len ("1:", NULL, plen, 0);
+
+  if (plen)
+    *plen = len_add + len_and;
+
+  return "";
+}
+
+
 /* Create RTL split patterns for byte sized rotate expressions.  This
   produces a series of move instructions and considers overlap situations.
   Overlapping non-HImode operands need a scratch register.  */
@@ -7657,7 +7744,7 @@ avr_rotate_bytes (rtx operands[])
 		gcc_assert (move[blocked].links != -1);
 		/* Replace src of  blocking move with scratch reg.  */
 		move[move[blocked].links].src = scratch;
-		/* Make dependent on scratch move occuring.  */
+		/* Make dependent on scratch move occurring.  */
 		move[blocked].links = size;
 		size=size+1;
 	      }
@@ -7727,6 +7814,7 @@ avr_adjust_insn_length (rtx insn, int len)
 
     case ADJUST_LEN_SFRACT: avr_out_fract (insn, op, true, &len); break;
     case ADJUST_LEN_UFRACT: avr_out_fract (insn, op, false, &len); break;
+    case ADJUST_LEN_ROUND: avr_out_round (insn, op, &len); break;
 
     case ADJUST_LEN_TSTHI: avr_out_tsthi (insn, op, &len); break;
     case ADJUST_LEN_TSTPSI: avr_out_tstpsi (insn, op, &len); break;
@@ -8519,7 +8607,6 @@ avr_encode_section_info (tree decl, rtx rtl, int new_decl_p)
    {
       rtx sym = XEXP (rtl, 0);
       tree type = TREE_TYPE (decl);
-
       if (type == error_mark_node)
 	return;
       addr_space_t as = TYPE_ADDR_SPACE (type);
@@ -11291,26 +11378,12 @@ avr_expand_delay_cycles (rtx operands0)
 }
 
 
-/* Return VAL * BASE + DIGIT.  BASE = 0 is shortcut for BASE = 2^{32}   */
-
-static double_int
-avr_double_int_push_digit (double_int val, int base,
-                           unsigned HOST_WIDE_INT digit)
-{
-  val = 0 == base
-    ? val.llshift (32, 64)
-    : val * double_int::from_uhwi (base);
-
-  return val + double_int::from_uhwi (digit);
-}
-
-
 /* Compute the image of x under f, i.e. perform   x --> f(x)    */
 
 static int
-avr_map (double_int f, int x)
+avr_map (unsigned int f, int x)
 {
-  return 0xf & f.lrshift (4*x, 64).to_uhwi ();
+  return x < 8 ? (f >> (4 * x)) & 0xf : 0;
 }
 
 
@@ -11335,7 +11408,7 @@ enum
   };
 
 static unsigned
-avr_map_metric (double_int a, int mode)
+avr_map_metric (unsigned int a, int mode)
 {
   unsigned i, metric = 0;
 
@@ -11368,7 +11441,8 @@ avr_map_metric (double_int a, int mode)
 bool
 avr_has_nibble_0xf (rtx ival)
 {
-  return 0 != avr_map_metric (rtx_to_double_int (ival), MAP_MASK_PREIMAGE_F);
+  unsigned int map = UINTVAL (ival) & GET_MODE_MASK (SImode);
+  return 0 != avr_map_metric (map, MAP_MASK_PREIMAGE_F);
 }
 
 
@@ -11402,7 +11476,7 @@ typedef struct
   int cost;
 
   /* The composition F o G^-1 (*, arg) for some function F */
-  double_int map;
+  unsigned int map;
 
   /* For debug purpose only */
   const char *str;
@@ -11410,21 +11484,21 @@ typedef struct
 
 static const avr_map_op_t avr_map_op[] =
   {
-    { LROTATE_EXPR, 0, 0x76543210, 0, { 0, 0 }, "id" },
-    { LROTATE_EXPR, 1, 0x07654321, 2, { 0, 0 }, "<<<" },
-    { LROTATE_EXPR, 2, 0x10765432, 4, { 0, 0 }, "<<<" },
-    { LROTATE_EXPR, 3, 0x21076543, 4, { 0, 0 }, "<<<" },
-    { LROTATE_EXPR, 4, 0x32107654, 1, { 0, 0 }, "<<<" },
-    { LROTATE_EXPR, 5, 0x43210765, 3, { 0, 0 }, "<<<" },
-    { LROTATE_EXPR, 6, 0x54321076, 5, { 0, 0 }, "<<<" },
-    { LROTATE_EXPR, 7, 0x65432107, 3, { 0, 0 }, "<<<" },
-    { RSHIFT_EXPR, 1, 0x6543210c, 1, { 0, 0 }, ">>" },
-    { RSHIFT_EXPR, 1, 0x7543210c, 1, { 0, 0 }, ">>" },
-    { RSHIFT_EXPR, 2, 0x543210cc, 2, { 0, 0 }, ">>" },
-    { RSHIFT_EXPR, 2, 0x643210cc, 2, { 0, 0 }, ">>" },
-    { RSHIFT_EXPR, 2, 0x743210cc, 2, { 0, 0 }, ">>" },
-    { LSHIFT_EXPR, 1, 0xc7654321, 1, { 0, 0 }, "<<" },
-    { LSHIFT_EXPR, 2, 0xcc765432, 2, { 0, 0 }, "<<" }
+    { LROTATE_EXPR, 0, 0x76543210, 0, 0, "id" },
+    { LROTATE_EXPR, 1, 0x07654321, 2, 0, "<<<" },
+    { LROTATE_EXPR, 2, 0x10765432, 4, 0, "<<<" },
+    { LROTATE_EXPR, 3, 0x21076543, 4, 0, "<<<" },
+    { LROTATE_EXPR, 4, 0x32107654, 1, 0, "<<<" },
+    { LROTATE_EXPR, 5, 0x43210765, 3, 0, "<<<" },
+    { LROTATE_EXPR, 6, 0x54321076, 5, 0, "<<<" },
+    { LROTATE_EXPR, 7, 0x65432107, 3, 0, "<<<" },
+    { RSHIFT_EXPR, 1, 0x6543210c, 1, 0, ">>" },
+    { RSHIFT_EXPR, 1, 0x7543210c, 1, 0, ">>" },
+    { RSHIFT_EXPR, 2, 0x543210cc, 2, 0, ">>" },
+    { RSHIFT_EXPR, 2, 0x643210cc, 2, 0, ">>" },
+    { RSHIFT_EXPR, 2, 0x743210cc, 2, 0, ">>" },
+    { LSHIFT_EXPR, 1, 0xc7654321, 1, 0, "<<" },
+    { LSHIFT_EXPR, 2, 0xcc765432, 2, 0, "<<" }
   };
 
 
@@ -11433,12 +11507,12 @@ static const avr_map_op_t avr_map_op[] =
    If result.cost < 0 then such a decomposition does not exist.  */
 
 static avr_map_op_t
-avr_map_decompose (double_int f, const avr_map_op_t *g, bool val_const_p)
+avr_map_decompose (unsigned int f, const avr_map_op_t *g, bool val_const_p)
 {
   int i;
   bool val_used_p = 0 != avr_map_metric (f, MAP_MASK_PREIMAGE_F);
   avr_map_op_t f_ginv = *g;
-  double_int ginv = double_int::from_uhwi (g->ginv);
+  unsigned int ginv = g->ginv;
 
   f_ginv.cost = -1;
 
@@ -11458,7 +11532,7 @@ avr_map_decompose (double_int f, const avr_map_op_t *g, bool val_const_p)
             return f_ginv;
         }
 
-      f_ginv.map = avr_double_int_push_digit (f_ginv.map, 16, x);
+      f_ginv.map = (f_ginv.map << 4) + x;
     }
 
   /* Step 2:  Compute the cost of the operations.
@@ -11483,7 +11557,7 @@ avr_map_decompose (double_int f, const avr_map_op_t *g, bool val_const_p)
          are mapped to 0 and used operands are reloaded to xop[0].  */
 
       xop[0] = all_regs_rtx[24];
-      xop[1] = gen_int_mode (f_ginv.map.to_uhwi (), SImode);
+      xop[1] = gen_int_mode (f_ginv.map, SImode);
       xop[2] = all_regs_rtx[25];
       xop[3] = val_used_p ? xop[0] : const0_rtx;
 
@@ -11510,7 +11584,7 @@ avr_map_decompose (double_int f, const avr_map_op_t *g, bool val_const_p)
    is different to its source position.  */
 
 static void
-avr_move_bits (rtx *xop, double_int map, bool fixp_p, int *plen)
+avr_move_bits (rtx *xop, unsigned int map, bool fixp_p, int *plen)
 {
   int bit_dest, b;
 
@@ -11563,7 +11637,7 @@ avr_move_bits (rtx *xop, double_int map, bool fixp_p, int *plen)
 const char*
 avr_out_insert_bits (rtx *op, int *plen)
 {
-  double_int map = rtx_to_double_int (op[1]);
+  unsigned int map = UINTVAL (op[1]) & GET_MODE_MASK (SImode);
   unsigned mask_fixed;
   bool fixp_p = true;
   rtx xop[4];
@@ -11577,9 +11651,7 @@ avr_out_insert_bits (rtx *op, int *plen)
   if (plen)
     *plen = 0;
   else if (flag_print_asm_name)
-    fprintf (asm_out_file,
-             ASM_COMMENT_START "map = 0x%08" HOST_LONG_FORMAT "x\n",
-             map.to_uhwi () & GET_MODE_MASK (SImode));
+    fprintf (asm_out_file, ASM_COMMENT_START "map = 0x%08x\n", map);
 
   /* If MAP has fixed points it might be better to initialize the result
      with the bits to be inserted instead of moving all bits by hand.  */
@@ -12154,7 +12226,7 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
         tree tval = arg[2];
         tree tmap;
         tree map_type = TREE_VALUE (TYPE_ARG_TYPES (TREE_TYPE (fndecl)));
-        double_int map;
+        unsigned int map;
         bool changed = false;
         unsigned i;
         avr_map_op_t best_g;
@@ -12167,8 +12239,8 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
             break;
           }
 
-        map = tree_to_double_int (arg[0]);
-        tmap = double_int_to_tree (map_type, map);
+        tmap = double_int_to_tree (map_type, tree_to_double_int (arg[0]));
+        map = TREE_INT_CST_LOW (tmap);
 
         if (TREE_CODE (tval) != INTEGER_CST
             && 0 == avr_map_metric (map, MAP_MASK_PREIMAGE_F))
@@ -12234,7 +12306,7 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
         /* Try to decomposing map to reduce overall cost.  */
 
         if (avr_log.builtin)
-          avr_edump ("\n%?: %X\n%?: ROL cost: ", map);
+          avr_edump ("\n%?: %x\n%?: ROL cost: ", map);
 
         best_g = avr_map_op[0];
         best_g.cost = 1000;
@@ -12259,7 +12331,7 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
         /* Apply operation G to the 2nd argument.  */
 
         if (avr_log.builtin)
-          avr_edump ("%?: using OP(%s%d, %X) cost %d\n",
+          avr_edump ("%?: using OP(%s%d, %x) cost %d\n",
                      best_g.str, best_g.arg, best_g.map, best_g.cost);
 
         /* Do right-shifts arithmetically: They copy the MSB instead of
@@ -12272,7 +12344,8 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
 
         /* Use map o G^-1 instead of original map to undo the effect of G.  */
 
-        tmap = double_int_to_tree (map_type, best_g.map);
+        tmap = double_int_to_tree (map_type,
+				   double_int::from_uhwi (best_g.map));
 
         return build_call_expr (fndecl, 3, tmap, tbits, tval);
       } /* AVR_BUILTIN_INSERT_BITS */

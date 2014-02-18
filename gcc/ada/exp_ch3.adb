@@ -237,16 +237,19 @@ package body Exp_Ch3 is
    --  user-defined equality. Factored out of Predefined_Primitive_Bodies.
 
    function Make_Eq_Case
-     (E     : Entity_Id;
-      CL    : Node_Id;
-      Discr : Entity_Id := Empty) return List_Id;
+     (E      : Entity_Id;
+      CL     : Node_Id;
+      Discrs : Elist_Id := New_Elmt_List) return List_Id;
    --  Building block for variant record equality. Defined to share the code
    --  between the tagged and non-tagged case. Given a Component_List node CL,
    --  it generates an 'if' followed by a 'case' statement that compares all
    --  components of local temporaries named X and Y (that are declared as
    --  formals at some upper level). E provides the Sloc to be used for the
-   --  generated code. Discr is used as the case statement switch in the case
-   --  of Unchecked_Union equality.
+   --  generated code.
+   --
+   --  IF E is an unchecked_union,  Discrs is the list of formals created for
+   --  the inferred discriminants of one operand. These formals are used in
+   --  the generated case statements for each variant of the unchecked union.
 
    function Make_Eq_If
      (E : Entity_Id;
@@ -938,7 +941,7 @@ package body Exp_Ch3 is
       Rec_Id            : Entity_Id;
       Loc               : Source_Ptr;
       Enclosing_Func_Id : Entity_Id;
-      Sequence          : Nat     := 1;
+      Sequence          : Nat := 1;
       Type_Def          : Node_Id;
       V                 : Node_Id;
 
@@ -981,7 +984,7 @@ package body Exp_Ch3 is
       begin
          Case_Node := New_Node (N_Case_Statement, Loc);
 
-         --  Replace the discriminant which controls the variant, with the name
+         --  Replace the discriminant which controls the variant with the name
          --  of the formal of the checking function.
 
          Set_Expression (Case_Node, Make_Identifier (Loc, Chars (Case_Id)));
@@ -1067,6 +1070,7 @@ package body Exp_Ch3 is
          Func_Id :=
            Make_Defining_Identifier (Loc,
              Chars => New_External_Name (Chars (Rec_Id), 'D', Sequence));
+         Set_Is_Discriminant_Check_Function (Func_Id);
 
          Spec_Node := New_Node (N_Function_Specification, Loc);
          Set_Defining_Unit_Name (Spec_Node, Func_Id);
@@ -1860,9 +1864,7 @@ package body Exp_Ch3 is
          --  Suppress the tag adjustment when VM_Target because VM tags are
          --  represented implicitly in objects.
 
-         if Is_Tagged_Type (Typ)
-           and then Tagged_Type_Expansion
-         then
+         if Is_Tagged_Type (Typ) and then Tagged_Type_Expansion then
             Append_To (Res,
               Make_Assignment_Statement (N_Loc,
                 Name       =>
@@ -1890,7 +1892,7 @@ package body Exp_Ch3 is
 
          if Needs_Finalization (Typ)
            and then not (Nkind_In (Kind, N_Aggregate, N_Extension_Aggregate))
-           and then not Is_Immutably_Limited_Type (Typ)
+           and then not Is_Limited_View (Typ)
          then
             Append_To (Res,
               Make_Adjust_Call
@@ -2383,10 +2385,16 @@ package body Exp_Ch3 is
                               Component_List (Record_Extension_Node));
 
                begin
-                  --  The parent field must be initialized first because
-                  --  the offset of the new discriminants may depend on it
+                  --  The parent field must be initialized first because the
+                  --  offset of the new discriminants may depend on it. This is
+                  --  not needed if the parent is an interface type because in
+                  --  such case the initialization of the _parent field was not
+                  --  generated.
 
-                  Prepend_To (Body_Stmts, Remove_Head (Stmts));
+                  if not Is_Interface (Etype (Rec_Ent)) then
+                     Prepend_To (Body_Stmts, Remove_Head (Stmts));
+                  end if;
+
                   Append_List_To (Body_Stmts, Stmts);
                end;
             end if;
@@ -3399,7 +3407,7 @@ package body Exp_Ch3 is
          --     the client will think an initialization procedure is present
          --     and call it, when in fact no such procedure is required, but
          --     since the call is generated, there had better be a routine
-         --     at the other end of the call, even if it does nothing!)
+         --     at the other end of the call, even if it does nothing).
 
          --  Note: the reason we exclude the CPP_Class case is because in this
          --  case the initialization is performed by the C++ constructors, and
@@ -4335,8 +4343,7 @@ package body Exp_Ch3 is
               Result_Definition => New_Reference_To (Standard_Boolean, Loc)),
           Declarations               => New_List,
           Handled_Statement_Sequence =>
-            Make_Handled_Sequence_Of_Statements (Loc,
-              Statements => Stmts)));
+            Make_Handled_Sequence_Of_Statements (Loc, Statements => Stmts)));
 
       Append_To (Pspecs,
         Make_Parameter_Specification (Loc,
@@ -4350,57 +4357,71 @@ package body Exp_Ch3 is
 
       --  Unchecked_Unions require additional machinery to support equality.
       --  Two extra parameters (A and B) are added to the equality function
-      --  parameter list in order to capture the inferred values of the
-      --  discriminants in later calls.
+      --  parameter list for each discriminant of the type, in order to
+      --  capture the inferred values of the discriminants in equality calls.
+      --  The names of the parameters match the names of the corresponding
+      --  discriminant, with an added suffix.
 
       if Is_Unchecked_Union (Typ) then
          declare
-            Discr_Type : constant Node_Id := Etype (First_Discriminant (Typ));
-
-            A : constant Node_Id :=
-                  Make_Defining_Identifier (Loc,
-                    Chars => Name_A);
-
-            B : constant Node_Id :=
-                  Make_Defining_Identifier (Loc,
-                    Chars => Name_B);
+            Discr      : Entity_Id;
+            Discr_Type : Entity_Id;
+            A, B       : Entity_Id;
+            New_Discrs : Elist_Id;
 
          begin
-            --  Add A and B to the parameter list
+            New_Discrs := New_Elmt_List;
 
-            Append_To (Pspecs,
-              Make_Parameter_Specification (Loc,
-                Defining_Identifier => A,
-                Parameter_Type => New_Reference_To (Discr_Type, Loc)));
+            Discr := First_Discriminant (Typ);
+            while Present (Discr) loop
+               Discr_Type := Etype (Discr);
+               A := Make_Defining_Identifier (Loc,
+                      Chars => New_External_Name (Chars (Discr), 'A'));
 
-            Append_To (Pspecs,
-              Make_Parameter_Specification (Loc,
-                Defining_Identifier => B,
-                Parameter_Type => New_Reference_To (Discr_Type, Loc)));
+               B := Make_Defining_Identifier (Loc,
+                      Chars => New_External_Name (Chars (Discr), 'B'));
 
-            --  Generate the following header code to compare the inferred
-            --  discriminants:
+               --  Add new parameters to the parameter list
 
-            --  if a /= b then
-            --     return False;
-            --  end if;
+               Append_To (Pspecs,
+                 Make_Parameter_Specification (Loc,
+                   Defining_Identifier => A,
+                   Parameter_Type      => New_Reference_To (Discr_Type, Loc)));
 
-            Append_To (Stmts,
-              Make_If_Statement (Loc,
-                Condition =>
-                  Make_Op_Ne (Loc,
-                    Left_Opnd => New_Reference_To (A, Loc),
-                    Right_Opnd => New_Reference_To (B, Loc)),
-                Then_Statements => New_List (
-                  Make_Simple_Return_Statement (Loc,
-                    Expression => New_Occurrence_Of (Standard_False, Loc)))));
+               Append_To (Pspecs,
+                 Make_Parameter_Specification (Loc,
+                   Defining_Identifier => B,
+                   Parameter_Type      => New_Reference_To (Discr_Type, Loc)));
+
+               Append_Elmt (A, New_Discrs);
+
+               --  Generate the following code to compare each of the inferred
+               --  discriminants:
+
+               --  if a /= b then
+               --     return False;
+               --  end if;
+
+               Append_To (Stmts,
+                 Make_If_Statement (Loc,
+                   Condition       =>
+                     Make_Op_Ne (Loc,
+                       Left_Opnd  => New_Reference_To (A, Loc),
+                       Right_Opnd => New_Reference_To (B, Loc)),
+                   Then_Statements => New_List (
+                     Make_Simple_Return_Statement (Loc,
+                       Expression =>
+                         New_Occurrence_Of (Standard_False, Loc)))));
+               Next_Discriminant (Discr);
+            end loop;
 
             --  Generate component-by-component comparison. Note that we must
-            --  propagate one of the inferred discriminant formals to act as
-            --  the case statement switch.
+            --  propagate the inferred discriminants formals to act as
+            --  the case statement switch. Their value is added when an
+            --  equality call on unchecked unions is expanded.
 
             Append_List_To (Stmts,
-              Make_Eq_Case (Typ, Comps, A));
+              Make_Eq_Case (Typ, Comps, New_Discrs));
          end;
 
       --  Normal case (not unchecked union)
@@ -4616,9 +4637,19 @@ package body Exp_Ch3 is
       ------------------
 
       procedure Build_Master (Ptr_Typ : Entity_Id) is
-         Desig_Typ : constant Entity_Id := Designated_Type (Ptr_Typ);
+         Desig_Typ : Entity_Id := Designated_Type (Ptr_Typ);
 
       begin
+         --  If the designated type is an incomplete view coming from a
+         --  limited-with'ed package, we need to use the nonlimited view in
+         --  case it has tasks.
+
+         if Ekind (Desig_Typ) in Incomplete_Kind
+           and then Present (Non_Limited_View (Desig_Typ))
+         then
+            Desig_Typ := Non_Limited_View (Desig_Typ);
+         end if;
+
          --  Anonymous access types are created for the components of the
          --  record parameter for an entry declaration. No master is created
          --  for such a type.
@@ -4914,7 +4945,7 @@ package body Exp_Ch3 is
                Next_Elmt (Discr);
             end loop;
 
-            --  Now collect values of initialized components.
+            --  Now collect values of initialized components
 
             Comp := First_Component (Full_Type);
             while Present (Comp) loop
@@ -4931,11 +4962,11 @@ package body Exp_Ch3 is
                Next_Component (Comp);
             end loop;
 
-            --  Finally, box-initialize remaining components.
+            --  Finally, box-initialize remaining components
 
             Append_To (Component_Associations (Aggr),
               Make_Component_Association (Loc,
-                Choices => New_List (Make_Others_Choice (Loc)),
+                Choices    => New_List (Make_Others_Choice (Loc)),
                 Expression => Empty));
             Set_Box_Present (Last (Component_Associations (Aggr)));
             Set_Expression (N, Aggr);
@@ -5268,7 +5299,7 @@ package body Exp_Ch3 is
          elsif Is_Interface (Typ)
 
            --  Avoid never-ending recursion because if Equivalent_Type is set
-           --  then we've done it already and must not do it again!
+           --  then we've done it already and must not do it again.
 
            and then not
              (Nkind (Object_Definition (N)) = N_Identifier
@@ -5284,7 +5315,7 @@ package body Exp_Ch3 is
             --  creating the object (via allocator) and initializing it.
 
             if Is_Return_Object (Def_Id)
-              and then Is_Immutably_Limited_Type (Typ)
+              and then Is_Limited_View (Typ)
             then
                null;
 
@@ -5474,7 +5505,9 @@ package body Exp_Ch3 is
                   --  itypes may have been generated already, and the full
                   --  chain must be preserved for final freezing. Finally,
                   --  preserve Comes_From_Source setting, so that debugging
-                  --  and cross-referencing information is properly kept.
+                  --  and cross-referencing information is properly kept, and
+                  --  preserve source location, to prevent spurious errors when
+                  --  entities are declared (they must have their own Sloc).
 
                   declare
                      New_Id    : constant Entity_Id := Defining_Identifier (N);
@@ -5489,6 +5522,7 @@ package body Exp_Ch3 is
                      Set_Chars   (Defining_Identifier (N), Chars   (Def_Id));
                      Set_Homonym (Defining_Identifier (N), Homonym (Def_Id));
                      Set_Ekind   (Defining_Identifier (N), Ekind   (Def_Id));
+                     Set_Sloc    (Defining_Identifier (N), Sloc    (Def_Id));
 
                      Set_Comes_From_Source (Def_Id, False);
                      Exchange_Entities (Defining_Identifier (N), Def_Id);
@@ -5528,7 +5562,7 @@ package body Exp_Ch3 is
                   Apply_Constraint_Check (Expr, Typ);
 
                   --  If the expression has been marked as requiring a range
-                  --  generate it now and reset the flag.
+                  --  check, generate it now and reset the flag.
 
                   if Do_Range_Check (Expr) then
                      Set_Do_Range_Check (Expr, False);
@@ -5552,7 +5586,7 @@ package body Exp_Ch3 is
             --  renaming declaration.
 
             if Needs_Finalization (Typ)
-              and then not Is_Immutably_Limited_Type (Typ)
+              and then not Is_Limited_View (Typ)
               and then not Rewrite_As_Renaming
             then
                Insert_Action_After (Init_After,
@@ -5713,7 +5747,7 @@ package body Exp_Ch3 is
             --  We do not analyze this renaming declaration, because all its
             --  components have already been analyzed, and if we were to go
             --  ahead and analyze it, we would in effect be trying to generate
-            --  another declaration of X, which won't do!
+            --  another declaration of X, which won't do.
 
             Set_Renamed_Object (Defining_Identifier (N), Expr_Q);
             Set_Analyzed (N);
@@ -5820,23 +5854,18 @@ package body Exp_Ch3 is
    -- Expand_N_Variant_Part --
    ---------------------------
 
-   --  If the last variant does not contain the Others choice, replace it with
-   --  an N_Others_Choice node since Gigi always wants an Others. Note that we
-   --  do not bother to call Analyze on the modified variant part, since its
-   --  only effect would be to compute the Others_Discrete_Choices node
-   --  laboriously, and of course we already know the list of choices that
-   --  corresponds to the others choice (it's the list we are replacing!)
+   --  Note: this procedure no longer has any effect. It used to be that we
+   --  would replace the choices in the last variant by a when others, and
+   --  also expanded static predicates in variant choices here, but both of
+   --  those activities were being done too early, since we can't check the
+   --  choices until the statically predicated subtypes are frozen, which can
+   --  happen as late as the free point of the record, and we can't change the
+   --  last choice to an others before checking the choices, which is now done
+   --  at the freeze point of the record.
 
    procedure Expand_N_Variant_Part (N : Node_Id) is
-      Last_Var    : constant Node_Id := Last_Non_Pragma (Variants (N));
-      Others_Node : Node_Id;
    begin
-      if Nkind (First (Discrete_Choices (Last_Var))) /= N_Others_Choice then
-         Others_Node := Make_Others_Choice (Sloc (Last_Var));
-         Set_Others_Discrete_Choices
-           (Others_Node, Discrete_Choices (Last_Var));
-         Set_Discrete_Choices (Last_Var, New_List (Others_Node));
-      end if;
+      null;
    end Expand_N_Variant_Part;
 
    ---------------------------------
@@ -6130,12 +6159,6 @@ package body Exp_Ch3 is
 
       elsif CodePeer_Mode then
          return;
-
-      --  Do not create TSS routine Finalize_Address when compiling in SPARK
-      --  mode because it is not necessary and results in useless expansion.
-
-      elsif SPARK_Mode then
-         return;
       end if;
 
       --  Create the body of TSS primitive Finalize_Address. This automatically
@@ -6273,7 +6296,7 @@ package body Exp_Ch3 is
 
       --  Note: if exceptions are not supported, then we suppress the raise
       --  and return -1 unconditionally (this is an erroneous program in any
-      --  case and there is no obligation to raise Constraint_Error here!) We
+      --  case and there is no obligation to raise Constraint_Error here). We
       --  also do this if pragma Restrictions (No_Exceptions) is active.
 
       --  Is this right??? What about No_Exception_Propagation???
@@ -6882,13 +6905,9 @@ package body Exp_Ch3 is
             --  be done before the bodies of all predefined primitives are
             --  created. If Def_Id is limited, Stream_Input and Stream_Read
             --  may produce build-in-place allocations and for those the
-            --  expander needs Finalize_Address. Do not create the body of
-            --  Finalize_Address in SPARK mode since it is not needed.
+            --  expander needs Finalize_Address.
 
-            if not SPARK_Mode then
-               Make_Finalize_Address_Body (Def_Id);
-            end if;
-
+            Make_Finalize_Address_Body (Def_Id);
             Predef_List := Predefined_Primitive_Bodies (Def_Id, Renamed_Eq);
             Append_Freeze_Actions (Def_Id, Predef_List);
          end if;
@@ -7257,12 +7276,19 @@ package body Exp_Ch3 is
 
             --  When compiling in Ada 2012 mode, ensure that the accessibility
             --  level of the subpool access type is not deeper than that of the
-            --  pool_with_subpools. This check is not performed on .NET/JVM
-            --  since those targets do not support pools.
+            --  pool_with_subpools.
 
             elsif Ada_Version >= Ada_2012
               and then Present (Associated_Storage_Pool (Def_Id))
+
+              --  Omit this check on .NET/JVM where pools are not supported
+
               and then VM_Target = No_VM
+
+              --  Omit this check for the case of a configurable run-time that
+              --  does not provide package System.Storage_Pools.Subpools.
+
+              and then RTE_Available (RE_Root_Storage_Pool_With_Subpools)
             then
                declare
                   Loc   : constant Source_Ptr := Sloc (Def_Id);
@@ -8576,14 +8602,59 @@ package body Exp_Ch3 is
    --  end case;
 
    function Make_Eq_Case
-     (E     : Entity_Id;
-      CL    : Node_Id;
-      Discr : Entity_Id := Empty) return List_Id
+     (E      : Entity_Id;
+      CL     : Node_Id;
+      Discrs : Elist_Id := New_Elmt_List) return List_Id
    is
       Loc      : constant Source_Ptr := Sloc (E);
       Result   : constant List_Id    := New_List;
       Variant  : Node_Id;
       Alt_List : List_Id;
+
+      function Corresponding_Formal (C : Node_Id) return Entity_Id;
+      --  Given the discriminant that controls a given variant of an unchecked
+      --  union, find the formal of the equality function that carries the
+      --  inferred value of the discriminant.
+
+      function External_Name (E : Entity_Id) return Name_Id;
+      --  The value of a given discriminant is conveyed in the corresponding
+      --  formal parameter of the equality routine. The name of this formal
+      --  parameter carries a one-character suffix which is removed here.
+
+      --------------------------
+      -- Corresponding_Formal --
+      --------------------------
+
+      function Corresponding_Formal (C : Node_Id) return Entity_Id is
+         Discr : constant Entity_Id := Entity (Name (Variant_Part (C)));
+         Elm   : Elmt_Id;
+
+      begin
+         Elm := First_Elmt (Discrs);
+         while Present (Elm) loop
+            if Chars (Discr) = External_Name (Node (Elm)) then
+               return Node (Elm);
+            end if;
+            Next_Elmt (Elm);
+         end loop;
+
+         --  A formal of the proper name must be found
+
+         raise Program_Error;
+      end Corresponding_Formal;
+
+      -------------------
+      -- External_Name --
+      -------------------
+
+      function External_Name (E : Entity_Id) return Name_Id is
+      begin
+         Get_Name_String (Chars (E));
+         Name_Len := Name_Len - 1;
+         return Name_Find;
+      end External_Name;
+
+   --  Start of processing for Make_Eq_Case
 
    begin
       Append_To (Result, Make_Eq_If (E, Component_Items (CL)));
@@ -8604,18 +8675,21 @@ package body Exp_Ch3 is
          Append_To (Alt_List,
            Make_Case_Statement_Alternative (Loc,
              Discrete_Choices => New_Copy_List (Discrete_Choices (Variant)),
-             Statements => Make_Eq_Case (E, Component_List (Variant))));
+             Statements =>
+               Make_Eq_Case (E, Component_List (Variant), Discrs)));
 
          Next_Non_Pragma (Variant);
       end loop;
 
-      --  If we have an Unchecked_Union, use one of the parameters that
-      --  captures the discriminants.
+      --  If we have an Unchecked_Union, use one of the parameters of the
+      --  enclosing equality routine that captures the discriminant, to use
+      --  as the expression in the generated case statement.
 
       if Is_Unchecked_Union (E) then
          Append_To (Result,
            Make_Case_Statement (Loc,
-             Expression => New_Reference_To (Discr, Loc),
+             Expression =>
+               New_Reference_To (Corresponding_Formal (CL), Loc),
              Alternatives => Alt_List));
 
       else
@@ -9559,7 +9633,8 @@ package body Exp_Ch3 is
 
       --  If the parent is an interface type then it has defined all the
       --  predefined primitives abstract and we need to check if the type
-      --  has some user defined "=" function to avoid generating it.
+      --  has some user defined "=" function which matches the profile of
+      --  the Ada predefined equality operator to avoid generating it.
 
       elsif Is_Interface (Etype (Tag_Typ)) then
          Eq_Needed := True;
@@ -9569,6 +9644,16 @@ package body Exp_Ch3 is
          while Present (Prim) loop
             if Chars (Node (Prim)) = Name_Op_Eq
               and then not Is_Internal (Node (Prim))
+              and then Present (First_Entity (Node (Prim)))
+
+              --  The predefined equality primitive must have exactly two
+              --  formals whose type is this tagged type
+
+              and then Present (Last_Entity (Node (Prim)))
+              and then Next_Entity (First_Entity (Node (Prim)))
+                         = Last_Entity (Node (Prim))
+              and then Etype (First_Entity (Node (Prim))) = Tag_Typ
+              and then Etype (Last_Entity (Node (Prim))) = Tag_Typ
             then
                Eq_Needed := False;
                Eq_Name := No_Name;
@@ -9711,7 +9796,7 @@ package body Exp_Ch3 is
             Append_To (Res, Decl);
          end if;
 
-         --  Body for inequality (if required!)
+         --  Body for inequality (if required)
 
          Decl := Make_Neq_Body (Tag_Typ);
 

@@ -1,5 +1,5 @@
 /* Structure for saving state for a nested function.
-   Copyright (C) 1989-2013 Free Software Foundation, Inc.
+   Copyright (C) 1989-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -165,10 +165,10 @@ struct gimple_df;
 struct temp_slot;
 typedef struct temp_slot *temp_slot_p;
 struct call_site_record_d;
-struct dw_fde_struct;
+struct dw_fde_node;
 
-struct ipa_opt_pass_d;
-typedef struct ipa_opt_pass_d *ipa_opt_pass;
+class ipa_opt_pass_d;
+typedef ipa_opt_pass_d *ipa_opt_pass;
 
 
 struct GTY(()) varasm_status {
@@ -446,6 +446,15 @@ struct GTY(()) rtl_data {
      sched2) and is useful only if the port defines LEAF_REGISTERS.  */
   bool uses_only_leaf_regs;
 
+  /* Nonzero if the function being compiled has undergone hot/cold partitioning
+     (under flag_reorder_blocks_and_partition) and has at least one cold
+     block.  */
+  bool has_bb_partition;
+
+  /* Nonzero if the function being compiled has completed the bb reordering
+     pass.  */
+  bool bb_reorder_complete;
+
   /* Like regs_ever_live, but 1 if a reg is set or clobbered from an
      asm.  Unlike regs_ever_live, elements of this array corresponding
      to eliminable regs (like the frame pointer) are set if an asm
@@ -543,6 +552,9 @@ struct GTY(()) function {
   /* Vector of function local variables, functions, types and constants.  */
   vec<tree, va_gc> *local_decls;
 
+  /* In a Cilk function, the VAR_DECL for the frame descriptor. */
+  tree cilk_frame_decl;
+
   /* For md files.  */
 
   /* tm.h can use this to store whatever it likes.  */
@@ -557,7 +569,7 @@ struct GTY(()) function {
   /* Dwarf2 Frame Description Entry, containing the Call Frame Instructions
      used for unwinding.  Only set when either dwarf2 unwinding or dwarf2
      debugging is enabled.  */
-  struct dw_fde_struct *fde;
+  struct dw_fde_node *fde;
 
   /* Last statement uid.  */
   int last_stmt_uid;
@@ -598,6 +610,12 @@ struct GTY(()) function {
      either as a subroutine or builtin.  */
   unsigned int calls_alloca : 1;
 
+  /* This will indicate whether a function is a cilk function */
+  unsigned int is_cilk_function : 1;
+
+  /* Nonzero if this is a Cilk function that spawns. */
+  unsigned int calls_cilk_spawn : 1;
+  
   /* Nonzero if function being compiled receives nonlocal gotos
      from nested functions.  */
   unsigned int has_nonlocal_label : 1;
@@ -641,6 +659,17 @@ struct GTY(()) function {
      adjusts one of its arguments and forwards to another
      function.  */
   unsigned int is_thunk : 1;
+
+  /* Nonzero if the current function contains any loops with
+     loop->force_vect set.  */
+  unsigned int has_force_vect_loops : 1;
+
+  /* Nonzero if the current function contains any loops with
+     nonzero value in loop->simduid.  */
+  unsigned int has_simduid_loops : 1;
+
+  /* Set when the tail call has been identified.  */
+  unsigned int tail_call_marked : 1;
 };
 
 /* Add the decl D to the local_decls list of FUN.  */
@@ -795,5 +824,26 @@ extern unsigned int emit_initial_value_sets (void);
 /* In predict.c */
 extern bool optimize_function_for_size_p (struct function *);
 extern bool optimize_function_for_speed_p (struct function *);
+
+/* In function.c */
+extern void expand_function_end (void);
+extern void expand_function_start (tree);
+extern void stack_protect_epilogue (void);
+extern void init_dummy_function_start (void);
+extern void expand_dummy_function_end (void);
+extern void allocate_struct_function (tree, bool);
+extern void push_struct_function (tree fndecl);
+extern void init_function_start (tree);
+extern bool use_register_for_decl (const_tree);
+extern void generate_setjmp_warnings (void);
+extern void init_temp_slots (void);
+extern void free_temp_slots (void);
+extern void pop_temp_slots (void);
+extern void push_temp_slots (void);
+extern void preserve_temp_slots (rtx);
+extern int aggregate_value_p (const_tree, const_tree);
+extern void push_function_context (void);
+extern void pop_function_context (void);
+extern gimple_seq gimplify_parameters (void);
 
 #endif  /* GCC_FUNCTION_H */

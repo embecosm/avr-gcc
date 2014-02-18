@@ -1,4 +1,4 @@
-# Copyright (C) 2003-2013 Free Software Foundation, Inc.
+# Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -64,6 +64,12 @@ proc dg-flags-pch { subdir test otherflags options suffix } {
     if ![runtest_file_p $runtests $test] {
 	return
     }
+
+    if { [istarget "powerpc-ibm-aix*"] } {
+	set torture_execute_xfail "powerpc-ibm-aix*"
+	return
+    }
+
     set nshort "$subdir/[file tail $test]"
     set bname "[file rootname [file tail $nshort]]"
 

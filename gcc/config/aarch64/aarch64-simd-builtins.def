@@ -1,5 +1,5 @@
 /* Machine description for AArch64 architecture.
-   Copyright (C) 2012-2013 Free Software Foundation, Inc.
+   Copyright (C) 2012-2014 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of GCC.
@@ -40,15 +40,16 @@
    10 - CODE_FOR_<name><mode>.  */
 
   BUILTIN_VD_RE (CREATE, create, 0)
-  BUILTIN_VQ_S (GETLANE, get_lane_signed, 0)
-  BUILTIN_VDQ (GETLANE, get_lane_unsigned, 0)
-  BUILTIN_VDQF (GETLANE, get_lane, 0)
-  VAR1 (GETLANE, get_lane, 0, di)
   BUILTIN_VDC (COMBINE, combine, 0)
   BUILTIN_VB (BINOP, pmul, 0)
   BUILTIN_VDQF (UNOP, sqrt, 2)
   BUILTIN_VD_BHSI (BINOP, addp, 0)
   VAR1 (UNOP, addp, 0, di)
+  BUILTIN_VDQ_BHSI (UNOP, clz, 2)
+
+  BUILTIN_VALL (GETLANE, get_lane, 0)
+  VAR1 (GETLANE, get_lane, 0, di)
+  BUILTIN_VALL (GETLANE, be_checked_get_lane, 0)
 
   BUILTIN_VD_RE (REINTERP, reinterpretdi, 0)
   BUILTIN_VDC (REINTERP, reinterpretv8qi, 0)
@@ -63,7 +64,6 @@
   BUILTIN_VQ (REINTERP, reinterpretv2df, 0)
 
   BUILTIN_VDQ_I (BINOP, dup_lane, 0)
-  BUILTIN_SDQ_I (BINOP, dup_lane, 0)
   /* Implemented by aarch64_<sur>q<r>shl<mode>.  */
   BUILTIN_VSDQ_I (BINOP, sqshl, 0)
   BUILTIN_VSDQ_I (BINOP, uqshl, 0)
@@ -190,7 +190,8 @@
   BUILTIN_VSDQ_I_DI (BINOP, srshl, 0)
   BUILTIN_VSDQ_I_DI (BINOP, urshl, 0)
 
-  BUILTIN_VSDQ_I_DI (SHIFTIMM, ashr, 3)
+  BUILTIN_VDQ_I (SHIFTIMM, ashr, 3)
+  VAR1 (SHIFTIMM, ashr_simd, 0, di)
   BUILTIN_VSDQ_I_DI (SHIFTIMM, lshr, 3)
   /* Implemented by aarch64_<sur>shr_n<mode>.  */
   BUILTIN_VSDQ_I_DI (SHIFTIMM, srshr_n, 0)
@@ -346,10 +347,48 @@
   BUILTIN_VDQF (UNOP, frecpe, 0)
   BUILTIN_VDQF (BINOP, frecps, 0)
 
-  BUILTIN_VDQF (UNOP, abs, 2)
+  BUILTIN_VALLDI (UNOP, abs, 2)
 
   VAR1 (UNOP, vec_unpacks_hi_, 10, v4sf)
   VAR1 (BINOP, float_truncate_hi_, 0, v4sf)
 
   VAR1 (UNOP, float_extend_lo_, 0, v2df)
   VAR1 (UNOP, float_truncate_lo_, 0, v2sf)
+
+  /* Implemented by aarch64_ld1<VALL:mode>.  */
+  BUILTIN_VALL (LOAD1, ld1, 0)
+
+  /* Implemented by aarch64_st1<VALL:mode>.  */
+  BUILTIN_VALL (STORE1, st1, 0)
+
+  /* Implemented by fma<mode>4.  */
+  BUILTIN_VDQF (TERNOP, fma, 4)
+
+  /* Implemented by aarch64_simd_bsl<mode>.  */
+  BUILTIN_VDQQH (BSL_P, simd_bsl, 0)
+  BUILTIN_VSDQ_I_DI (BSL_U, simd_bsl, 0)
+  BUILTIN_VALLDIF (BSL_S, simd_bsl, 0)
+
+  /* Implemented by aarch64_crypto_aes<op><mode>.  */
+  VAR1 (BINOPU, crypto_aese, 0, v16qi)
+  VAR1 (BINOPU, crypto_aesd, 0, v16qi)
+  VAR1 (UNOPU, crypto_aesmc, 0, v16qi)
+  VAR1 (UNOPU, crypto_aesimc, 0, v16qi)
+
+  /* Implemented by aarch64_crypto_sha1<op><mode>.  */
+  VAR1 (UNOPU, crypto_sha1h, 0, si)
+  VAR1 (BINOPU, crypto_sha1su1, 0, v4si)
+  VAR1 (TERNOPU, crypto_sha1c, 0, v4si)
+  VAR1 (TERNOPU, crypto_sha1m, 0, v4si)
+  VAR1 (TERNOPU, crypto_sha1p, 0, v4si)
+  VAR1 (TERNOPU, crypto_sha1su0, 0, v4si)
+
+  /* Implemented by aarch64_crypto_sha256<op><mode>.  */
+  VAR1 (TERNOPU, crypto_sha256h, 0, v4si)
+  VAR1 (TERNOPU, crypto_sha256h2, 0, v4si)
+  VAR1 (BINOPU, crypto_sha256su0, 0, v4si)
+  VAR1 (TERNOPU, crypto_sha256su1, 0, v4si)
+
+  /* Implemented by aarch64_crypto_pmull<mode>.  */
+  VAR1 (BINOPP, crypto_pmull, 0, di)
+  VAR1 (BINOPP, crypto_pmull, 0, v2di)

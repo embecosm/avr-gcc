@@ -1,5 +1,5 @@
 /* Reload pseudo regs into hard regs for insns that require hard regs.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -373,6 +373,7 @@ static void init_eliminable_invariants (rtx, bool);
 static void init_elim_table (void);
 static void free_reg_equiv (void);
 static void update_eliminables (HARD_REG_SET *);
+static bool update_eliminables_and_spill (void);
 static void elimination_costs_in_insn (rtx);
 static void spill_hard_reg (unsigned int, int);
 static int finish_spills (int);
@@ -435,7 +436,7 @@ init_reload (void)
 		   gen_rtx_PLUS (Pmode,
 				 gen_rtx_REG (Pmode,
 					      LAST_VIRTUAL_REGISTER + 1),
-				 GEN_INT (4)));
+				 gen_int_mode (4, Pmode)));
   spill_indirect_levels = 0;
 
   while (memory_address_p (QImode, tem))
@@ -610,14 +611,14 @@ has_nonexceptional_receiver (void)
     return true;
 
   /* First determine which blocks can reach exit via normal paths.  */
-  tos = worklist = XNEWVEC (basic_block, n_basic_blocks + 1);
+  tos = worklist = XNEWVEC (basic_block, n_basic_blocks_for_fn (cfun) + 1);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     bb->flags &= ~BB_REACHABLE;
 
   /* Place the exit block on our worklist.  */
-  EXIT_BLOCK_PTR->flags |= BB_REACHABLE;
-  *tos++ = EXIT_BLOCK_PTR;
+  EXIT_BLOCK_PTR_FOR_FN (cfun)->flags |= BB_REACHABLE;
+  *tos++ = EXIT_BLOCK_PTR_FOR_FN (cfun);
 
   /* Iterate: find everything reachable from what we've already seen.  */
   while (tos != worklist)
@@ -640,7 +641,7 @@ has_nonexceptional_receiver (void)
 
   /* Now see if there's a reachable block with an exceptional incoming
      edge.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     if (bb->flags & BB_REACHABLE && bb_has_abnormal_pred (bb))
       return true;
 
@@ -913,9 +914,6 @@ reload (rtx first, int global)
       if (caller_save_needed)
 	setup_save_areas ();
 
-      /* If we allocated another stack slot, redo elimination bookkeeping.  */
-      if (something_was_spilled || starting_frame_size != get_frame_size ())
-	continue;
       if (starting_frame_size && crtl->stack_alignment_needed)
 	{
 	  /* If we have a stack frame, we must align it now.  The
@@ -927,8 +925,12 @@ reload (rtx first, int global)
 	     STARTING_FRAME_OFFSET not be already aligned to
 	     STACK_BOUNDARY.  */
 	  assign_stack_local (BLKmode, 0, crtl->stack_alignment_needed);
-	  if (starting_frame_size != get_frame_size ())
-	    continue;
+	}
+      /* If we allocated another stack slot, redo elimination bookkeeping.  */
+      if (something_was_spilled || starting_frame_size != get_frame_size ())
+	{
+	  update_eliminables_and_spill ();
+	  continue;
 	}
 
       if (caller_save_needed)
@@ -962,30 +964,11 @@ reload (rtx first, int global)
       else if (!verify_initial_elim_offsets ())
 	something_changed = 1;
 
-      {
-	HARD_REG_SET to_spill;
-	CLEAR_HARD_REG_SET (to_spill);
-	update_eliminables (&to_spill);
-	AND_COMPL_HARD_REG_SET (used_spill_regs, to_spill);
-
-	for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-	  if (TEST_HARD_REG_BIT (to_spill, i))
-	    {
-	      spill_hard_reg (i, 1);
-	      did_spill = 1;
-
-	      /* Regardless of the state of spills, if we previously had
-		 a register that we thought we could eliminate, but now can
-		 not eliminate, we must run another pass.
-
-		 Consider pseudos which have an entry in reg_equiv_* which
-		 reference an eliminable register.  We must make another pass
-		 to update reg_equiv_* so that we do not substitute in the
-		 old value from when we thought the elimination could be
-		 performed.  */
-	      something_changed = 1;
-	    }
-      }
+      if (update_eliminables_and_spill ())
+	{
+	  did_spill = 1;
+	  something_changed = 1;
+	}
 
       select_reload_regs ();
       if (failure)
@@ -1065,7 +1048,7 @@ reload (rtx first, int global)
      pseudo.  */
 
   if (! frame_pointer_needed)
-    FOR_EACH_BB (bb)
+    FOR_EACH_BB_FN (bb, cfun)
       bitmap_clear_bit (df_get_live_in (bb), HARD_FRAME_POINTER_REGNUM);
 
   /* Come here (with failure set nonzero) if we can't get enough spill
@@ -1300,7 +1283,7 @@ reload (rtx first, int global)
   if (cfun->can_throw_non_call_exceptions)
     {
       sbitmap blocks;
-      blocks = sbitmap_alloc (last_basic_block);
+      blocks = sbitmap_alloc (last_basic_block_for_fn (cfun));
       bitmap_ones (blocks);
       find_many_sub_basic_blocks (blocks);
       sbitmap_free (blocks);
@@ -1609,7 +1592,7 @@ calculate_elim_costs_all_insns (void)
   set_initial_elim_offsets ();
   set_initial_label_offsets ();
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       rtx insn;
       elim_bb = bb;
@@ -2140,7 +2123,8 @@ delete_dead_insn (rtx insn)
      block local equivalences.  Instead of trying to figure out the exact
      circumstances where we can delete the potentially dead insns, just
      let DCE do the job.  */
-  if (prev && GET_CODE (PATTERN (prev)) == SET
+  if (prev && BLOCK_FOR_INSN (prev) == BLOCK_FOR_INSN (insn)
+      && GET_CODE (PATTERN (prev)) == SET
       && (prev_dest = SET_DEST (PATTERN (prev)), REG_P (prev_dest))
       && reg_mentioned_p (prev_dest, PATTERN (insn))
       && find_regno_note (insn, REG_DEAD, REGNO (prev_dest))
@@ -2325,7 +2309,7 @@ mark_home_live_1 (int regno, enum machine_mode mode)
     return;
   lim = end_hard_regno (mode, i);
   while (i < lim)
-    df_set_regs_ever_live(i++, true);
+    df_set_regs_ever_live (i++, true);
 }
 
 /* Mark the slots in regs_ever_live for the hard regs
@@ -2776,6 +2760,7 @@ eliminate_regs_1 (rtx x, enum machine_mode mem_mode, rtx insn,
       /* ... fall through ...  */
 
     case INSN_LIST:
+    case INT_LIST:
       /* Now do eliminations in the rest of the chain.  If this was
 	 an EXPR_LIST, this might result in allocating more memory than is
 	 strictly needed, but it simplifies the code.  */
@@ -4028,6 +4013,38 @@ update_eliminables (HARD_REG_SET *pset)
      the hard frame pointer.  */
   if (frame_pointer_needed && ! previous_frame_pointer_needed)
     SET_HARD_REG_BIT (*pset, HARD_FRAME_POINTER_REGNUM);
+}
+
+/* Call update_eliminables an spill any registers we can't eliminate anymore.
+   Return true iff a register was spilled.  */
+
+static bool
+update_eliminables_and_spill (void)
+{
+  int i;
+  bool did_spill = false;
+  HARD_REG_SET to_spill;
+  CLEAR_HARD_REG_SET (to_spill);
+  update_eliminables (&to_spill);
+  AND_COMPL_HARD_REG_SET (used_spill_regs, to_spill);
+
+  for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
+    if (TEST_HARD_REG_BIT (to_spill, i))
+      {
+	spill_hard_reg (i, 1);
+	did_spill = true;
+
+	/* Regardless of the state of spills, if we previously had
+	   a register that we thought we could eliminate, but now can
+	   not eliminate, we must run another pass.
+
+	   Consider pseudos which have an entry in reg_equiv_* which
+	   reference an eliminable register.  We must make another pass
+	   to update reg_equiv_* so that we do not substitute in the
+	   old value from when we thought the elimination could be
+	   performed.  */
+      }
+  return did_spill;
 }
 
 /* Return true if X is used as the target register of an elimination.  */
@@ -5559,6 +5576,14 @@ reloads_unique_chain_p (int r1, int r2)
 	    || reg_mentioned_p (rld[r2].in, rld[r1].in)))
     return false;
 
+  /* The following loop assumes that r1 is the reload that feeds r2.  */
+  if (r1 > r2)
+    {
+      int tmp = r2;
+      r2 = r1;
+      r1 = tmp;
+    }
+
   for (i = 0; i < n_reloads; i ++)
     /* Look for input reloads that aren't our two */
     if (i != r1 && i != r2 && rld[i].in)
@@ -6362,6 +6387,37 @@ replaced_subreg (rtx x)
 }
 #endif
 
+/* Compute the offset to pass to subreg_regno_offset, for a pseudo of
+   mode OUTERMODE that is available in a hard reg of mode INNERMODE.
+   SUBREG is non-NULL if the pseudo is a subreg whose reg is a pseudo,
+   otherwise it is NULL.  */
+
+static int
+compute_reload_subreg_offset (enum machine_mode outermode,
+			      rtx subreg,
+			      enum machine_mode innermode)
+{
+  int outer_offset;
+  enum machine_mode middlemode;
+
+  if (!subreg)
+    return subreg_lowpart_offset (outermode, innermode);
+
+  outer_offset = SUBREG_BYTE (subreg);
+  middlemode = GET_MODE (SUBREG_REG (subreg));
+
+  /* If SUBREG is paradoxical then return the normal lowpart offset
+     for OUTERMODE and INNERMODE.  Our caller has already checked
+     that OUTERMODE fits in INNERMODE.  */
+  if (outer_offset == 0
+      && GET_MODE_SIZE (outermode) > GET_MODE_SIZE (middlemode))
+    return subreg_lowpart_offset (outermode, innermode);
+
+  /* SUBREG is normal, but may not be lowpart; return OUTER_OFFSET
+     plus the normal lowpart offset for MIDDLEMODE and INNERMODE.  */
+  return outer_offset + subreg_lowpart_offset (middlemode, innermode);
+}
+
 /* Assign hard reg targets for the pseudo-registers we must reload
    into hard regs for this insn.
    Also output the instructions to copy them in and out of the hard regs.
@@ -6499,6 +6555,7 @@ choose_reload_regs (struct insn_chain *chain)
 	      int byte = 0;
 	      int regno = -1;
 	      enum machine_mode mode = VOIDmode;
+	      rtx subreg = NULL_RTX;
 
 	      if (rld[r].in == 0)
 		;
@@ -6519,7 +6576,10 @@ choose_reload_regs (struct insn_chain *chain)
 		  if (regno < FIRST_PSEUDO_REGISTER)
 		    regno = subreg_regno (rld[r].in_reg);
 		  else
-		    byte = SUBREG_BYTE (rld[r].in_reg);
+		    {
+		      subreg = rld[r].in_reg;
+		      byte = SUBREG_BYTE (subreg);
+		    }
 		  mode = GET_MODE (rld[r].in_reg);
 		}
 #ifdef AUTO_INC_DEC
@@ -6557,6 +6617,9 @@ choose_reload_regs (struct insn_chain *chain)
 		  rtx last_reg = reg_last_reload_reg[regno];
 
 		  i = REGNO (last_reg);
+		  byte = compute_reload_subreg_offset (mode,
+						       subreg,
+						       GET_MODE (last_reg));
 		  i += subreg_regno_offset (i, GET_MODE (last_reg), byte, mode);
 		  last_class = REGNO_REG_CLASS (i);
 
@@ -7299,9 +7362,18 @@ emit_input_reload_insns (struct insn_chain *chain, struct reload *rl,
 	  /* Store into the reload register instead of the pseudo.  */
 	  SET_DEST (PATTERN (temp)) = reloadreg;
 
-	  /* Verify that resulting insn is valid.  */
+	  /* Verify that resulting insn is valid. 
+
+	     Note that we have replaced the destination of TEMP with
+	     RELOADREG.  If TEMP references RELOADREG within an
+	     autoincrement addressing mode, then the resulting insn
+	     is ill-formed and we must reject this optimization.  */
 	  extract_insn (temp);
-	  if (constrain_operands (1))
+	  if (constrain_operands (1)
+#ifdef AUTO_INC_DEC
+	      && ! find_reg_note (temp, REG_INC, reloadreg)
+#endif
+	      )
 	    {
 	      /* If the previous insn is an output reload, the source is
 		 a reload register, and its spill_reg_store entry will
@@ -9157,7 +9229,9 @@ inc_for_reload (rtx reloadreg, rtx in, rtx value, int inc_amount)
       emit_insn (gen_add2_insn (reloadreg, inc));
       emit_insn (gen_move_insn (incloc, reloadreg));
       if (CONST_INT_P (inc))
-	emit_insn (gen_add2_insn (reloadreg, GEN_INT (-INTVAL (inc))));
+	emit_insn (gen_add2_insn (reloadreg,
+				  gen_int_mode (-INTVAL (inc),
+						GET_MODE (reloadreg))));
       else
 	emit_insn (gen_sub2_insn (reloadreg, inc));
     }

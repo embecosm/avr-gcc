@@ -207,6 +207,10 @@ package body Ada.Containers.Formal_Hashed_Maps is
       Cu     : Cursor;
 
    begin
+      if 0 < Capacity and then Capacity < Source.Capacity then
+         raise Capacity_Error;
+      end if;
+
       Target.Length := Source.Length;
       Target.Free := Source.Free;
 
@@ -488,7 +492,6 @@ package body Ada.Containers.Formal_Hashed_Maps is
       Insert (Container, Key, New_Item, Position, Inserted);
 
       if not Inserted then
-
          declare
             N : Node_Type renames Container.Nodes (Position.Node);
          begin

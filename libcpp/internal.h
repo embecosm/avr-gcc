@@ -1,5 +1,5 @@
 /* Part of CPP library.
-   Copyright (C) 1997-2013 Free Software Foundation, Inc.
+   Copyright (C) 1997-2014 Free Software Foundation, Inc.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the
@@ -58,6 +58,8 @@ struct cset_converter
    ((prevc) == 'e' || (prevc) == 'E' \
     || (((prevc) == 'p' || (prevc) == 'P') \
         && CPP_OPTION (pfile, extended_numbers))))
+
+#define DIGIT_SEP(c) ((c) == '\'' && CPP_OPTION (pfile, digit_separators))
 
 #define CPP_OPTION(PFILE, OPTION) ((PFILE)->opts.OPTION)
 #define CPP_BUFFER(PFILE) ((PFILE)->buffer)
@@ -711,9 +713,10 @@ extern size_t _cpp_replacement_text_len (const cpp_macro *);
 
 struct normalize_state 
 {
-  /* The previous character.  */
+  /* The previous starter character.  */
   cppchar_t previous;
-  /* The combining class of the previous character.  */
+  /* The combining class of the previous character (whether or not a
+     starter).  */
   unsigned char prev_class;
   /* The lowest normalization level so far.  */
   enum cpp_normalize_level level;
@@ -721,10 +724,10 @@ struct normalize_state
 #define INITIAL_NORMALIZE_STATE { 0, 0, normalized_KC }
 #define NORMALIZE_STATE_RESULT(st) ((st)->level)
 
-/* We saw a character that matches ISIDNUM(), update a
+/* We saw a character C that matches ISIDNUM(), update a
    normalize_state appropriately.  */
-#define NORMALIZE_STATE_UPDATE_IDNUM(st) \
-  ((st)->previous = 0, (st)->prev_class = 0)
+#define NORMALIZE_STATE_UPDATE_IDNUM(st, c)	\
+  ((st)->previous = (c), (st)->prev_class = 0)
 
 extern cppchar_t _cpp_valid_ucn (cpp_reader *, const unsigned char **,
 				 const unsigned char *, int,

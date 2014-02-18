@@ -1,5 +1,5 @@
 /* Convert a program in SSA form into Normal form.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
    Contributed by Andrew Macleod <amacleod@redhat.com>
 
 This file is part of GCC.
@@ -23,19 +23,90 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
-#include "ggc.h"
+#include "stor-layout.h"
 #include "basic-block.h"
 #include "gimple-pretty-print.h"
 #include "bitmap.h"
-#include "tree-flow.h"
+#include "sbitmap.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "tree-eh.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
 #include "dumpfile.h"
 #include "diagnostic-core.h"
-#include "ssaexpand.h"
+#include "tree-ssa-live.h"
+#include "tree-ssa-ter.h"
+#include "tree-ssa-coalesce.h"
+#include "tree-outof-ssa.h"
 
 /* FIXME: A lot of code here deals with expanding to RTL.  All that code
    should be in cfgexpand.c.  */
 #include "expr.h"
 
+/* Return TRUE if expression STMT is suitable for replacement.  */
+
+bool
+ssa_is_replaceable_p (gimple stmt)
+{
+  use_operand_p use_p;
+  tree def;
+  gimple use_stmt;
+
+  /* Only consider modify stmts.  */
+  if (!is_gimple_assign (stmt))
+    return false;
+
+  /* If the statement may throw an exception, it cannot be replaced.  */
+  if (stmt_could_throw_p (stmt))
+    return false;
+
+  /* Punt if there is more than 1 def.  */
+  def = SINGLE_SSA_TREE_OPERAND (stmt, SSA_OP_DEF);
+  if (!def)
+    return false;
+
+  /* Only consider definitions which have a single use.  */
+  if (!single_imm_use (def, &use_p, &use_stmt))
+    return false;
+
+  /* Used in this block, but at the TOP of the block, not the end.  */
+  if (gimple_code (use_stmt) == GIMPLE_PHI)
+    return false;
+
+  /* There must be no VDEFs.  */
+  if (gimple_vdef (stmt))
+    return false;
+
+  /* Float expressions must go through memory if float-store is on.  */
+  if (flag_float_store
+      && FLOAT_TYPE_P (gimple_expr_type (stmt)))
+    return false;
+
+  /* An assignment with a register variable on the RHS is not
+     replaceable.  */
+  if (gimple_assign_rhs_code (stmt) == VAR_DECL
+      && DECL_HARD_REGISTER (gimple_assign_rhs1 (stmt)))
+    return false;
+
+  /* No function calls can be replaced.  */
+  if (is_gimple_call (stmt))
+    return false;
+
+  /* Leave any stmt with volatile operands alone as well.  */
+  if (gimple_has_volatile_ops (stmt))
+    return false;
+
+  return true;
+}
 
 
 /* Used to hold all the components required to do SSA PHI elimination.
@@ -484,6 +555,23 @@ eliminate_name (elim_graph g, int T)
   elim_graph_add_node (g, T);
 }
 
+/* Return true if this phi argument T should have a copy queued when using
+   var_map MAP.  PHI nodes should contain only ssa_names and invariants.  A
+   test for ssa_name is definitely simpler, but don't let invalid contents
+   slip through in the meantime.  */
+
+static inline bool
+queue_phi_copy_p (var_map map, tree t)
+{
+  if (TREE_CODE (t) == SSA_NAME)
+    { 
+      if (var_to_partition (map, t) == NO_PARTITION)
+        return true;
+      return false;
+    }
+  gcc_checking_assert (is_gimple_min_invariant (t));
+  return true;
+}
 
 /* Build elimination graph G for basic block BB on incoming PHI edge
    G->e.  */
@@ -513,9 +601,7 @@ eliminate_build (elim_graph g)
       /* If this argument is a constant, or a SSA_NAME which is being
 	 left in SSA form, just queue a copy to be emitted on this
 	 edge.  */
-      if (!phi_ssa_name_p (Ti)
-	  || (TREE_CODE (Ti) == SSA_NAME
-	      && var_to_partition (g->map, Ti) == NO_PARTITION))
+      if (queue_phi_copy_p (g->map, Ti))
         {
 	  /* Save constant copies until all other copies have been emitted
 	     on this edge.  */
@@ -749,7 +835,7 @@ eliminate_useless_phis (void)
   gimple_stmt_iterator gsi;
   tree result;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       for (gsi = gsi_start_phis (bb); !gsi_end_p (gsi); )
         {
@@ -807,7 +893,7 @@ rewrite_trees (var_map map ATTRIBUTE_UNUSED)
   /* Search for PHIs where the destination has no partition, but one
      or more arguments has a partition.  This should not happen and can
      create incorrect code.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator gsi;
       for (gsi = gsi_start_phis (bb); !gsi_end_p (gsi); gsi_next (&gsi))
@@ -849,7 +935,8 @@ expand_phi_nodes (struct ssaexpand *sa)
   elim_graph g = new_elim_graph (sa->map->num_partitions);
   g->map = sa->map;
 
-  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR->next_bb, EXIT_BLOCK_PTR, next_bb)
+  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb,
+		  EXIT_BLOCK_PTR_FOR_FN (cfun), next_bb)
     if (!gimple_seq_empty_p (phi_nodes (bb)))
       {
 	edge e;
@@ -1014,7 +1101,7 @@ insert_backedge_copies (void)
 
   mark_dfs_back_edges ();
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       /* Mark block as possibly needing calculation of UIDs.  */
       bb->aux = &bb->aux;

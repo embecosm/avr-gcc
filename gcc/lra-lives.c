@@ -1,5 +1,5 @@
 /* Build live ranges for pseudos.
-   Copyright (C) 2010-2013 Free Software Foundation, Inc.
+   Copyright (C) 2010-2014 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -457,11 +457,17 @@ lra_setup_reload_pseudo_preferenced_hard_reg (int regno,
 static inline void
 check_pseudos_live_through_calls (int regno)
 {
+  int hr;
+
   if (! sparseset_bit_p (pseudos_live_through_calls, regno))
     return;
   sparseset_clear_bit (pseudos_live_through_calls, regno);
   IOR_HARD_REG_SET (lra_reg_info[regno].conflict_hard_regs,
 		    call_used_reg_set);
+
+  for (hr = 0; hr < FIRST_PSEUDO_REGISTER; hr++)
+    if (HARD_REGNO_CALL_PART_CLOBBERED (hr, PSEUDO_REGNO_MODE (regno)))
+      SET_HARD_REG_BIT (lra_reg_info[regno].conflict_hard_regs, hr);
 #ifdef ENABLE_CHECKING
   lra_reg_info[regno].call_p = true;
 #endif
@@ -990,13 +996,14 @@ lra_create_live_ranges (bool all_p)
   curr_point = 0;
   point_freq_vec.create (get_max_uid () * 2);
   lra_point_freq = point_freq_vec.address ();
-  int *post_order_rev_cfg = XNEWVEC (int, last_basic_block);
+  int *post_order_rev_cfg = XNEWVEC (int, last_basic_block_for_fn (cfun));
   int n_blocks_inverted = inverted_post_order_compute (post_order_rev_cfg);
-  lra_assert (n_blocks_inverted == n_basic_blocks);
+  lra_assert (n_blocks_inverted == n_basic_blocks_for_fn (cfun));
   for (i = n_blocks_inverted - 1; i >= 0; --i)
     {
-      bb = BASIC_BLOCK (post_order_rev_cfg[i]);
-      if (bb == EXIT_BLOCK_PTR || bb == ENTRY_BLOCK_PTR)
+      bb = BASIC_BLOCK_FOR_FN (cfun, post_order_rev_cfg[i]);
+      if (bb == EXIT_BLOCK_PTR_FOR_FN (cfun) || bb
+	  == ENTRY_BLOCK_PTR_FOR_FN (cfun))
 	continue;
       process_bb_lives (bb, curr_point);
     }

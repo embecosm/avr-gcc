@@ -1,5 +1,5 @@
 /* DDG - Data Dependence Graph implementation.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
    Contributed by Ayal Zaks and Mustafa Hagog <zaks,mustafa@il.ibm.com>
 
 This file is part of GCC.
@@ -417,7 +417,7 @@ walk_mems_1 (rtx *x, rtx *pat)
 {
   if (MEM_P (*x))
     {
-      /* Visit all MEMs in *PAT and check indepedence.  */
+      /* Visit all MEMs in *PAT and check independence.  */
       if (for_each_rtx (pat, (rtx_function) walk_mems_2, *x))
         /* Indicate that dependence was determined and stop traversal.  */
         return 1;

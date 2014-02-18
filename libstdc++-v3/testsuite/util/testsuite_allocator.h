@@ -1,7 +1,7 @@
 // -*- C++ -*-
 // Testing allocator for the C++ library testsuite.
 //
-// Copyright (C) 2002-2013 Free Software Foundation, Inc.
+// Copyright (C) 2002-2014 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -28,6 +28,7 @@
 
 #include <tr1/unordered_map>
 #include <bits/move.h>
+#include <ext/pointer.h>
 #include <testsuite_hooks.h>
 
 namespace __gnu_test
@@ -410,11 +411,11 @@ namespace __gnu_test
 
       propagating_allocator&
       operator=(const propagating_allocator& a) noexcept
-	{
-	  static_assert(Propagate, "assigning propagating_allocator<T, true>");
-	  propagating_allocator(a).swap_base(*this);
-	  return *this;
-	}
+      {
+	static_assert(Propagate, "assigning propagating_allocator<T, true>");
+	propagating_allocator(a).swap_base(*this);
+	return *this;
+      }
 
       template<bool P2>
   	propagating_allocator&
@@ -453,7 +454,7 @@ namespace __gnu_test
     {
       typedef Tp value_type;
 
-      SimpleAllocator() { }
+      SimpleAllocator() noexcept { }
 
       template <class T>
         SimpleAllocator(const SimpleAllocator<T>& other) { }
@@ -487,6 +488,136 @@ namespace __gnu_test
         struct rebind
         { typedef ExplicitConsAlloc<Up> other; };
     };
+
+#if __cplusplus >= 201103L
+  template<typename Tp>
+    class CustomPointerAlloc : public std::allocator<Tp>
+    {
+      template<typename Up, typename Sp = __gnu_cxx::_Std_pointer_impl<Up>>
+	using Ptr =  __gnu_cxx::_Pointer_adapter<Sp>;
+
+    public:
+      CustomPointerAlloc() = default;
+
+      template<typename Up>
+        CustomPointerAlloc(const CustomPointerAlloc<Up>&) { }
+
+      template<typename Up>
+        struct rebind
+        { typedef CustomPointerAlloc<Up> other; };
+
+      typedef Ptr<Tp> 		pointer;
+      typedef Ptr<const Tp>	const_pointer;
+      typedef Ptr<void>		void_pointer;
+      typedef Ptr<const void>	const_void_pointer;
+
+      pointer allocate(std::size_t n, pointer = {})
+      { return pointer(std::allocator<Tp>::allocate(n)); }
+
+      void deallocate(pointer p, std::size_t n)
+      { std::allocator<Tp>::deallocate(std::addressof(*p), n); }
+    };
+
+  // Utility for use as CRTP base class of custom pointer types
+  template<typename Derived, typename T>
+    struct PointerBase
+    {
+      typedef T element_type;
+
+      // typedefs for iterator_traits
+      typedef T value_type;
+      typedef std::ptrdiff_t difference_type;
+      typedef std::random_access_iterator_tag iterator_category;
+      typedef Derived pointer;
+      typedef T& reference;
+
+      T* value;
+
+      explicit PointerBase(T* p = nullptr) : value(p) { }
+
+      template<typename D, typename U,
+	       typename = decltype(static_cast<T*>(std::declval<U*>()))>
+	PointerBase(const PointerBase<D, U>& p) : value(p.value) { }
+
+      T& operator*() const { return *value; }
+      T* operator->() const { return value; }
+
+      Derived& operator++() { ++value; return derived(); }
+      Derived operator++(int) { Derived tmp(derived()); ++value; return tmp; }
+      Derived& operator--() { --value; return derived(); }
+      Derived operator--(int) { Derived tmp(derived()); --value; return tmp; }
+
+      Derived& operator+=(difference_type n) { value += n; return derived(); }
+      Derived& operator-=(difference_type n) { value -= n; return derived(); }
+
+      explicit operator bool() const { return value != nullptr; }
+
+      Derived
+      operator+(difference_type n) const
+      {
+	Derived p(derived());
+	return p += n;
+      }
+
+      Derived
+      operator-(difference_type n) const
+      {
+	Derived p(derived());
+	return p -= n;
+      }
+
+    private:
+      Derived& derived() { return static_cast<Derived&>(*this); }
+    };
+
+    template<typename D, typename T>
+    std::ptrdiff_t operator-(PointerBase<D, T> l, PointerBase<D, T> r)
+    { return l.value - r.value; }
+
+    template<typename D, typename T>
+    bool operator==(PointerBase<D, T> l, PointerBase<D, T> r)
+    { return l.value == r.value; }
+
+    template<typename D, typename T>
+    bool operator!=(PointerBase<D, T> l, PointerBase<D, T> r)
+    { return l.value != r.value; }
+
+    // implementation for void specializations
+    template<typename T>
+    struct PointerBase_void
+    {
+      typedef T element_type;
+
+      // typedefs for iterator_traits
+      typedef T value_type;
+      typedef std::ptrdiff_t difference_type;
+      typedef std::random_access_iterator_tag iterator_category;
+
+      T* value;
+
+      explicit PointerBase_void(T* p = nullptr) : value(p) { }
+
+      template<typename D, typename U,
+	       typename = decltype(static_cast<T*>(std::declval<U*>()))>
+	PointerBase_void(const PointerBase<D, U>& p) : value(p.value) { }
+
+      explicit operator bool() const { return value != nullptr; }
+    };
+
+    template<typename Derived>
+    struct PointerBase<Derived, void> : PointerBase_void<void>
+    {
+      using PointerBase_void::PointerBase_void;
+      typedef Derived pointer;
+    };
+
+    template<typename Derived>
+    struct PointerBase<Derived, const void> : PointerBase_void<const void>
+    {
+      using PointerBase_void::PointerBase_void;
+      typedef Derived pointer;
+    };
+#endif
 
 } // namespace __gnu_test
 

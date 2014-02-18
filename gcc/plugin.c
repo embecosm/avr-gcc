@@ -1,5 +1,5 @@
 /* Support for GCC plugin mechanism.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -241,16 +241,13 @@ parse_plugin_arg_opt (const char *arg)
         }
       else if (*ptr == '=')
         {
-          if (key_parsed)
-            {
-              error ("malformed option -fplugin-arg-%s (multiple '=' signs)",
-		     arg);
-              return;
-            }
-          key_len = len;
-          len = 0;
-          value_start = ptr + 1;
-          key_parsed = true;
+	  if (!key_parsed) 
+	    {
+	      key_len = len;
+	      len = 0;
+	      value_start = ptr + 1;
+	      key_parsed = true;
+	    }
           continue;
         }
       else
@@ -455,6 +452,7 @@ register_callback (const char *plugin_name,
       case PLUGIN_EARLY_GIMPLE_PASSES_START:
       case PLUGIN_EARLY_GIMPLE_PASSES_END:
       case PLUGIN_NEW_PASS:
+      case PLUGIN_INCLUDE_FILE:
         {
           struct callback_info *new_callback;
           if (!callback)
@@ -532,6 +530,7 @@ invoke_plugin_callbacks_full (int event, void *gcc_data)
       case PLUGIN_EARLY_GIMPLE_PASSES_START:
       case PLUGIN_EARLY_GIMPLE_PASSES_END:
       case PLUGIN_NEW_PASS:
+      case PLUGIN_INCLUDE_FILE:
         {
           /* Iterate over every callback registered with this event and
              call it.  */
@@ -806,7 +805,7 @@ dump_active_plugins (FILE *file)
 	for (ci = plugin_callbacks[event]; ci; ci = ci->next)
 	  fprintf (file, " %s", ci->plugin_name);
 
-	putc('\n', file);
+	putc ('\n', file);
       }
 }
 

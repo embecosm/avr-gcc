@@ -1,3 +1,14 @@
+2014-02-01  Dmitry Gorbachev  <d.g.gorbachev@gmail.com>
+
+	PR other/56653
+	* gcc_release: Avoid printing empty line to generated MD5SUMS files.
+	Bump copyright year.
+
+2013-12-02  Gerald Pfeifer  <gerald@pfeifer.com>
+
+	* update_web_docs_svn: Work around makeinfo generated file names
+	and references with "_002d" instead of "-".
+
 2013-04-12  Jakub Jelinek  <jakub@redhat.com>
 
 	* crontab: Disable snapshots from gcc-4_6-branch.

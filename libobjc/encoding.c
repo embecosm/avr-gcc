@@ -1,5 +1,5 @@
 /* Encoding of types for Objective C.
-   Copyright (C) 1993-2013 Free Software Foundation, Inc.
+   Copyright (C) 1993-2014 Free Software Foundation, Inc.
    Contributed by Kresten Krab Thorup
    Bitfield support by Ovidiu Predescu
 
@@ -1061,7 +1061,7 @@ objc_get_type_qualifiers (const char *type)
   These functions are used by objc_sizeof_type and objc_alignof_type
   functions to compute the size and alignment of structures. The
   previous method of computing the size and alignment of a structure
-  was not working on some architectures, particulary on AIX, and in
+  was not working on some architectures, particularly on AIX, and in
   the presence of bitfields inside the structure.  */
 void
 objc_layout_structure (const char *type,

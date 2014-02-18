@@ -1,5 +1,5 @@
 /* GCC core type declarations.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -43,9 +43,12 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 
 #ifndef USED_FOR_TARGET
 
-struct bitmap_head_def;
-typedef struct bitmap_head_def *bitmap;
-typedef const struct bitmap_head_def *const_bitmap;
+typedef HOST_WIDEST_INT gcov_type;
+typedef unsigned HOST_WIDEST_INT gcov_type_unsigned;
+
+struct bitmap_head;
+typedef struct bitmap_head *bitmap;
+typedef const struct bitmap_head *const_bitmap;
 struct simple_bitmap_def;
 typedef struct simple_bitmap_def *sbitmap;
 typedef const struct simple_bitmap_def *const_sbitmap;
@@ -58,12 +61,10 @@ typedef const struct rtvec_def *const_rtvec;
 union tree_node;
 typedef union tree_node *tree;
 typedef const union tree_node *const_tree;
-union gimple_statement_d;
-typedef union gimple_statement_d *gimple;
-typedef const union gimple_statement_d *const_gimple;
+typedef struct gimple_statement_base *gimple;
+typedef const struct gimple_statement_base *const_gimple;
 typedef gimple gimple_seq;
-struct gimple_stmt_iterator_d;
-typedef struct gimple_stmt_iterator_d gimple_stmt_iterator;
+struct gimple_stmt_iterator;
 union section;
 typedef union section section;
 struct gcc_options;
@@ -73,9 +74,7 @@ struct cl_option;
 struct cl_decoded_option;
 struct cl_option_handlers;
 struct diagnostic_context;
-typedef struct diagnostic_context diagnostic_context;
-struct pretty_print_info;
-typedef struct pretty_print_info pretty_printer;
+struct pretty_printer;
 
 /* Address space number for named address space support.  */
 typedef unsigned char addr_space_t;
@@ -169,6 +168,12 @@ typedef const struct basic_block_def *const_basic_block;
    in target.h.  */
 typedef int reg_class_t;
 
+class rtl_opt_pass;
+
+namespace gcc {
+  class context;
+}
+
 #else
 
 struct _dont_use_rtx_here_;
@@ -183,6 +188,15 @@ union _dont_use_tree_here_;
 
 #endif
 
+/* Classes of functions that compiler needs to check
+   whether they are present at the runtime or not.  */
+enum function_class {
+  function_c94,
+  function_c99_misc,
+  function_c99_math_complex,
+  function_sincos
+};
+
 /* Memory model types for the __atomic* builtins. 
    This must match the order in libstdc++-v3/include/bits/atomic_base.h.  */
 enum memmodel
@@ -196,7 +210,7 @@ enum memmodel
   MEMMODEL_LAST = 6
 };
 
-/* Suppose that higher bits are target dependant. */
+/* Suppose that higher bits are target dependent. */
 #define MEMMODEL_MASK ((1<<16)-1)
 
 /* Support for user-provided GGC and PCH markers.  The first parameter

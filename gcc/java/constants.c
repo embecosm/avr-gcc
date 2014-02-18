@@ -1,5 +1,5 @@
 /* Handle the constant pool of the Java(TM) Virtual Machine.
-   Copyright (C) 1997-2013 Free Software Foundation, Inc.
+   Copyright (C) 1997-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -26,6 +26,8 @@ The Free Software Foundation is independent of Sun Microsystems, Inc.  */
 #include "tm.h"
 #include "jcf.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "stor-layout.h"
 #include "java-tree.h"
 #include "diagnostic-core.h"
 #include "toplev.h"

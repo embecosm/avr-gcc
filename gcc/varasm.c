@@ -1,5 +1,5 @@
 /* Output variables, constants and external declarations, for GNU compiler.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -31,6 +31,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "stringpool.h"
+#include "gcc-symtab.h"
+#include "varasm.h"
 #include "flags.h"
 #include "function.h"
 #include "expr.h"
@@ -46,10 +50,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "target.h"
 #include "common/common-target.h"
 #include "targhooks.h"
-#include "tree-mudflap.h"
 #include "cgraph.h"
 #include "pointer-set.h"
 #include "asan.h"
+#include "basic-block.h"
 
 #ifdef XCOFF_DEBUGGING_INFO
 #include "xcoffout.h"		/* Needed for external data
@@ -113,8 +117,8 @@ static int compare_constant (const tree, const tree);
 static tree copy_constant (tree);
 static void output_constant_def_contents (rtx);
 static void output_addressed_constants (tree);
-static unsigned HOST_WIDE_INT array_size_for_constructor (tree);
-static unsigned min_align (unsigned, unsigned);
+static unsigned HOST_WIDE_INT output_constant (tree, unsigned HOST_WIDE_INT,
+					       unsigned int);
 static void globalize_decl (tree);
 static bool decl_readonly_section_1 (enum section_category);
 #ifdef BSS_SECTION_ASM_OP
@@ -307,19 +311,22 @@ get_section (const char *name, unsigned int flags, tree decl)
 	      return sect;
 	    }
 	  /* Sanity check user variables for flag changes.  */
-	  if (decl == 0)
-	    decl = sect->named.decl;
-	  gcc_assert (decl);
-	  if (sect->named.decl == NULL)
+	  if (sect->named.decl != NULL
+	      && DECL_P (sect->named.decl)
+	      && decl != sect->named.decl)
+	    {
+	      if (decl != NULL && DECL_P (decl))
+		error ("%+D causes a section type conflict with %D",
+		       decl, sect->named.decl);
+	      else
+		error ("section type conflict with %D", sect->named.decl);
+	      inform (DECL_SOURCE_LOCATION (sect->named.decl),
+		      "%qD was declared here", sect->named.decl);
+	    }
+	  else if (decl != NULL && DECL_P (decl))
 	    error ("%+D causes a section type conflict", decl);
 	  else
-	    {
-	      error ("%+D causes a section type conflict with %D",
-		     decl, sect->named.decl);
-	      if (decl != sect->named.decl)
-		inform (DECL_SOURCE_LOCATION (sect->named.decl),
-			"%qD was declared here", sect->named.decl);
-	    }
+	    error ("section type conflict");
 	  /* Make sure we don't error about one section multiple times.  */
 	  sect->common.flags |= SECTION_OVERRIDE;
 	}
@@ -402,12 +409,13 @@ get_named_section (tree decl, const char *name, int reloc)
 {
   unsigned int flags;
 
-  gcc_assert (!decl || DECL_P (decl));
   if (name == NULL)
-    name = TREE_STRING_POINTER (DECL_SECTION_NAME (decl));
+    {
+      gcc_assert (decl && DECL_P (decl) && DECL_SECTION_NAME (decl));
+      name = TREE_STRING_POINTER (DECL_SECTION_NAME (decl));
+    }
 
   flags = targetm.section_type_flags (decl, name, reloc);
-
   return get_section (name, flags, decl);
 }
 
@@ -544,7 +552,14 @@ default_function_section (tree decl, enum node_frequency freq,
      unlikely executed (this happens especially with function splitting
      where we can split away unnecessary parts of static constructors.  */
   if (startup && freq != NODE_FREQUENCY_UNLIKELY_EXECUTED)
-    return get_named_text_section (decl, ".text.startup", NULL);
+  {
+    /* If we do have a profile or(and) LTO phase is executed, we do not need
+       these ELF section.  */
+    if (!in_lto_p || !flag_profile_values)
+      return get_named_text_section (decl, ".text.startup", NULL);
+    else
+      return NULL;
+  }
 
   /* Similarly for exit.  */
   if (exit && freq != NODE_FREQUENCY_UNLIKELY_EXECUTED)
@@ -556,7 +571,10 @@ default_function_section (tree decl, enum node_frequency freq,
       case NODE_FREQUENCY_UNLIKELY_EXECUTED:
 	return get_named_text_section (decl, ".text.unlikely", NULL);
       case NODE_FREQUENCY_HOT:
-	return get_named_text_section (decl, ".text.hot", NULL);
+        /* If we do have a profile or(and) LTO phase is executed, we do not need
+           these ELF section.  */
+        if (!in_lto_p || !flag_profile_values)
+          return get_named_text_section (decl, ".text.hot", NULL);
       default:
 	return NULL;
     }
@@ -956,19 +974,86 @@ align_variable (tree decl, bool dont_output_data)
      In particular, a.out format supports a maximum alignment of 4.  */
   if (align > MAX_OFILE_ALIGNMENT)
     {
-      warning (0, "alignment of %q+D is greater than maximum object "
-               "file alignment.  Using %d", decl,
-	       MAX_OFILE_ALIGNMENT/BITS_PER_UNIT);
+      error ("alignment of %q+D is greater than maximum object "
+	     "file alignment %d", decl,
+	     MAX_OFILE_ALIGNMENT/BITS_PER_UNIT);
       align = MAX_OFILE_ALIGNMENT;
     }
 
-  /* On some machines, it is good to increase alignment sometimes.  */
   if (! DECL_USER_ALIGN (decl))
     {
+#ifdef DATA_ABI_ALIGNMENT
+      unsigned int data_abi_align
+	= DATA_ABI_ALIGNMENT (TREE_TYPE (decl), align);
+      /* For backwards compatibility, don't assume the ABI alignment for
+	 TLS variables.  */
+      if (! DECL_THREAD_LOCAL_P (decl) || data_abi_align <= BITS_PER_WORD)
+	align = data_abi_align;
+#endif
+
+      /* On some machines, it is good to increase alignment sometimes.
+	 But as DECL_ALIGN is used both for actually emitting the variable
+	 and for code accessing the variable as guaranteed alignment, we
+	 can only increase the alignment if it is a performance optimization
+	 if the references to it must bind to the current definition.  */
+      if (decl_binds_to_current_def_p (decl))
+	{
+#ifdef DATA_ALIGNMENT
+	  unsigned int data_align = DATA_ALIGNMENT (TREE_TYPE (decl), align);
+	  /* Don't increase alignment too much for TLS variables - TLS space
+	     is too precious.  */
+	  if (! DECL_THREAD_LOCAL_P (decl) || data_align <= BITS_PER_WORD)
+	    align = data_align;
+#endif
+#ifdef CONSTANT_ALIGNMENT
+	  if (DECL_INITIAL (decl) != 0
+	      && DECL_INITIAL (decl) != error_mark_node)
+	    {
+	      unsigned int const_align
+		= CONSTANT_ALIGNMENT (DECL_INITIAL (decl), align);
+	      /* Don't increase alignment too much for TLS variables - TLS
+		 space is too precious.  */
+	      if (! DECL_THREAD_LOCAL_P (decl) || const_align <= BITS_PER_WORD)
+		align = const_align;
+	    }
+#endif
+	}
+    }
+
+  /* Reset the alignment in case we have made it tighter, so we can benefit
+     from it in get_pointer_alignment.  */
+  DECL_ALIGN (decl) = align;
+}
+
+/* Return DECL_ALIGN (decl), possibly increased for optimization purposes
+   beyond what align_variable returned.  */
+
+static unsigned int
+get_variable_align (tree decl)
+{
+  unsigned int align = DECL_ALIGN (decl);
+
+  /* For user aligned vars or static vars align_variable already did
+     everything.  */
+  if (DECL_USER_ALIGN (decl) || !TREE_PUBLIC (decl))
+    return align;
+
+#ifdef DATA_ABI_ALIGNMENT
+  if (DECL_THREAD_LOCAL_P (decl))
+    align = DATA_ABI_ALIGNMENT (TREE_TYPE (decl), align);
+#endif
+
+  /* For decls that bind to the current definition, align_variable
+     did also everything, except for not assuming ABI required alignment
+     of TLS variables.  For other vars, increase the alignment here
+     as an optimization.  */
+  if (!decl_binds_to_current_def_p (decl))
+    {
+      /* On some machines, it is good to increase alignment sometimes.  */
 #ifdef DATA_ALIGNMENT
       unsigned int data_align = DATA_ALIGNMENT (TREE_TYPE (decl), align);
       /* Don't increase alignment too much for TLS variables - TLS space
-	 is too precious.  */
+         is too precious.  */
       if (! DECL_THREAD_LOCAL_P (decl) || data_align <= BITS_PER_WORD)
 	align = data_align;
 #endif
@@ -985,9 +1070,7 @@ align_variable (tree decl, bool dont_output_data)
 #endif
     }
 
-  /* Reset the alignment in case we have made it tighter, so we can benefit
-     from it in get_pointer_alignment.  */
-  DECL_ALIGN (decl) = align;
+  return align;
 }
 
 /* Return the section into which the given VAR_DECL or CONST_DECL
@@ -1033,13 +1116,15 @@ get_variable_section (tree decl, bool prefer_noswitch_p)
       && bss_initializer_p (decl))
     {
       if (!TREE_PUBLIC (decl)
-	  && !(flag_asan && asan_protect_global (decl)))
+	  && !((flag_sanitize & SANITIZE_ADDRESS)
+	       && asan_protect_global (decl)))
 	return lcomm_section;
       if (bss_noswitch_section)
 	return bss_noswitch_section;
     }
 
-  return targetm.asm_out.select_section (decl, reloc, DECL_ALIGN (decl));
+  return targetm.asm_out.select_section (decl, reloc,
+					 get_variable_align (decl));
 }
 
 /* Return the block into which object_block DECL should be placed.  */
@@ -1065,7 +1150,7 @@ get_block_for_decl (tree decl)
      constant size.  */
   if (DECL_SIZE_UNIT (decl) == NULL)
     return NULL;
-  if (!host_integerp (DECL_SIZE_UNIT (decl), 1))
+  if (!tree_fits_uhwi_p (DECL_SIZE_UNIT (decl)))
     return NULL;
 
   /* Find out which section should contain DECL.  We cannot put it into
@@ -1174,10 +1259,6 @@ make_decl_rtl (tree decl)
 	  && GET_CODE (XEXP (x, 0)) == SYMBOL_REF
 	  && SYMBOL_REF_HAS_BLOCK_INFO_P (XEXP (x, 0)))
 	change_symbol_block (XEXP (x, 0), get_block_for_decl (decl));
-
-      /* Make this function static known to the mudflap runtime.  */
-      if (flag_mudflap && TREE_CODE (decl) == VAR_DECL)
-	mudflap_enqueue_decl (decl);
 
       return;
     }
@@ -1315,10 +1396,6 @@ make_decl_rtl (tree decl)
      If the name is changed, the macro ASM_OUTPUT_LABELREF
      will have to know how to strip this information.  */
   targetm.encode_section_info (decl, DECL_RTL (decl), true);
-
-  /* Make this function static known to the mudflap runtime.  */
-  if (flag_mudflap && TREE_CODE (decl) == VAR_DECL)
-    mudflap_enqueue_decl (decl);
 }
 
 /* Like make_decl_rtl, but inhibit creation of new alias sets when
@@ -1328,7 +1405,7 @@ make_decl_rtl (tree decl)
 rtx
 make_decl_rtl_for_debug (tree decl)
 {
-  unsigned int save_aliasing_flag, save_mudflap_flag;
+  unsigned int save_aliasing_flag;
   rtx rtl;
 
   if (DECL_RTL_SET_P (decl))
@@ -1339,12 +1416,9 @@ make_decl_rtl_for_debug (tree decl)
      we do not want to create alias sets that will throw the alias
      numbers off in the comparison dumps.  So... clearing
      flag_strict_aliasing will keep new_alias_set() from creating a
-     new set.  It is undesirable to register decl with mudflap
-     in this case as well.  */
+     new set.  */
   save_aliasing_flag = flag_strict_aliasing;
   flag_strict_aliasing = 0;
-  save_mudflap_flag = flag_mudflap;
-  flag_mudflap = 0;
 
   rtl = DECL_RTL (decl);
   /* Reset DECL_RTL back, as various parts of the compiler expects
@@ -1352,8 +1426,6 @@ make_decl_rtl_for_debug (tree decl)
   SET_DECL_RTL (decl, NULL);
 
   flag_strict_aliasing = save_aliasing_flag;
-  flag_mudflap = save_mudflap_flag;
-
   return rtl;
 }
 
@@ -1577,7 +1649,7 @@ assemble_start_function (tree decl, const char *fnname)
 	 align the hot section and write out the hot section label.
 	 But if the current function is a thunk, we do not have a CFG.  */
       if (!cfun->is_thunk
-	  && BB_PARTITION (ENTRY_BLOCK_PTR->next_bb) == BB_COLD_PARTITION)
+	  && BB_PARTITION (ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb) == BB_COLD_PARTITION)
 	{
 	  switch_to_section (text_section);
 	  assemble_align (DECL_ALIGN (decl));
@@ -1776,7 +1848,8 @@ emit_bss (tree decl ATTRIBUTE_UNUSED,
 	  unsigned HOST_WIDE_INT rounded ATTRIBUTE_UNUSED)
 {
 #if defined ASM_OUTPUT_ALIGNED_BSS
-  ASM_OUTPUT_ALIGNED_BSS (asm_out_file, decl, name, size, DECL_ALIGN (decl));
+  ASM_OUTPUT_ALIGNED_BSS (asm_out_file, decl, name, size,
+			  get_variable_align (decl));
   return true;
 #endif
 }
@@ -1792,10 +1865,11 @@ emit_common (tree decl ATTRIBUTE_UNUSED,
 {
 #if defined ASM_OUTPUT_ALIGNED_DECL_COMMON
   ASM_OUTPUT_ALIGNED_DECL_COMMON (asm_out_file, decl, name,
-				  size, DECL_ALIGN (decl));
+				  size, get_variable_align (decl));
   return true;
 #elif defined ASM_OUTPUT_ALIGNED_COMMON
-  ASM_OUTPUT_ALIGNED_COMMON (asm_out_file, name, size, DECL_ALIGN (decl));
+  ASM_OUTPUT_ALIGNED_COMMON (asm_out_file, name, size,
+			     get_variable_align (decl));
   return true;
 #else
   ASM_OUTPUT_COMMON (asm_out_file, name, size, rounded);
@@ -1824,14 +1898,15 @@ emit_tls_common (tree decl ATTRIBUTE_UNUSED,
    NAME is the name of DECL's SYMBOL_REF.  */
 
 static void
-assemble_noswitch_variable (tree decl, const char *name, section *sect)
+assemble_noswitch_variable (tree decl, const char *name, section *sect,
+			    unsigned int align)
 {
   unsigned HOST_WIDE_INT size, rounded;
 
-  size = tree_low_cst (DECL_SIZE_UNIT (decl), 1);
+  size = tree_to_uhwi (DECL_SIZE_UNIT (decl));
   rounded = size;
 
-  if (flag_asan && asan_protect_global (decl))
+  if ((flag_sanitize & SANITIZE_ADDRESS) && asan_protect_global (decl))
     size += asan_red_zone_size (size);
 
   /* Don't allocate zero bytes of common,
@@ -1846,9 +1921,9 @@ assemble_noswitch_variable (tree decl, const char *name, section *sect)
 	     * (BIGGEST_ALIGNMENT / BITS_PER_UNIT));
 
   if (!sect->noswitch.callback (decl, name, size, rounded)
-      && (unsigned HOST_WIDE_INT) DECL_ALIGN_UNIT (decl) > rounded)
-    warning (0, "requested alignment for %q+D is greater than "
-	     "implemented alignment of %wu", decl, rounded);
+      && (unsigned HOST_WIDE_INT) (align / BITS_PER_UNIT) > rounded)
+    error ("requested alignment for %q+D is greater than "
+	   "implemented alignment of %wu", decl, rounded);
 }
 
 /* A subroutine of assemble_variable.  Output the label and contents of
@@ -1875,11 +1950,11 @@ assemble_variable_contents (tree decl, const char *name,
 	  && !initializer_zerop (DECL_INITIAL (decl)))
 	/* Output the actual data.  */
 	output_constant (DECL_INITIAL (decl),
-			 tree_low_cst (DECL_SIZE_UNIT (decl), 1),
-			 DECL_ALIGN (decl));
+			 tree_to_uhwi (DECL_SIZE_UNIT (decl)),
+			 get_variable_align (decl));
       else
 	/* Leave space for it.  */
-	assemble_zeros (tree_low_cst (DECL_SIZE_UNIT (decl), 1));
+	assemble_zeros (tree_to_uhwi (DECL_SIZE_UNIT (decl)));
     }
 }
 
@@ -1900,6 +1975,7 @@ assemble_variable (tree decl, int top_level ATTRIBUTE_UNUSED,
   const char *name;
   rtx decl_rtl, symbol;
   section *sect;
+  unsigned int align;
   bool asan_protected = false;
 
   /* This function is supposed to handle VARIABLES.  Ensure we have one.  */
@@ -1989,7 +2065,7 @@ assemble_variable (tree decl, int top_level ATTRIBUTE_UNUSED,
 
   align_variable (decl, dont_output_data);
 
-  if (flag_asan
+  if ((flag_sanitize & SANITIZE_ADDRESS)
       && asan_protect_global (decl))
     {
       asan_protected = true;
@@ -1998,6 +2074,8 @@ assemble_variable (tree decl, int top_level ATTRIBUTE_UNUSED,
     }
 
   set_mem_align (decl_rtl, DECL_ALIGN (decl));
+
+  align = get_variable_align (decl);
 
   if (TREE_PUBLIC (decl))
     maybe_assemble_visibility (decl);
@@ -2028,20 +2106,61 @@ assemble_variable (tree decl, int top_level ATTRIBUTE_UNUSED,
       place_block_symbol (symbol);
     }
   else if (SECTION_STYLE (sect) == SECTION_NOSWITCH)
-    assemble_noswitch_variable (decl, name, sect);
+    assemble_noswitch_variable (decl, name, sect, align);
   else
     {
-      switch_to_section (sect);
-      if (DECL_ALIGN (decl) > BITS_PER_UNIT)
-	ASM_OUTPUT_ALIGN (asm_out_file, floor_log2 (DECL_ALIGN_UNIT (decl)));
+      /* The following bit of code ensures that vtable_map 
+         variables are not only in the comdat section, but that
+         each variable has its own unique comdat name.  If this
+         code is removed, the variables end up in the same section
+         with a single comdat name.
+
+         FIXME:  resolve_unique_section needs to deal better with
+         decls with both DECL_SECTION_NAME and DECL_ONE_ONLY.  Once
+         that is fixed, this if-else statement can be replaced with
+         a single call to "switch_to_section (sect)".  */
+      if (sect->named.name
+	  && (strcmp (sect->named.name, ".vtable_map_vars") == 0))
+	{
+#if defined (OBJECT_FORMAT_ELF)
+          targetm.asm_out.named_section (sect->named.name,
+					 sect->named.common.flags
+				         | SECTION_LINKONCE,
+			    	         DECL_NAME (decl));
+          in_section = sect;
+#else
+          switch_to_section (sect);
+#endif
+        }
+      else
+	switch_to_section (sect);
+      if (align > BITS_PER_UNIT)
+	ASM_OUTPUT_ALIGN (asm_out_file, floor_log2 (align / BITS_PER_UNIT));
       assemble_variable_contents (decl, name, dont_output_data);
       if (asan_protected)
 	{
 	  unsigned HOST_WIDE_INT int size
-	    = tree_low_cst (DECL_SIZE_UNIT (decl), 1);
+	    = tree_to_uhwi (DECL_SIZE_UNIT (decl));
 	  assemble_zeros (asan_red_zone_size (size));
 	}
     }
+}
+
+
+/* Given a function declaration (FN_DECL), this function assembles the
+   function into the .preinit_array section.  */
+
+void
+assemble_vtv_preinit_initializer (tree fn_decl)
+{
+  section *sect;
+  unsigned flags = SECTION_WRITE;
+  rtx symbol = XEXP (DECL_RTL (fn_decl), 0);
+
+  flags |= SECTION_NOTYPE;
+  sect = get_section (".preinit_array", flags, fn_decl);
+  switch_to_section (sect);
+  assemble_addr_to_section (symbol, sect);
 }
 
 /* Return 1 if type TYPE contains any pointers.  */
@@ -2252,15 +2371,15 @@ mark_decl_referenced (tree decl)
 	 definition.  */
       struct cgraph_node *node = cgraph_get_create_node (decl);
       if (!DECL_EXTERNAL (decl)
-	  && !node->local.finalized)
+	  && !node->definition)
 	cgraph_mark_force_output_node (node);
     }
   else if (TREE_CODE (decl) == VAR_DECL)
     {
-      struct varpool_node *node = varpool_node_for_decl (decl);
+      varpool_node *node = varpool_node_for_decl (decl);
       /* C++ frontend use mark_decl_references to force COMDAT variables
          to be output that might appear dead otherwise.  */
-      node->symbol.force_output = true;
+      node->force_output = true;
     }
   /* else do nothing - we can get various sorts of CST nodes here,
      which do not need to be marked.  */
@@ -2604,7 +2723,7 @@ decode_addr_const (tree exp, struct addr_const *value)
   while (1)
     {
       if (TREE_CODE (target) == COMPONENT_REF
-	  && host_integerp (byte_position (TREE_OPERAND (target, 1)), 0))
+	  && tree_fits_shwi_p (byte_position (TREE_OPERAND (target, 1))))
 	{
 	  offset += int_byte_position (TREE_OPERAND (target, 1));
 	  target = TREE_OPERAND (target, 0);
@@ -2612,8 +2731,8 @@ decode_addr_const (tree exp, struct addr_const *value)
       else if (TREE_CODE (target) == ARRAY_REF
 	       || TREE_CODE (target) == ARRAY_RANGE_REF)
 	{
-	  offset += (tree_low_cst (TYPE_SIZE_UNIT (TREE_TYPE (target)), 1)
-		     * tree_low_cst (TREE_OPERAND (target, 1), 0));
+	  offset += (tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (target)))
+		     * tree_to_shwi (TREE_OPERAND (target, 1)));
 	  target = TREE_OPERAND (target, 0);
 	}
       else if (TREE_CODE (target) == MEM_REF
@@ -2967,7 +3086,7 @@ compare_constant (const tree t1, const tree t2)
     case MINUS_EXPR:
     case RANGE_EXPR:
       return (compare_constant (TREE_OPERAND (t1, 0), TREE_OPERAND (t2, 0))
-	      && compare_constant(TREE_OPERAND (t1, 1), TREE_OPERAND (t2, 1)));
+	      && compare_constant (TREE_OPERAND (t1, 1), TREE_OPERAND (t2, 1)));
 
     CASE_CONVERT:
     case VIEW_CONVERT_EXPR:
@@ -3086,10 +3205,6 @@ build_constant_desc (tree exp)
 
   desc = ggc_alloc_constant_descriptor_tree ();
   desc->value = copy_constant (exp);
-
-  /* Propagate marked-ness to copied constant.  */
-  if (flag_mudflap && mf_marked_p (exp))
-    mf_mark (desc->value);
 
   /* Create a string containing the label name, in LABEL.  */
   labelno = const_labelno++;
@@ -3259,7 +3374,8 @@ output_constant_def_contents (rtx symbol)
   /* We are no longer deferring this constant.  */
   TREE_ASM_WRITTEN (decl) = TREE_ASM_WRITTEN (exp) = 1;
 
-  if (flag_asan && TREE_CODE (exp) == STRING_CST
+  if ((flag_sanitize & SANITIZE_ADDRESS)
+      && TREE_CODE (exp) == STRING_CST
       && asan_protect_global (exp))
     {
       asan_protected = true;
@@ -3285,8 +3401,6 @@ output_constant_def_contents (rtx symbol)
 	  assemble_zeros (asan_red_zone_size (size));
 	}
     }
-  if (flag_mudflap)
-    mudflap_enqueue_constant (exp);
 }
 
 /* Look up EXP in the table of constant descriptors.  Return the rtl
@@ -3946,7 +4060,7 @@ compute_reloc_for_constant (tree exp)
 	  break;
 	}
 
-      if (TREE_PUBLIC (tem))
+      if (!targetm.binds_local_p (tem))
 	reloc |= 2;
       else
 	reloc |= 1;
@@ -4466,12 +4580,14 @@ static unsigned HOST_WIDE_INT
   output_constructor (tree, unsigned HOST_WIDE_INT, unsigned int,
 		      oc_outer_state *);
 
-/* Output assembler code for constant EXP to FILE, with no label.
+/* Output assembler code for constant EXP, with no label.
    This includes the pseudo-op such as ".int" or ".byte", and a newline.
    Assumes output_addressed_constants has been done on EXP already.
 
-   Generate exactly SIZE bytes of assembler data, padding at the end
-   with zeros if necessary.  SIZE must always be specified.
+   Generate at least SIZE bytes of assembler data, padding at the end
+   with zeros if necessary.  SIZE must always be specified.  The returned
+   value is the actual number of bytes of assembler data generated, which
+   may be bigger than SIZE if the object contains a variable length field.
 
    SIZE is important for structure constructors,
    since trailing members may have been omitted from the constructor.
@@ -4486,14 +4602,14 @@ static unsigned HOST_WIDE_INT
 
    ALIGN is the alignment of the data in bits.  */
 
-void
+static unsigned HOST_WIDE_INT
 output_constant (tree exp, unsigned HOST_WIDE_INT size, unsigned int align)
 {
   enum tree_code code;
   unsigned HOST_WIDE_INT thissize;
 
   if (size == 0 || flag_syntax_only)
-    return;
+    return size;
 
   /* See if we're trying to initialize a pointer in a non-default mode
      to the address of some declaration somewhere.  If the target says
@@ -4558,19 +4674,19 @@ output_constant (tree exp, unsigned HOST_WIDE_INT size, unsigned int align)
       && vec_safe_is_empty (CONSTRUCTOR_ELTS (exp)))
     {
       assemble_zeros (size);
-      return;
+      return size;
     }
 
   if (TREE_CODE (exp) == FDESC_EXPR)
     {
 #ifdef ASM_OUTPUT_FDESC
-      HOST_WIDE_INT part = tree_low_cst (TREE_OPERAND (exp, 1), 0);
+      HOST_WIDE_INT part = tree_to_shwi (TREE_OPERAND (exp, 1));
       tree decl = TREE_OPERAND (exp, 0);
       ASM_OUTPUT_FDESC (asm_out_file, decl, part);
 #else
       gcc_unreachable ();
 #endif
-      return;
+      return size;
     }
 
   /* Now output the underlying data.  If we've handling the padding, return.
@@ -4584,6 +4700,7 @@ output_constant (tree exp, unsigned HOST_WIDE_INT size, unsigned int align)
     case REFERENCE_TYPE:
     case OFFSET_TYPE:
     case FIXED_POINT_TYPE:
+    case NULLPTR_TYPE:
       if (! assemble_integer (expand_expr (exp, NULL_RTX, VOIDmode,
 					   EXPAND_INITIALIZER),
 			      MIN (size, thissize), align, 0))
@@ -4608,28 +4725,20 @@ output_constant (tree exp, unsigned HOST_WIDE_INT size, unsigned int align)
       switch (TREE_CODE (exp))
 	{
 	case CONSTRUCTOR:
-	    output_constructor (exp, size, align, NULL);
-	  return;
+	  return output_constructor (exp, size, align, NULL);
 	case STRING_CST:
-	  thissize = MIN ((unsigned HOST_WIDE_INT)TREE_STRING_LENGTH (exp),
-			  size);
+	  thissize
+	    = MIN ((unsigned HOST_WIDE_INT)TREE_STRING_LENGTH (exp), size);
 	  assemble_string (TREE_STRING_POINTER (exp), thissize);
 	  break;
-
 	case VECTOR_CST:
 	  {
-	    int elt_size;
-	    unsigned int i, nalign;
-	    enum machine_mode inner;
-
-	    inner = TYPE_MODE (TREE_TYPE (TREE_TYPE (exp)));
-	    nalign = MIN (align, GET_MODE_ALIGNMENT (inner));
-
-	    elt_size = GET_MODE_SIZE (inner);
-
+	    enum machine_mode inner = TYPE_MODE (TREE_TYPE (TREE_TYPE (exp)));
+	    unsigned int nalign = MIN (align, GET_MODE_ALIGNMENT (inner));
+	    int elt_size = GET_MODE_SIZE (inner);
 	    output_constant (VECTOR_CST_ELT (exp, 0), elt_size, align);
 	    thissize = elt_size;
-	    for (i = 1; i < VECTOR_CST_NELTS (exp); ++i)
+	    for (unsigned int i = 1; i < VECTOR_CST_NELTS (exp); i++)
 	      {
 		output_constant (VECTOR_CST_ELT (exp, i), elt_size, nalign);
 		thissize += elt_size;
@@ -4644,11 +4753,10 @@ output_constant (tree exp, unsigned HOST_WIDE_INT size, unsigned int align)
     case RECORD_TYPE:
     case UNION_TYPE:
       gcc_assert (TREE_CODE (exp) == CONSTRUCTOR);
-      output_constructor (exp, size, align, NULL);
-      return;
+      return output_constructor (exp, size, align, NULL);
 
     case ERROR_MARK:
-      return;
+      return 0;
 
     default:
       gcc_unreachable ();
@@ -4656,6 +4764,8 @@ output_constant (tree exp, unsigned HOST_WIDE_INT size, unsigned int align)
 
   if (size > thissize)
     assemble_zeros (size - thissize);
+
+  return size;
 }
 
 
@@ -4709,25 +4819,22 @@ typedef struct {
 
   /* Received arguments.  */
   tree exp;                     /* Constructor expression.  */
+  tree type;                    /* Type of constructor expression.  */
   unsigned HOST_WIDE_INT size;  /* # bytes to output - pad if necessary.  */
   unsigned int align;           /* Known initial alignment.  */
-
-  /* Constructor expression data.  */
-  tree type;       /* Expression type.  */
-  tree field;      /* Current field decl in a record.  */
-  tree min_index;  /* Lower bound if specified for an array.  */
+  tree min_index;               /* Lower bound if specified for an array.  */
 
   /* Output processing state.  */
   HOST_WIDE_INT total_bytes;  /* # bytes output so far / current position.  */
-  bool byte_buffer_in_use;    /* Whether byte ...  */
-  int byte;                   /* ... contains part of a bitfield byte yet to
-			         be output.  */
-
+  int byte;                   /* Part of a bitfield byte yet to be output.  */
   int last_relative_index;    /* Implicit or explicit index of the last
 				 array element output within a bitfield.  */
+  bool byte_buffer_in_use;    /* Whether BYTE is in use.  */
+
   /* Current element.  */
-  tree val;    /* Current element value.  */
-  tree index;  /* Current element index.  */
+  tree field;      /* Current field decl in a record.  */
+  tree val;        /* Current element value.  */
+  tree index;      /* Current element index.  */
 
 } oc_local_state;
 
@@ -4741,9 +4848,9 @@ output_constructor_array_range (oc_local_state *local)
     = int_size_in_bytes (TREE_TYPE (local->type));
 
   HOST_WIDE_INT lo_index
-    = tree_low_cst (TREE_OPERAND (local->index, 0), 0);
+    = tree_to_shwi (TREE_OPERAND (local->index, 0));
   HOST_WIDE_INT hi_index
-    = tree_low_cst (TREE_OPERAND (local->index, 1), 0);
+    = tree_to_shwi (TREE_OPERAND (local->index, 1));
   HOST_WIDE_INT index;
 
   unsigned int align2
@@ -4755,7 +4862,7 @@ output_constructor_array_range (oc_local_state *local)
       if (local->val == NULL_TREE)
 	assemble_zeros (fieldsize);
       else
-	output_constant (local->val, fieldsize, align2);
+	fieldsize = output_constant (local->val, fieldsize, align2);
 
       /* Count its size.  */
       local->total_bytes += fieldsize;
@@ -4784,7 +4891,7 @@ output_constructor_regular_field (oc_local_state *local)
       double_int idx = tree_to_double_int (local->index)
 		       - tree_to_double_int (local->min_index);
       idx = idx.sext (prec);
-      fieldpos = (tree_low_cst (TYPE_SIZE_UNIT (TREE_TYPE (local->val)), 1)
+      fieldpos = (tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (local->val)))
 		  * idx.low);
     }
   else if (local->field != NULL_TREE)
@@ -4804,9 +4911,8 @@ output_constructor_regular_field (oc_local_state *local)
      Note no alignment needed in an array, since that is guaranteed
      if each element has the proper size.  */
   if ((local->field != NULL_TREE || local->index != NULL_TREE)
-      && fieldpos != local->total_bytes)
+      && fieldpos > local->total_bytes)
     {
-      gcc_assert (fieldpos >= local->total_bytes);
       assemble_zeros (fieldpos - local->total_bytes);
       local->total_bytes = fieldpos;
     }
@@ -4834,7 +4940,7 @@ output_constructor_regular_field (oc_local_state *local)
 	  gcc_assert (!fieldsize || !DECL_CHAIN (local->field));
 	}
       else
-	fieldsize = tree_low_cst (DECL_SIZE_UNIT (local->field), 1);
+	fieldsize = tree_to_uhwi (DECL_SIZE_UNIT (local->field));
     }
   else
     fieldsize = int_size_in_bytes (TREE_TYPE (local->type));
@@ -4843,30 +4949,31 @@ output_constructor_regular_field (oc_local_state *local)
   if (local->val == NULL_TREE)
     assemble_zeros (fieldsize);
   else
-    output_constant (local->val, fieldsize, align2);
+    fieldsize = output_constant (local->val, fieldsize, align2);
 
   /* Count its size.  */
   local->total_bytes += fieldsize;
 }
 
-/* Helper for output_constructor.  From the current LOCAL and OUTER states,
-   output an element that is a true bitfield or part of an outer one.  */
+/* Helper for output_constructor.  From the LOCAL state, output an element
+   that is a true bitfield or part of an outer one.  BIT_OFFSET is the offset
+   from the start of a possibly ongoing outer byte buffer.  */
 
 static void
-output_constructor_bitfield (oc_local_state *local, oc_outer_state *outer)
+output_constructor_bitfield (oc_local_state *local, unsigned int bit_offset)
 {
   /* Bit size of this element.  */
   HOST_WIDE_INT ebitsize
     = (local->field
-       ? tree_low_cst (DECL_SIZE (local->field), 1)
-       : tree_low_cst (TYPE_SIZE (TREE_TYPE (local->type)), 1));
+       ? tree_to_uhwi (DECL_SIZE (local->field))
+       : tree_to_uhwi (TYPE_SIZE (TREE_TYPE (local->type))));
 
   /* Relative index of this element if this is an array component.  */
   HOST_WIDE_INT relative_index
     = (!local->field
        ? (local->index
-	  ? (tree_low_cst (local->index, 0)
-	     - tree_low_cst (local->min_index, 0))
+	  ? (tree_to_shwi (local->index)
+	     - tree_to_shwi (local->min_index))
 	  : local->last_relative_index + 1)
        : 0);
 
@@ -4880,7 +4987,7 @@ output_constructor_bitfield (oc_local_state *local, oc_outer_state *outer)
   /* Bit position of this element from the start of a possibly ongoing
      outer byte buffer.  */
   HOST_WIDE_INT byte_relative_ebitpos
-      = ((outer ? outer->bit_offset : 0) + constructor_relative_ebitpos);
+    = bit_offset + constructor_relative_ebitpos;
 
   /* From the start of a possibly ongoing outer byte buffer, offsets to
      the first bit of this element and to the first bit past the end of
@@ -4904,8 +5011,7 @@ output_constructor_bitfield (oc_local_state *local, oc_outer_state *outer)
       return;
     }
 
-  /* If this field does not start in this (or, next) byte,
-     skip some bytes.  */
+  /* If this field does not start in this (or next) byte, skip some bytes.  */
   if (next_offset / BITS_PER_UNIT != local->total_bytes)
     {
       /* Output remnant of any bit field in previous bytes.  */
@@ -4937,13 +5043,12 @@ output_constructor_bitfield (oc_local_state *local, oc_outer_state *outer)
      pending data, then retrieve the new pending data afterwards.  */
   if (TREE_CODE (local->val) == CONSTRUCTOR)
     {
-      oc_outer_state output_state;
-
-      output_state.bit_offset = next_offset % BITS_PER_UNIT;
-      output_state.byte = local->byte;
+      oc_outer_state temp_state;
+      temp_state.bit_offset = next_offset % BITS_PER_UNIT;
+      temp_state.byte = local->byte;
       local->total_bytes
-	  += output_constructor (local->val, 0, 0, &output_state);
-      local->byte = output_state.byte;
+	  += output_constructor (local->val, 0, 0, &temp_state);
+      local->byte = temp_state.byte;
       return;
     }
 
@@ -4958,8 +5063,7 @@ output_constructor_bitfield (oc_local_state *local, oc_outer_state *outer)
       HOST_WIDE_INT next_byte = next_offset / BITS_PER_UNIT;
       HOST_WIDE_INT next_bit = next_offset % BITS_PER_UNIT;
 
-      /* Advance from byte to byte
-	 within this element when necessary.  */
+      /* Advance from byte to byte within this element when necessary.  */
       while (next_byte != local->total_bytes)
 	{
 	  assemble_integer (GEN_INT (local->byte), 1, BITS_PER_UNIT, 1);
@@ -4967,10 +5071,8 @@ output_constructor_bitfield (oc_local_state *local, oc_outer_state *outer)
 	  local->byte = 0;
 	}
 
-      /* Number of bits we can process at once
-	 (all part of the same byte).  */
-      this_time = MIN (end_offset - next_offset,
-		       BITS_PER_UNIT - next_bit);
+      /* Number of bits we can process at once (all part of the same byte).  */
+      this_time = MIN (end_offset - next_offset, BITS_PER_UNIT - next_bit);
       if (BYTES_BIG_ENDIAN)
 	{
 	  /* On big-endian machine, take the most significant bits
@@ -5049,7 +5151,7 @@ output_constructor_bitfield (oc_local_state *local, oc_outer_state *outer)
 
 static unsigned HOST_WIDE_INT
 output_constructor (tree exp, unsigned HOST_WIDE_INT size,
-		    unsigned int align, oc_outer_state * outer)
+		    unsigned int align, oc_outer_state *outer)
 {
   unsigned HOST_WIDE_INT cnt;
   constructor_elt *ce;
@@ -5058,21 +5160,18 @@ output_constructor (tree exp, unsigned HOST_WIDE_INT size,
 
   /* Setup our local state to communicate with helpers.  */
   local.exp = exp;
+  local.type = TREE_TYPE (exp);
   local.size = size;
   local.align = align;
+  if (TREE_CODE (local.type) == ARRAY_TYPE && TYPE_DOMAIN (local.type))
+    local.min_index = TYPE_MIN_VALUE (TYPE_DOMAIN (local.type));
+  else
+    local.min_index = NULL_TREE;
 
   local.total_bytes = 0;
   local.byte_buffer_in_use = outer != NULL;
   local.byte = outer ? outer->byte : 0;
-
-  local.type = TREE_TYPE (exp);
-
   local.last_relative_index = -1;
-
-  local.min_index = NULL_TREE;
-  if (TREE_CODE (local.type) == ARRAY_TYPE
-      && TYPE_DOMAIN (local.type) != NULL_TREE)
-    local.min_index = TYPE_MIN_VALUE (TYPE_DOMAIN (local.type));
 
   gcc_assert (HOST_BITS_PER_WIDE_INT >= BITS_PER_UNIT);
 
@@ -5085,9 +5184,10 @@ output_constructor (tree exp, unsigned HOST_WIDE_INT size,
      (even if the initializer in a source program incorrectly contains
      more one).  */
 
-  local.field = NULL_TREE;
   if (TREE_CODE (local.type) == RECORD_TYPE)
     local.field = TYPE_FIELDS (local.type);
+  else
+    local.field = NULL_TREE;
 
   for (cnt = 0;
        vec_safe_iterate (CONSTRUCTOR_ELTS (exp), cnt, &ce);
@@ -5140,7 +5240,7 @@ output_constructor (tree exp, unsigned HOST_WIDE_INT size,
 			    build_nonstandard_integer_type
 			    (TYPE_PRECISION (TREE_TYPE (local.val)), 0),
 			    local.val);
-	  output_constructor_bitfield (&local, outer);
+	  output_constructor_bitfield (&local, outer ? outer->bit_offset : 0);
 	}
     }
 
@@ -5297,9 +5397,9 @@ weak_finish_1 (tree decl)
 static tree
 find_decl (tree target)
 {
-  symtab_node node = symtab_node_for_asm (target);
+  symtab_node *node = symtab_node_for_asm (target);
   if (node)
-    return node->symbol.decl;
+    return node->decl;
   return NULL_TREE;
 }
 
@@ -5443,9 +5543,9 @@ void
 do_assemble_alias (tree decl, tree target)
 {
   /* Emulated TLS had better not get this var.  */
-  gcc_assert(!(!targetm.have_tls
-	       && TREE_CODE (decl) == VAR_DECL
-	       && DECL_THREAD_LOCAL_P (decl)));
+  gcc_assert (!(!targetm.have_tls
+		&& TREE_CODE (decl) == VAR_DECL
+		&& DECL_THREAD_LOCAL_P (decl)));
 
   if (TREE_ASM_WRITTEN (decl))
     return;
@@ -5556,13 +5656,6 @@ assemble_alias (tree decl, tree target)
 
       if (alias == target)
 	error ("weakref %q+D ultimately targets itself", decl);
-      else
-	{
-#ifndef ASM_OUTPUT_WEAKREF
-	  IDENTIFIER_TRANSPARENT_ALIAS (alias) = 1;
-	  TREE_CHAIN (alias) = target;
-#endif
-	}
       if (TREE_PUBLIC (decl))
 	error ("weakref %q+D must have static linkage", decl);
     }
@@ -5696,12 +5789,12 @@ dump_tm_clone_pairs (vec<tm_alias_pair> tm_alias_pairs)
 	 TM_GETTMCLONE.  If neither of these are true, we didn't generate
 	 a clone, and we didn't call it indirectly... no sense keeping it
 	 in the clone table.  */
-      if (!dst_n || !dst_n->analyzed)
+      if (!dst_n || !dst_n->definition)
 	continue;
 
       /* This covers the case where we have optimized the original
 	 function away, and only access the transactional clone.  */
-      if (!src_n || !src_n->analyzed)
+      if (!src_n || !src_n->definition)
 	continue;
 
       if (!switched)
@@ -5990,7 +6083,10 @@ default_section_type_flags (tree decl, const char *name, int reloc)
 	flags |= SECTION_RELRO;
     }
 
-  if (decl && DECL_ONE_ONLY (decl))
+  if (decl && DECL_P (decl) && DECL_ONE_ONLY (decl))
+    flags |= SECTION_LINKONCE;
+
+  if (strcmp (name, ".vtable_map_vars") == 0)
     flags |= SECTION_LINKONCE;
 
   if (decl && TREE_CODE (decl) == VAR_DECL && DECL_THREAD_LOCAL_P (decl))
@@ -6193,8 +6289,8 @@ categorize_decl_for_section (const_tree decl, int reloc)
     return SECCAT_TEXT;
   else if (TREE_CODE (decl) == STRING_CST)
     {
-      if (flag_mudflap
-	  || (flag_asan && asan_protect_global (CONST_CAST_TREE (decl))))
+      if ((flag_sanitize & SANITIZE_ADDRESS)
+	  && asan_protect_global (CONST_CAST_TREE (decl)))
       /* or !flag_merge_constants */
         return SECCAT_RODATA;
       else
@@ -6219,8 +6315,9 @@ categorize_decl_for_section (const_tree decl, int reloc)
 	}
       else if (reloc & targetm.asm_out.reloc_rw_mask ())
 	ret = reloc == 1 ? SECCAT_DATA_REL_RO_LOCAL : SECCAT_DATA_REL_RO;
-      else if (reloc || flag_merge_constants < 2 || flag_mudflap
-	       || (flag_asan && asan_protect_global (CONST_CAST_TREE (decl))))
+      else if (reloc || flag_merge_constants < 2
+	       || ((flag_sanitize & SANITIZE_ADDRESS)
+		   && asan_protect_global (CONST_CAST_TREE (decl))))
 	/* C and C++ don't allow different variables to share the same
 	   location.  -fmerge-all-constants allows even that (at the
 	   expense of not conforming).  */
@@ -6349,8 +6446,6 @@ default_elf_select_section (tree decl, int reloc,
       gcc_unreachable ();
     }
 
-  if (!DECL_P (decl))
-    decl = NULL_TREE;
   return get_named_section (decl, sname, reloc);
 }
 
@@ -6578,9 +6673,9 @@ default_use_anchors_for_symbol_p (const_rtx symbol)
   decl = SYMBOL_REF_DECL (symbol);
   if (decl && DECL_P (decl))
     {
-      /* Don't use section anchors for decls that might be defined by
-	 other modules.  */
-      if (!targetm.binds_local_p (decl))
+      /* Don't use section anchors for decls that might be defined or
+	 usurped by other modules.  */
+      if (TREE_PUBLIC (decl) && !decl_binds_to_current_def_p (decl))
 	return false;
 
       /* Don't use section anchors for decls that will be placed in a
@@ -6643,21 +6738,21 @@ default_binds_local_p_1 (const_tree exp, int shlib)
   if (TREE_CODE (exp) == VAR_DECL && TREE_PUBLIC (exp)
       && (TREE_STATIC (exp) || DECL_EXTERNAL (exp)))
     {
-      struct varpool_node *vnode = varpool_get_node (exp);
-      if (vnode && resolution_local_p (vnode->symbol.resolution))
+      varpool_node *vnode = varpool_get_node (exp);
+      if (vnode && (resolution_local_p (vnode->resolution) || vnode->in_other_partition))
 	resolved_locally = true;
       if (vnode
-	  && resolution_to_local_definition_p (vnode->symbol.resolution))
+	  && resolution_to_local_definition_p (vnode->resolution))
 	resolved_to_local_def = true;
     }
   else if (TREE_CODE (exp) == FUNCTION_DECL && TREE_PUBLIC (exp))
     {
       struct cgraph_node *node = cgraph_get_node (exp);
       if (node
-	  && resolution_local_p (node->symbol.resolution))
+	  && (resolution_local_p (node->resolution) || node->in_other_partition))
 	resolved_locally = true;
       if (node
-	  && resolution_to_local_definition_p (node->symbol.resolution))
+	  && resolution_to_local_definition_p (node->resolution))
 	resolved_to_local_def = true;
     }
 
@@ -6728,31 +6823,41 @@ bool
 decl_binds_to_current_def_p (tree decl)
 {
   gcc_assert (DECL_P (decl));
-  if (!TREE_PUBLIC (decl))
-    return true;
   if (!targetm.binds_local_p (decl))
     return false;
+  if (!TREE_PUBLIC (decl))
+    return true;
   /* When resolution is available, just use it.  */
   if (TREE_CODE (decl) == VAR_DECL
       && (TREE_STATIC (decl) || DECL_EXTERNAL (decl)))
     {
-      struct varpool_node *vnode = varpool_get_node (decl);
+      varpool_node *vnode = varpool_get_node (decl);
       if (vnode
-	  && vnode->symbol.resolution != LDPR_UNKNOWN)
-	return resolution_to_local_definition_p (vnode->symbol.resolution);
+	  && vnode->resolution != LDPR_UNKNOWN)
+	return resolution_to_local_definition_p (vnode->resolution);
     }
   else if (TREE_CODE (decl) == FUNCTION_DECL)
     {
       struct cgraph_node *node = cgraph_get_node (decl);
       if (node
-	  && node->symbol.resolution != LDPR_UNKNOWN)
-	return resolution_to_local_definition_p (node->symbol.resolution);
+	  && node->resolution != LDPR_UNKNOWN)
+	return resolution_to_local_definition_p (node->resolution);
     }
   /* Otherwise we have to assume the worst for DECL_WEAK (hidden weaks
-     binds locally but still can be overwritten).
+     binds locally but still can be overwritten), DECL_COMMON (can be merged
+     with a non-common definition somewhere in the same module) or
+     DECL_EXTERNAL.
      This rely on fact that binds_local_p behave as decl_replaceable_p
      for all other declaration types.  */
-  return !DECL_WEAK (decl);
+  if (DECL_WEAK (decl))
+    return false;
+  if (DECL_COMMON (decl)
+      && (DECL_INITIAL (decl) == NULL
+	  || DECL_INITIAL (decl) == error_mark_node))
+    return false;
+  if (DECL_EXTERNAL (decl))
+    return false;
+  return true;
 }
 
 /* A replaceable function or variable is one which may be replaced
@@ -6970,7 +7075,7 @@ place_block_symbol (rtx symbol)
       decl = SYMBOL_REF_DECL (symbol);
       alignment = DECL_ALIGN (decl);
       size = get_constant_size (DECL_INITIAL (decl));
-      if (flag_asan
+      if ((flag_sanitize & SANITIZE_ADDRESS)
 	  && TREE_CODE (DECL_INITIAL (decl)) == STRING_CST
 	  && asan_protect_global (DECL_INITIAL (decl)))
 	size += asan_red_zone_size (size);
@@ -6978,9 +7083,10 @@ place_block_symbol (rtx symbol)
   else
     {
       decl = SYMBOL_REF_DECL (symbol);
-      alignment = DECL_ALIGN (decl);
-      size = tree_low_cst (DECL_SIZE_UNIT (decl), 1);
-      if (flag_asan && asan_protect_global (decl))
+      alignment = get_variable_align (decl);
+      size = tree_to_uhwi (DECL_SIZE_UNIT (decl));
+      if ((flag_sanitize & SANITIZE_ADDRESS)
+	  && asan_protect_global (decl))
 	{
 	  size += asan_red_zone_size (size);
 	  alignment = MAX (alignment,
@@ -7130,7 +7236,7 @@ output_object_block (struct object_block *block)
 				      DECL_ALIGN (decl));
 	  size = get_constant_size (DECL_INITIAL (decl));
 	  offset += size;
-	  if (flag_asan
+	  if ((flag_sanitize & SANITIZE_ADDRESS)
 	      && TREE_CODE (DECL_INITIAL (decl)) == STRING_CST
 	      && asan_protect_global (DECL_INITIAL (decl)))
 	    {
@@ -7144,9 +7250,10 @@ output_object_block (struct object_block *block)
 	  HOST_WIDE_INT size;
 	  decl = SYMBOL_REF_DECL (symbol);
 	  assemble_variable_contents (decl, XSTR (symbol, 0), false);
-	  size = tree_low_cst (DECL_SIZE_UNIT (decl), 1);
+	  size = tree_to_uhwi (DECL_SIZE_UNIT (decl));
 	  offset += size;
-	  if (flag_asan && asan_protect_global (decl))
+	  if ((flag_sanitize & SANITIZE_ADDRESS)
+	      && asan_protect_global (decl))
 	    {
 	      size = asan_red_zone_size (size);
 	      assemble_zeros (size);

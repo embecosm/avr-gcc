@@ -1,5 +1,5 @@
 /* Definitions for Toshiba Media Processor
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2014 Free Software Foundation, Inc.
    Contributed by Red Hat, Inc.
 
 This file is part of GCC.
@@ -24,6 +24,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "varasm.h"
+#include "calls.h"
+#include "stringpool.h"
+#include "stor-layout.h"
 #include "regs.h"
 #include "hard-reg-set.h"
 #include "insn-config.h"
@@ -47,7 +51,18 @@ along with GCC; see the file COPYING3.  If not see
 #include "target-def.h"
 #include "langhooks.h"
 #include "df.h"
+#include "pointer-set.h"
+#include "hash-table.h"
+#include "vec.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-fold.h"
+#include "tree-eh.h"
+#include "gimple-expr.h"
+#include "is-a.h"
 #include "gimple.h"
+#include "gimplify.h"
 #include "opts.h"
 #include "dumpfile.h"
 
@@ -3962,7 +3977,7 @@ mep_validate_vliw (tree *node, tree name, tree args ATTRIBUTE_UNUSED,
       static int gave_array_note = 0;
       static const char * given_type = NULL;
  
-      given_type = tree_code_name[TREE_CODE (*node)];
+      given_type = get_tree_code_name (TREE_CODE (*node));
       if (TREE_CODE (*node) == POINTER_TYPE)
  	given_type = "pointers";
       if (TREE_CODE (*node) == ARRAY_TYPE)
@@ -5103,7 +5118,7 @@ mep_emit_doloop (rtx *operands, int is_end)
 
   tag = GEN_INT (cfun->machine->doloop_tags - 1);
   if (is_end)
-    emit_jump_insn (gen_doloop_end_internal (operands[0], operands[4], tag));
+    emit_jump_insn (gen_doloop_end_internal (operands[0], operands[1], tag));
   else
     emit_insn (gen_doloop_begin_internal (operands[0], operands[0], tag));
 }
@@ -7280,6 +7295,8 @@ mep_asm_init_sections (void)
 #define TARGET_TRAMPOLINE_INIT		mep_trampoline_init
 #undef  TARGET_LEGITIMATE_CONSTANT_P
 #define TARGET_LEGITIMATE_CONSTANT_P	mep_legitimate_constant_p
+#undef  TARGET_CAN_USE_DOLOOP_P
+#define TARGET_CAN_USE_DOLOOP_P		can_use_doloop_if_innermost
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

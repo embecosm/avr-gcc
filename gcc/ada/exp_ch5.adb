@@ -631,7 +631,7 @@ package body Exp_Ch5 is
             --  Otherwise, we assume the worst, which is that the two arrays
             --  are the same array. There is no need to check if we know that
             --  is the case, because if we don't know it, we still have to
-            --  assume it!
+            --  assume it.
 
             --  Generally if the same array is involved, then we have an
             --  overlapping case. We will have to really assume the worst (i.e.
@@ -697,7 +697,7 @@ package body Exp_Ch5 is
 
          --    Note: the above code MUST be analyzed with checks off, because
          --    otherwise the Succ could overflow. But in any case this is more
-         --    efficient!
+         --    efficient.
 
          --  Forwards_OK = False, Backwards_OK = True
 
@@ -709,7 +709,7 @@ package body Exp_Ch5 is
 
          --    Note: the above code MUST be analyzed with checks off, because
          --    otherwise the Pred could overflow. But in any case this is more
-         --    efficient!
+         --    efficient.
 
          --  Forwards_OK = Backwards_OK = False
 
@@ -1775,7 +1775,7 @@ package body Exp_Ch5 is
             --  We do not need to reanalyze that assignment, and we do not need
             --  to worry about references to the temporary, but we do need to
             --  make sure that the temporary is not marked as a true constant
-            --  since we now have a generated assignment to it!
+            --  since we now have a generated assignment to it.
 
             Set_Is_True_Constant (Tnn, False);
          end;
@@ -1847,15 +1847,17 @@ package body Exp_Ch5 is
             Set_Etype (Lhs, Lt);
          end;
 
-         --  If the Lhs has a private type with unknown discriminants, it
-         --  may have a full view with discriminants, but those are nameable
-         --  only in the underlying type, so convert the Rhs to it before
-         --  potential checking.
+      --  If the Lhs has a private type with unknown discriminants, it may
+      --  have a full view with discriminants, but those are nameable only
+      --  in the underlying type, so convert the Rhs to it before potential
+      --  checking. Convert Lhs as well, otherwise the actual subtype might
+      --  not be constructible.
 
       elsif Has_Unknown_Discriminants (Base_Type (Etype (Lhs)))
         and then Has_Discriminants (Typ)
       then
          Rewrite (Rhs, OK_Convert_To (Base_Type (Typ), Rhs));
+         Rewrite (Lhs, OK_Convert_To (Base_Type (Typ), Lhs));
          Apply_Discriminant_Check (Rhs, Typ, Lhs);
 
       --  In the access type case, we need the same discriminant check, and
@@ -2080,7 +2082,7 @@ package body Exp_Ch5 is
                --  by a dispatching call to _assign. It is suppressed in the
                --  case of assignments created by the expander that correspond
                --  to initializations, where we do want to copy the tag
-               --  (Expand_Ctrl_Actions flag is set True in this case). It is
+               --  (Expand_Ctrl_Actions flag is set False in this case). It is
                --  also suppressed if restriction No_Dispatching_Calls is in
                --  force because in that case predefined primitives are not
                --  generated.
@@ -2537,7 +2539,11 @@ package body Exp_Ch5 is
          --  if statement, since this can result in subsequent optimizations.
          --  This helps not only with case statements in the source of a
          --  simple form, but also with generated code (discriminant check
-         --  functions in particular)
+         --  functions in particular).
+
+         --  Note: it is OK to do this before expanding out choices for any
+         --  static predicates, since the if statement processing will handle
+         --  the static predicate case fine.
 
          elsif Len = 2 then
             Chlist := Discrete_Choices (First (Alternatives (N)));
@@ -2617,12 +2623,18 @@ package body Exp_Ch5 is
             Set_Discrete_Choices (Last_Alt, New_List (Others_Node));
          end if;
 
-         Alt := First (Alternatives (N));
-         while Present (Alt)
-           and then Nkind (Alt) = N_Case_Statement_Alternative
-         loop
+         --  Deal with possible declarations of controlled objects, and also
+         --  with rewriting choice sequences for static predicate references.
+
+         Alt := First_Non_Pragma (Alternatives (N));
+         while Present (Alt) loop
             Process_Statements_For_Controlled_Objects (Alt);
-            Next (Alt);
+
+            if Has_SP_Choice (Alt) then
+               Expand_Static_Predicates_In_Choices (Alt);
+            end if;
+
+            Next_Non_Pragma (Alt);
          end loop;
       end;
    end Expand_N_Case_Statement;
@@ -3115,6 +3127,15 @@ package body Exp_Ch5 is
                --  and must be visible in the debugger.
 
                Set_Debug_Info_Needed (Id);
+
+               --  If the container does not have a variable indexing aspect,
+               --  the element is a constant in the loop.
+
+               if No (Find_Value_Of_Aspect
+                        (Container_Typ, Aspect_Variable_Indexing))
+               then
+                  Set_Ekind (Id, E_Constant);
+               end if;
 
                --  If the container holds controlled objects, wrap the loop
                --  statements and element renaming declaration with a block.

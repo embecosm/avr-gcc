@@ -1,5 +1,5 @@
 /* Swing Modulo Scheduling implementation.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
    Contributed by Ayal Zaks and Mustafa Hagog <zaks,mustafa@il.ibm.com>
 
 This file is part of GCC.
@@ -766,6 +766,9 @@ schedule_reg_moves (partial_schedule_ptr ps)
 
       distance1_uses = distances[1] ? sbitmap_alloc (g->num_nodes) : NULL;
 
+      if (distance1_uses)
+	bitmap_clear (distance1_uses);
+
       /* Every use of the register defined by node may require a different
 	 copy of this register, depending on the time the use is scheduled.
 	 Record which uses require which move results.  */
@@ -1148,8 +1151,9 @@ generate_prolog_epilog (partial_schedule_ptr ps, struct loop *loop,
          generate_prolog_epilog function.  */
       rtx sub_reg = NULL_RTX;
 
-      sub_reg = expand_simple_binop (GET_MODE (count_reg), MINUS,
-                                     count_reg, GEN_INT (last_stage),
+      sub_reg = expand_simple_binop (GET_MODE (count_reg), MINUS, count_reg,
+				     gen_int_mode (last_stage,
+						   GET_MODE (count_reg)),
                                      count_reg, 1, OPTAB_DIRECT);
       gcc_assert (REG_P (sub_reg));
       if (REGNO (sub_reg) != REGNO (count_reg))
@@ -1307,7 +1311,7 @@ canon_loop (struct loop *loop)
 
   /* Avoid annoying special cases of edges going to exit
      block.  */
-  FOR_EACH_EDGE (e, i, EXIT_BLOCK_PTR->preds)
+  FOR_EACH_EDGE (e, i, EXIT_BLOCK_PTR_FOR_FN (cfun)->preds)
     if ((e->flags & EDGE_FALLTHRU) && (EDGE_COUNT (e->src->succs) > 1))
       split_edge (e);
 
@@ -1350,7 +1354,6 @@ sms_schedule (void)
   ddg_ptr *g_arr, g;
   int * node_order;
   int maxii, max_asap;
-  loop_iterator li;
   partial_schedule_ptr ps;
   basic_block bb = NULL;
   struct loop *loop;
@@ -1394,7 +1397,7 @@ sms_schedule (void)
 
   /* Build DDGs for all the relevant loops and hold them in G_ARR
      indexed by the loop index.  */
-  FOR_EACH_LOOP (li, loop, 0)
+  FOR_EACH_LOOP (loop, 0)
     {
       rtx head, tail;
       rtx count_reg;
@@ -1405,7 +1408,7 @@ sms_schedule (void)
           if (dump_file)
             fprintf (dump_file, "SMS reached max limit... \n");
 
-	  FOR_EACH_LOOP_BREAK (li);
+	  break;
         }
 
       if (dump_file)
@@ -1532,7 +1535,7 @@ sms_schedule (void)
   }
 
   /* We don't want to perform SMS on new loops - created by versioning.  */
-  FOR_EACH_LOOP (li, loop, 0)
+  FOR_EACH_LOOP (loop, 0)
     {
       rtx head, tail;
       rtx count_reg, count_init;
@@ -1715,8 +1718,9 @@ sms_schedule (void)
           /* case the BCT count is not known , Do loop-versioning */
 	  if (count_reg && ! count_init)
             {
-	      rtx comp_rtx = gen_rtx_fmt_ee (GT, VOIDmode, count_reg,
-	  				     GEN_INT(stage_count));
+	      rtx comp_rtx = gen_rtx_GT (VOIDmode, count_reg,
+					 gen_int_mode (stage_count,
+						       GET_MODE (count_reg)));
 	      unsigned prob = (PROB_SMS_ENOUGH_ITERATIONS
 			       * REG_BR_PROB_BASE) / 100;
 
@@ -3342,8 +3346,8 @@ rest_of_handle_sms (void)
   max_regno = max_reg_num ();
 
   /* Finalize layout changes.  */
-  FOR_EACH_BB (bb)
-    if (bb->next_bb != EXIT_BLOCK_PTR)
+  FOR_EACH_BB_FN (bb, cfun)
+    if (bb->next_bb != EXIT_BLOCK_PTR_FOR_FN (cfun))
       bb->aux = bb->next_bb;
   free_dominance_info (CDI_DOMINATORS);
   cfg_layout_finalize ();
@@ -3351,24 +3355,41 @@ rest_of_handle_sms (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_sms =
+namespace {
+
+const pass_data pass_data_sms =
 {
- {
-  RTL_PASS,
-  "sms",                                /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_sms,                      /* gate */
-  rest_of_handle_sms,                   /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_SMS,                               /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish
-    | TODO_verify_flow
-    | TODO_verify_rtl_sharing           /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "sms", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_SMS, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_flow
+    | TODO_verify_rtl_sharing ), /* todo_flags_finish */
 };
+
+class pass_sms : public rtl_opt_pass
+{
+public:
+  pass_sms (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_sms, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_sms (); }
+  unsigned int execute () { return rest_of_handle_sms (); }
+
+}; // class pass_sms
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_sms (gcc::context *ctxt)
+{
+  return new pass_sms (ctxt);
+}

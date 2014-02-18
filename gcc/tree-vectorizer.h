@@ -1,5 +1,5 @@
 /* Vectorizer
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
    Contributed by Dorit Naishlos <dorit@il.ibm.com>
 
 This file is part of GCC.
@@ -24,12 +24,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-data-ref.h"
 #include "target.h"
 #include "hash-table.h"
-
-typedef source_location LOC;
-#define UNKNOWN_LOC UNKNOWN_LOCATION
-#define EXPR_LOC(e) EXPR_LOCATION(e)
-#define LOC_FILE(l) LOCATION_FILE (l)
-#define LOC_LINE(l) LOCATION_LINE (l)
 
 /* Used for naming of new temporaries.  */
 enum vect_var_kind {
@@ -175,6 +169,37 @@ typedef struct _slp_oprnd_info
 
 
 
+/* This struct is used to store the information of a data reference,
+   including the data ref itself, the access offset (calculated by summing its
+   offset and init) and the segment length for aliasing checks.
+   This is used to merge alias checks.  */
+
+struct dr_with_seg_len
+{
+  dr_with_seg_len (data_reference_p d, tree len)
+    : dr (d),
+      offset (size_binop (PLUS_EXPR, DR_OFFSET (d), DR_INIT (d))),
+      seg_len (len) {}
+
+  data_reference_p dr;
+  tree offset;
+  tree seg_len;
+};
+
+/* This struct contains two dr_with_seg_len objects with aliasing data
+   refs.  Two comparisons are generated from them.  */
+
+struct dr_with_seg_len_pair_t
+{
+  dr_with_seg_len_pair_t (const dr_with_seg_len& d1,
+			       const dr_with_seg_len& d2)
+    : first (d1), second (d2) {}
+
+  dr_with_seg_len first;
+  dr_with_seg_len second;
+};
+
+
 typedef struct _vect_peel_info
 {
   int npeel;
@@ -225,8 +250,11 @@ typedef struct _loop_vec_info {
   /* The loop basic blocks.  */
   basic_block *bbs;
 
+  /* Number of latch executions.  */
+  tree num_itersm1;
   /* Number of iterations.  */
   tree num_iters;
+  /* Number of iterations of the original loop.  */
   tree num_iters_unchanged;
 
   /* Minimum number of iterations below which vectorization is expected to
@@ -241,9 +269,6 @@ typedef struct _loop_vec_info {
 
   /* Unrolling factor  */
   int vectorization_factor;
-
-  /* The loop location in the source.  */
-  LOC loop_line_number;
 
   /* Unknown DRs according to which loop was peeled.  */
   struct data_reference *unaligned_dr;
@@ -273,6 +298,10 @@ typedef struct _loop_vec_info {
   /* Data Dependence Relations defining address ranges that are candidates
      for a run-time aliasing check.  */
   vec<ddr_p> may_alias_ddrs;
+
+  /* Data Dependence Relations defining address ranges together with segment
+     lengths from which the run-time aliasing check is built.  */
+  vec<dr_with_seg_len_pair_t> comp_alias_ddrs;
 
   /* Statements in the loop that have data references that are candidates for a
      runtime (loop versioning) misalignment check.  */
@@ -308,20 +337,49 @@ typedef struct _loop_vec_info {
      this.  */
   bool peeling_for_gaps;
 
+  /* When the number of iterations is not a multiple of the vector size
+     we need to peel off iterations at the end to form an epilogue loop.  */
+  bool peeling_for_niter;
+
   /* Reductions are canonicalized so that the last operand is the reduction
      operand.  If this places a constant into RHS1, this decanonicalizes
      GIMPLE for other phases, so we must track when this has occurred and
      fix it up.  */
   bool operands_swapped;
 
+  /* True if there are no loop carried data dependencies in the loop.
+     If loop->safelen <= 1, then this is always true, either the loop
+     didn't have any loop carried data dependencies, or the loop is being
+     vectorized guarded with some runtime alias checks, or couldn't
+     be vectorized at all, but then this field shouldn't be used.
+     For loop->safelen >= 2, the user has asserted that there are no
+     backward dependencies, but there still could be loop carried forward
+     dependencies in such loops.  This flag will be false if normal
+     vectorizer data dependency analysis would fail or require versioning
+     for alias, but because of loop->safelen >= 2 it has been vectorized
+     even without versioning for alias.  E.g. in:
+     #pragma omp simd
+     for (int i = 0; i < m; i++)
+       a[i] = a[i + k] * c;
+     (or #pragma simd or #pragma ivdep) we can vectorize this and it will
+     DTRT even for k > 0 && k < m, but without safelen we would not
+     vectorize this, so this field would be false.  */
+  bool no_data_dependencies;
+
+  /* If if-conversion versioned this loop before conversion, this is the
+     loop version without if-conversion.  */
+  struct loop *scalar_loop;
+
 } *loop_vec_info;
 
 /* Access Functions.  */
 #define LOOP_VINFO_LOOP(L)                 (L)->loop
 #define LOOP_VINFO_BBS(L)                  (L)->bbs
+#define LOOP_VINFO_NITERSM1(L)             (L)->num_itersm1
 #define LOOP_VINFO_NITERS(L)               (L)->num_iters
-/* Since LOOP_VINFO_NITERS can change after prologue peeling
-   retain total unchanged scalar loop iterations for cost model.  */
+/* Since LOOP_VINFO_NITERS and LOOP_VINFO_NITERSM1 can change after
+   prologue peeling retain total unchanged scalar loop iterations for
+   cost model.  */
 #define LOOP_VINFO_NITERS_UNCHANGED(L)     (L)->num_iters_unchanged
 #define LOOP_VINFO_COST_MODEL_MIN_ITERS(L) (L)->min_profitable_iters
 #define LOOP_VINFO_VECTORIZABLE_P(L)       (L)->vectorizable
@@ -331,11 +389,11 @@ typedef struct _loop_vec_info {
 #define LOOP_VINFO_DATAREFS(L)             (L)->datarefs
 #define LOOP_VINFO_DDRS(L)                 (L)->ddrs
 #define LOOP_VINFO_INT_NITERS(L)           (TREE_INT_CST_LOW ((L)->num_iters))
-#define LOOP_PEELING_FOR_ALIGNMENT(L)      (L)->peeling_for_alignment
+#define LOOP_VINFO_PEELING_FOR_ALIGNMENT(L) (L)->peeling_for_alignment
 #define LOOP_VINFO_UNALIGNED_DR(L)         (L)->unaligned_dr
 #define LOOP_VINFO_MAY_MISALIGN_STMTS(L)   (L)->may_misalign_stmts
-#define LOOP_VINFO_LOC(L)                  (L)->loop_line_number
 #define LOOP_VINFO_MAY_ALIAS_DDRS(L)       (L)->may_alias_ddrs
+#define LOOP_VINFO_COMP_ALIAS_DDRS(L)      (L)->comp_alias_ddrs
 #define LOOP_VINFO_GROUPED_STORES(L)       (L)->grouped_stores
 #define LOOP_VINFO_SLP_INSTANCES(L)        (L)->slp_instances
 #define LOOP_VINFO_SLP_UNROLLING_FACTOR(L) (L)->slp_unrolling_factor
@@ -345,18 +403,17 @@ typedef struct _loop_vec_info {
 #define LOOP_VINFO_TARGET_COST_DATA(L)     (L)->target_cost_data
 #define LOOP_VINFO_PEELING_FOR_GAPS(L)     (L)->peeling_for_gaps
 #define LOOP_VINFO_OPERANDS_SWAPPED(L)     (L)->operands_swapped
+#define LOOP_VINFO_PEELING_FOR_NITER(L)    (L)->peeling_for_niter
+#define LOOP_VINFO_NO_DATA_DEPENDENCIES(L) (L)->no_data_dependencies
+#define LOOP_VINFO_SCALAR_LOOP(L)	   (L)->scalar_loop
 
 #define LOOP_REQUIRES_VERSIONING_FOR_ALIGNMENT(L) \
-(L)->may_misalign_stmts.length () > 0
+  (L)->may_misalign_stmts.length () > 0
 #define LOOP_REQUIRES_VERSIONING_FOR_ALIAS(L)     \
-(L)->may_alias_ddrs.length () > 0
-
-#define NITERS_KNOWN_P(n)                     \
-(host_integerp ((n),0)                        \
-&& TREE_INT_CST_LOW ((n)) > 0)
+  (L)->may_alias_ddrs.length () > 0
 
 #define LOOP_VINFO_NITERS_KNOWN_P(L)          \
-NITERS_KNOWN_P((L)->num_iters)
+  (tree_fits_shwi_p ((L)->num_iters) && tree_to_shwi ((L)->num_iters) > 0)
 
 static inline loop_vec_info
 loop_vec_info_for_loop (struct loop *loop)
@@ -416,6 +473,7 @@ enum stmt_vec_info_type {
   shift_vec_info_type,
   op_vec_info_type,
   call_vec_info_type,
+  call_simd_clone_vec_info_type,
   assignment_vec_info_type,
   condition_vec_info_type,
   reduc_vec_info_type,
@@ -538,6 +596,9 @@ typedef struct _stmt_vec_info {
      of this stmt.  */
   vec<dr_p> same_align_refs;
 
+  /* Selected SIMD clone's function decl.  */
+  tree simd_clone_fndecl;
+
   /* Classify the def of this stmt.  */
   enum vect_def_type def_type;
 
@@ -576,6 +637,9 @@ typedef struct _stmt_vec_info {
   /* For loads only, true if this is a gather load.  */
   bool gather_p;
   bool stride_load_p;
+
+  /* For both loads and stores.  */
+  bool simd_lane_access_p;
 } *stmt_vec_info;
 
 /* Access Functions.  */
@@ -591,6 +655,7 @@ typedef struct _stmt_vec_info {
 #define STMT_VINFO_DATA_REF(S)             (S)->data_ref_info
 #define STMT_VINFO_GATHER_P(S)		   (S)->gather_p
 #define STMT_VINFO_STRIDE_LOAD_P(S)	   (S)->stride_load_p
+#define STMT_VINFO_SIMD_LANE_ACCESS_P(S)   (S)->simd_lane_access_p
 
 #define STMT_VINFO_DR_BASE_ADDRESS(S)      (S)->dr_base_address
 #define STMT_VINFO_DR_INIT(S)              (S)->dr_init
@@ -602,6 +667,7 @@ typedef struct _stmt_vec_info {
 #define STMT_VINFO_RELATED_STMT(S)         (S)->related_stmt
 #define STMT_VINFO_PATTERN_DEF_SEQ(S)      (S)->pattern_def_seq
 #define STMT_VINFO_SAME_ALIGN_REFS(S)      (S)->same_align_refs
+#define STMT_VINFO_SIMD_CLONE_FNDECL(S)	   (S)->simd_clone_fndecl
 #define STMT_VINFO_DEF_TYPE(S)             (S)->def_type
 #define STMT_VINFO_GROUP_FIRST_ELEMENT(S)  (S)->first_element
 #define STMT_VINFO_GROUP_NEXT_ELEMENT(S)   (S)->next_element
@@ -625,14 +691,20 @@ typedef struct _stmt_vec_info {
 #define PURE_SLP_STMT(S)                  ((S)->slp_type == pure_slp)
 #define STMT_SLP_TYPE(S)                   (S)->slp_type
 
+struct dataref_aux {
+  tree base_decl;
+  bool base_misaligned;
+  int misalignment;
+};
+
 #define VECT_MAX_COST 1000
 
 /* The maximum number of intermediate steps required in multi-step type
    conversion.  */
 #define MAX_INTERM_CVT_STEPS         3
 
-/* The maximum vectorization factor supported by any target (V32QI).  */
-#define MAX_VECTORIZATION_FACTOR 32
+/* The maximum vectorization factor supported by any target (V64QI).  */
+#define MAX_VECTORIZATION_FACTOR 64
 
 /* Avoid GTY(()) on stmt_vec_info.  */
 typedef void *vec_void_p;
@@ -827,11 +899,31 @@ destroy_cost_data (void *data)
 /*-----------------------------------------------------------------*/
 /* Info on data references alignment.                              */
 /*-----------------------------------------------------------------*/
+inline void
+set_dr_misalignment (struct data_reference *dr, int val)
+{
+  dataref_aux *data_aux = (dataref_aux *) dr->aux;
+
+  if (!data_aux)
+    {
+      data_aux = XCNEW (dataref_aux);
+      dr->aux = data_aux;
+    }
+
+  data_aux->misalignment = val;
+}
+
+inline int
+dr_misalignment (struct data_reference *dr)
+{
+  gcc_assert (dr->aux);
+  return ((dataref_aux *) dr->aux)->misalignment;
+}
 
 /* Reflects actual alignment of first access in the vectorized loop,
    taking into account peeling/versioning if applied.  */
-#define DR_MISALIGNMENT(DR)   ((int) (size_t) (DR)->aux)
-#define SET_DR_MISALIGNMENT(DR, VAL)   ((DR)->aux = (void *) (size_t) (VAL))
+#define DR_MISALIGNMENT(DR) dr_misalignment (DR)
+#define SET_DR_MISALIGNMENT(DR, VAL) set_dr_misalignment (DR, VAL)
 
 /* Return TRUE if the data access is aligned, and FALSE otherwise.  */
 
@@ -850,8 +942,19 @@ known_alignment_for_access_p (struct data_reference *data_ref_info)
   return (DR_MISALIGNMENT (data_ref_info) != -1);
 }
 
+
+/* Return true if the vect cost model is unlimited.  */
+static inline bool
+unlimited_cost_model (loop_p loop)
+{
+  if (loop != NULL && loop->force_vect
+      && flag_simd_cost_model != VECT_COST_MODEL_DEFAULT)
+    return flag_simd_cost_model == VECT_COST_MODEL_UNLIMITED;
+  return (flag_vect_cost_model == VECT_COST_MODEL_UNLIMITED);
+}
+
 /* Source location */
-extern LOC vect_location;
+extern source_location vect_location;
 
 /*-----------------------------------------------------------------*/
 /* Function prototypes.                                            */
@@ -861,11 +964,14 @@ extern LOC vect_location;
    in tree-vect-loop-manip.c.  */
 extern void slpeel_make_loop_iterate_ntimes (struct loop *, tree);
 extern bool slpeel_can_duplicate_loop_p (const struct loop *, const_edge);
+struct loop *slpeel_tree_duplicate_loop_to_edge_cfg (struct loop *,
+						     struct loop *, edge);
 extern void vect_loop_versioning (loop_vec_info, unsigned int, bool);
-extern void vect_do_peeling_for_loop_bound (loop_vec_info, tree *,
+extern void vect_do_peeling_for_loop_bound (loop_vec_info, tree, tree,
 					    unsigned int, bool);
-extern void vect_do_peeling_for_alignment (loop_vec_info, unsigned int, bool);
-extern LOC find_loop_location (struct loop *);
+extern void vect_do_peeling_for_alignment (loop_vec_info, tree,
+					   unsigned int, bool);
+extern source_location find_loop_location (struct loop *);
 extern bool vect_can_advance_ivs_p (loop_vec_info);
 
 /* In tree-vect-stmts.c.  */
@@ -996,7 +1102,7 @@ extern void vect_detect_hybrid_slp (loop_vec_info);
 extern void vect_get_slp_defs (vec<tree> , slp_tree,
 			       vec<vec<tree> > *, int);
 
-extern LOC find_bb_location (basic_block);
+extern source_location find_bb_location (basic_block);
 extern bb_vec_info vect_slp_analyze_bb (basic_block);
 extern void vect_slp_transform_bb (basic_block);
 
@@ -1005,10 +1111,11 @@ extern void vect_slp_transform_bb (basic_block);
    Additional pattern recognition functions can (and will) be added
    in the future.  */
 typedef gimple (* vect_recog_func_ptr) (vec<gimple> *, tree *, tree *);
-#define NUM_PATTERNS 10
+#define NUM_PATTERNS 11
 void vect_pattern_recog (loop_vec_info, bb_vec_info);
 
 /* In tree-vectorizer.c.  */
 unsigned vectorize_loops (void);
+void vect_destroy_datarefs (loop_vec_info, bb_vec_info);
 
 #endif  /* GCC_TREE_VECTORIZER_H  */

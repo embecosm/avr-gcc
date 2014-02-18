@@ -1,5 +1,5 @@
 /* Routines for discovering and unpropagating edge equivalences.
-   Copyright (C) 2005-2013 Free Software Foundation, Inc.
+   Copyright (C) 2005-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,11 +22,22 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "flags.h"
 #include "tm_p.h"
 #include "basic-block.h"
 #include "function.h"
-#include "tree-flow.h"
+#include "hash-table.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
 #include "domwalk.h"
 #include "tree-pass.h"
 #include "tree-ssa-propagate.h"
@@ -54,7 +65,7 @@ associate_equivalences_with_edges (void)
 
   /* Walk over each block.  If the block ends with a control statement,
      then it might create a useful equivalence.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator gsi = gsi_last_bb (bb);
       gimple stmt;
@@ -168,7 +179,7 @@ associate_equivalences_with_edges (void)
 	      && !SSA_NAME_OCCURS_IN_ABNORMAL_PHI (cond))
 	    {
 	      int i, n_labels = gimple_switch_num_labels (stmt);
-	      tree *info = XCNEWVEC (tree, last_basic_block);
+	      tree *info = XCNEWVEC (tree, last_basic_block_for_fn (cfun));
 
 	      /* Walk over the case label vector.  Record blocks
 		 which are reached by a single case label which represents
@@ -188,7 +199,7 @@ associate_equivalences_with_edges (void)
 
 	      /* Now walk over the blocks to determine which ones were
 		 marked as being reached by a useful case label.  */
-	      for (i = 0; i < n_basic_blocks; i++)
+	      for (i = 0; i < n_basic_blocks_for_fn (cfun); i++)
 		{
 		  tree node = info[i];
 
@@ -203,7 +214,8 @@ associate_equivalences_with_edges (void)
 		      equivalency = XNEW (struct edge_equivalency);
 		      equivalency->rhs = x;
 		      equivalency->lhs = cond;
-		      find_edge (bb, BASIC_BLOCK (i))->aux = equivalency;
+		      find_edge (bb, BASIC_BLOCK_FOR_FN (cfun, i))->aux =
+			equivalency;
 		    }
 		}
 	      free (info);
@@ -259,11 +271,6 @@ associate_equivalences_with_edges (void)
    so with each value we have a list of SSA_NAMEs that have the
    same value.  */
 
-/* As we enter each block we record the value for any edge equivalency
-   leading to this block.  If no such edge equivalency exists, then we
-   record NULL.  These equivalences are live until we leave the dominator
-   subtree rooted at the block where we record the equivalency.  */
-static vec<tree> equiv_stack;
 
 /* Main structure for recording equivalences into our hash table.  */
 struct equiv_hash_elt
@@ -316,8 +323,6 @@ val_ssa_equiv_hasher::remove (value_type *elt)
    able to reuse tree-vn for this code.  */
 static hash_table <val_ssa_equiv_hasher> val_ssa_equiv;
 
-static void uncprop_enter_block (struct dom_walk_data *, basic_block);
-static void uncprop_leave_block (struct dom_walk_data *, basic_block);
 static void uncprop_into_successor_phis (basic_block);
 
 /* Remove the most recently recorded equivalency for VALUE.  */
@@ -361,48 +366,47 @@ record_equiv (tree value, tree equivalence)
   an_equiv_elt_p->equivalences.safe_push (equivalence);
 }
 
+class uncprop_dom_walker : public dom_walker
+{
+public:
+  uncprop_dom_walker (cdi_direction direction) : dom_walker (direction) {}
+
+  virtual void before_dom_children (basic_block);
+  virtual void after_dom_children (basic_block);
+
+private:
+
+  /* As we enter each block we record the value for any edge equivalency
+     leading to this block.  If no such edge equivalency exists, then we
+     record NULL.  These equivalences are live until we leave the dominator
+     subtree rooted at the block where we record the equivalency.  */
+  auto_vec<tree, 2> m_equiv_stack;
+};
+
 /* Main driver for un-cprop.  */
 
 static unsigned int
 tree_ssa_uncprop (void)
 {
-  struct dom_walk_data walk_data;
   basic_block bb;
 
   associate_equivalences_with_edges ();
 
   /* Create our global data structures.  */
   val_ssa_equiv.create (1024);
-  equiv_stack.create (2);
 
   /* We're going to do a dominator walk, so ensure that we have
      dominance information.  */
   calculate_dominance_info (CDI_DOMINATORS);
 
-  /* Setup callbacks for the generic dominator tree walker.  */
-  walk_data.dom_direction = CDI_DOMINATORS;
-  walk_data.initialize_block_local_data = NULL;
-  walk_data.before_dom_children = uncprop_enter_block;
-  walk_data.after_dom_children = uncprop_leave_block;
-  walk_data.global_data = NULL;
-  walk_data.block_local_data_size = 0;
-
-  /* Now initialize the dominator walker.  */
-  init_walk_dominator_tree (&walk_data);
-
   /* Recursively walk the dominator tree undoing unprofitable
      constant/copy propagations.  */
-  walk_dominator_tree (&walk_data, ENTRY_BLOCK_PTR);
+  uncprop_dom_walker (CDI_DOMINATORS).walk (cfun->cfg->x_entry_block_ptr);
 
-  /* Finalize and clean up.  */
-  fini_walk_dominator_tree (&walk_data);
-
-  /* EQUIV_STACK should already be empty at this point, so we just
-     need to empty elements out of the hash table, free EQUIV_STACK,
-     and cleanup the AUX field on the edges.  */
+  /* we just need to empty elements out of the hash table, and cleanup the
+    AUX field on the edges.  */
   val_ssa_equiv.dispose ();
-  equiv_stack.release ();
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       edge e;
       edge_iterator ei;
@@ -424,12 +428,11 @@ tree_ssa_uncprop (void)
    any finalization actions in preparation for leaving this node in
    the dominator tree.  */
 
-static void
-uncprop_leave_block (struct dom_walk_data *walk_data ATTRIBUTE_UNUSED,
-		     basic_block bb ATTRIBUTE_UNUSED)
+void
+uncprop_dom_walker::after_dom_children (basic_block bb ATTRIBUTE_UNUSED)
 {
   /* Pop the topmost value off the equiv stack.  */
-  tree value = equiv_stack.pop ();
+  tree value = m_equiv_stack.pop ();
 
   /* If that value was non-null, then pop the topmost equivalency off
      its equivalency stack.  */
@@ -474,12 +477,11 @@ uncprop_into_successor_phis (basic_block bb)
 	  equiv_hash_elt an_equiv_elt;
 	  equiv_hash_elt **slot;
 
-	  /* If the argument is not an invariant, and refers to the same
-	     underlying variable as the PHI result, then there's no
-	     point in un-propagating the argument.  */
+	  /* If the argument is not an invariant and can be potentially
+	     coalesced with the result, then there's no point in
+	     un-propagating the argument.  */
 	  if (!is_gimple_min_invariant (arg)
-	      && (SSA_NAME_VAR (arg) == SSA_NAME_VAR (res)
-		  && TREE_TYPE (arg) == TREE_TYPE (res)))
+	      && gimple_can_coalesce_p (arg, res))
 	    continue;
 
 	  /* Lookup this argument's value in the hash table.  */
@@ -493,7 +495,7 @@ uncprop_into_successor_phis (basic_block bb)
 	      int j;
 
 	      /* Walk every equivalence with the same value.  If we find
-		 one with the same underlying variable as the PHI result,
+		 one that can potentially coalesce with the PHI rsult,
 		 then replace the value in the argument with its equivalent
 		 SSA_NAME.  Use the most recent equivalence as hopefully
 		 that results in shortest lifetimes.  */
@@ -501,8 +503,7 @@ uncprop_into_successor_phis (basic_block bb)
 		{
 		  tree equiv = elt->equivalences[j];
 
-		  if (SSA_NAME_VAR (equiv) == SSA_NAME_VAR (res)
-		      && TREE_TYPE (equiv) == TREE_TYPE (res))
+		  if (gimple_can_coalesce_p (equiv, res))
 		    {
 		      SET_PHI_ARG_DEF (phi, e->dest_idx, equiv);
 		      break;
@@ -549,9 +550,8 @@ single_incoming_edge_ignoring_loop_edges (basic_block bb)
   return retval;
 }
 
-static void
-uncprop_enter_block (struct dom_walk_data *walk_data ATTRIBUTE_UNUSED,
-		     basic_block bb)
+void
+uncprop_dom_walker::before_dom_children (basic_block bb)
 {
   basic_block parent;
   edge e;
@@ -570,13 +570,13 @@ uncprop_enter_block (struct dom_walk_data *walk_data ATTRIBUTE_UNUSED,
 	  struct edge_equivalency *equiv = (struct edge_equivalency *) e->aux;
 
 	  record_equiv (equiv->rhs, equiv->lhs);
-	  equiv_stack.safe_push (equiv->rhs);
+	  m_equiv_stack.safe_push (equiv->rhs);
 	  recorded = true;
 	}
     }
 
   if (!recorded)
-    equiv_stack.safe_push (NULL_TREE);
+    m_equiv_stack.safe_push (NULL_TREE);
 
   uncprop_into_successor_phis (bb);
 }
@@ -587,22 +587,41 @@ gate_uncprop (void)
   return flag_tree_dom != 0;
 }
 
-struct gimple_opt_pass pass_uncprop =
+namespace {
+
+const pass_data pass_data_uncprop =
 {
- {
-  GIMPLE_PASS,
-  "uncprop",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_uncprop,				/* gate */
-  tree_ssa_uncprop,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_TREE_SSA_UNCPROP,			/* tv_id */
-  PROP_cfg | PROP_ssa,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_verify_ssa	                /* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "uncprop", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_SSA_UNCPROP, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_ssa, /* todo_flags_finish */
 };
+
+class pass_uncprop : public gimple_opt_pass
+{
+public:
+  pass_uncprop (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_uncprop, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  opt_pass * clone () { return new pass_uncprop (m_ctxt); }
+  bool gate () { return gate_uncprop (); }
+  unsigned int execute () { return tree_ssa_uncprop (); }
+
+}; // class pass_uncprop
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_uncprop (gcc::context *ctxt)
+{
+  return new pass_uncprop (ctxt);
+}

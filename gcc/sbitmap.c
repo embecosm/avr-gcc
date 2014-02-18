@@ -1,5 +1,5 @@
 /* Simple bitmaps.
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -30,15 +30,15 @@ along with GCC; see the file COPYING3.  If not see
 
 #if GCC_VERSION >= 3400
 #  if SBITMAP_ELT_BITS == HOST_BITS_PER_LONG
-#    define do_popcount(x) __builtin_popcountl(x)
+#    define do_popcount(x) __builtin_popcountl (x)
 #  elif SBITMAP_ELT_BITS == HOST_BITS_PER_LONGLONG
-#    define do_popcount(x) __builtin_popcountll(x)
+#    define do_popcount(x) __builtin_popcountll (x)
 #  else
 #    error "internal error: sbitmap.h and hwint.h are inconsistent"
 #  endif
 #else
 static unsigned long sbitmap_elt_popcount (SBITMAP_ELT_TYPE);
-#  define do_popcount(x) sbitmap_elt_popcount((x))
+#  define do_popcount(x) sbitmap_elt_popcount (x)
 #endif
 
 typedef SBITMAP_ELT_TYPE *sbitmap_ptr;

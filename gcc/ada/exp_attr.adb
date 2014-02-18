@@ -136,11 +136,11 @@ package body Exp_Attr is
    --  that takes two floating-point arguments. The function to be called
    --  is always the same as the attribute name.
 
-   procedure Expand_Loop_Entry_Attribute (Attr : Node_Id);
+   procedure Expand_Loop_Entry_Attribute (N : Node_Id);
    --  Handle the expansion of attribute 'Loop_Entry. As a result, the related
    --  loop may be converted into a conditional block. See body for details.
 
-   procedure Expand_Pred_Succ (N : Node_Id);
+   procedure Expand_Pred_Succ_Attribute (N : Node_Id);
    --  Handles expansion of Pred or Succ attributes for case of non-real
    --  operand with overflow checking required.
 
@@ -567,7 +567,7 @@ package body Exp_Attr is
       --  of the entities in the Fat packages, but first they have identical
       --  names (so we would have to have lots of renaming declarations to
       --  meet the normal RE rule of separate names for all runtime entities),
-      --  and second there would be an awful lot of them!
+      --  and second there would be an awful lot of them.
 
       Fnm :=
         Make_Selected_Component (Loc,
@@ -657,7 +657,7 @@ package body Exp_Attr is
    -- Expand_Loop_Entry_Attribute --
    ---------------------------------
 
-   procedure Expand_Loop_Entry_Attribute (Attr : Node_Id) is
+   procedure Expand_Loop_Entry_Attribute (N : Node_Id) is
       procedure Build_Conditional_Block
         (Loc       : Source_Ptr;
          Cond      : Node_Id;
@@ -730,8 +730,8 @@ package body Exp_Attr is
 
       --  Local variables
 
-      Exprs     : constant List_Id   := Expressions (Attr);
-      Pref      : constant Node_Id   := Prefix (Attr);
+      Exprs     : constant List_Id   := Expressions (N);
+      Pref      : constant Node_Id   := Prefix (N);
       Typ       : constant Entity_Id := Etype (Pref);
       Blk       : Node_Id;
       Decls     : List_Id;
@@ -760,7 +760,7 @@ package body Exp_Attr is
       --  internally generated loops for quantified expressions.
 
       else
-         Loop_Stmt := Attr;
+         Loop_Stmt := N;
          while Present (Loop_Stmt) loop
             if Nkind (Loop_Stmt) = N_Loop_Statement
               and then Present (Identifier (Loop_Stmt))
@@ -1002,7 +1002,7 @@ package body Exp_Attr is
 
       --  Step 4: Analyze all bits
 
-      Rewrite (Attr, New_Reference_To (Temp_Id, Loc));
+      Rewrite (N, New_Reference_To (Temp_Id, Loc));
 
       Installed := Current_Scope = Scope (Loop_Id);
 
@@ -1028,7 +1028,7 @@ package body Exp_Attr is
          Analyze (Temp_Decl);
       end if;
 
-      Analyze (Attr);
+      Analyze (N);
 
       if not Installed then
          Pop_Scope;
@@ -1296,14 +1296,14 @@ package body Exp_Attr is
             --  Handle designated types that come from the limited view
 
             if Ekind (Btyp_DDT) = E_Incomplete_Type
-              and then From_With_Type (Btyp_DDT)
+              and then From_Limited_With (Btyp_DDT)
               and then Present (Non_Limited_View (Btyp_DDT))
             then
                Btyp_DDT := Non_Limited_View (Btyp_DDT);
 
             elsif Is_Class_Wide_Type (Btyp_DDT)
                and then Ekind (Etype (Btyp_DDT)) = E_Incomplete_Type
-               and then From_With_Type (Etype (Btyp_DDT))
+               and then From_Limited_With (Etype (Btyp_DDT))
                and then Present (Non_Limited_View (Etype (Btyp_DDT)))
                and then Present (Class_Wide_Type
                                   (Non_Limited_View (Etype (Btyp_DDT))))
@@ -2602,7 +2602,7 @@ package body Exp_Attr is
          --  This is simply a direct conversion from the enumeration type to
          --  the target integer type, which is treated by the back end as a
          --  normal integer conversion, treating the enumeration type as an
-         --  integer, which is exactly what we want! We set Conversion_OK to
+         --  integer, which is exactly what we want. We set Conversion_OK to
          --  make sure that the analyzer does not complain about what otherwise
          --  might be an illegal conversion.
 
@@ -2798,7 +2798,7 @@ package body Exp_Attr is
 
       --  Note: it might appear that a properly analyzed unchecked conversion
       --  would be just fine here, but that's not the case, since the full
-      --  range checks performed by the following call are critical!
+      --  range checks performed by the following call are critical.
 
          Apply_Type_Conversion_Checks (N);
       end Fixed_Value;
@@ -3274,7 +3274,7 @@ package body Exp_Attr is
 
       --  Note: it might appear that a properly analyzed unchecked conversion
       --  would be just fine here, but that's not the case, since the full
-      --  range checks performed by the following call are critical!
+      --  range checks performed by the following call are critical.
 
          Apply_Type_Conversion_Checks (N);
       end Integer_Value;
@@ -3616,6 +3616,44 @@ package body Exp_Attr is
          Analyze_And_Resolve (N, Typ);
       end Mantissa;
 
+      ---------
+      -- Max --
+      ---------
+
+      when Attribute_Max =>
+
+         --  Max is handled by the back end (except that static cases have
+         --  already been evaluated during semantic processing, but anyway
+         --  the back end should not count on this). The one bit of special
+         --  processing required in the normal case is that this attribute
+         --  typically generates conditionals in the code, so we must check
+         --  the relevant restriction.
+
+         Check_Restriction (No_Implicit_Conditionals, N);
+
+         --  In Modify_Tree_For_C mode, we rewrite as an if expression
+
+         if Modify_Tree_For_C then
+            declare
+               Loc   : constant Source_Ptr := Sloc (N);
+               Typ   : constant Entity_Id  := Etype (N);
+               Expr  : constant Node_Id    := First (Expressions (N));
+               Left  : constant Node_Id    := Relocate_Node (Expr);
+               Right : constant Node_Id    := Relocate_Node (Next (Expr));
+
+            begin
+               Rewrite (N,
+                 Make_If_Expression (Loc,
+                   Expressions => New_List (
+                     Make_Op_Ge (Loc,
+                       Left_Opnd  => Left,
+                       Right_Opnd => Right),
+                     Duplicate_Subexpr_No_Checks (Left),
+                     Duplicate_Subexpr_No_Checks (Right))));
+               Analyze_And_Resolve (N, Typ);
+            end;
+         end if;
+
       ----------------------------------
       -- Max_Size_In_Storage_Elements --
       ----------------------------------
@@ -3701,6 +3739,44 @@ package body Exp_Attr is
            and then Present (Alias (Entity (Pref)))
          then
             Set_Renamed_Subprogram (Pref, Alias (Entity (Pref)));
+         end if;
+
+      ---------
+      -- Min --
+      ---------
+
+      when Attribute_Min =>
+
+         --  Min is handled by the back end (except that static cases have
+         --  already been evaluated during semantic processing, but anyway
+         --  the back end should not count on this). The one bit of special
+         --  processing required in the normal case is that this attribute
+         --  typically generates conditionals in the code, so we must check
+         --  the relevant restriction.
+
+         Check_Restriction (No_Implicit_Conditionals, N);
+
+         --  In Modify_Tree_For_C mode, we rewrite as an if expression
+
+         if Modify_Tree_For_C then
+            declare
+               Loc   : constant Source_Ptr := Sloc (N);
+               Typ   : constant Entity_Id  := Etype (N);
+               Expr  : constant Node_Id    := First (Expressions (N));
+               Left  : constant Node_Id    := Relocate_Node (Expr);
+               Right : constant Node_Id    := Relocate_Node (Next (Expr));
+
+            begin
+               Rewrite (N,
+                 Make_If_Expression (Loc,
+                   Expressions => New_List (
+                     Make_Op_Le (Loc,
+                       Left_Opnd  => Left,
+                       Right_Opnd => Right),
+                     Duplicate_Subexpr_No_Checks (Left),
+                     Duplicate_Subexpr_No_Checks (Right))));
+               Analyze_And_Resolve (N, Typ);
+            end;
          end if;
 
       ---------
@@ -3806,9 +3882,9 @@ package body Exp_Attr is
       ---------
 
       when Attribute_Old => Old : declare
-         Tnn     : constant Entity_Id := Make_Temporary (Loc, 'T', Pref);
-         Subp    : Node_Id;
          Asn_Stm : Node_Id;
+         Subp    : Node_Id;
+         Temp    : Entity_Id;
 
       begin
          --  If assertions are disabled, no need to create the declaration
@@ -3818,45 +3894,56 @@ package body Exp_Attr is
             return;
          end if;
 
-         --  Find the nearest subprogram body, ignoring _Preconditions
+         Temp := Make_Temporary (Loc, 'T', Pref);
+
+         --  Climb the parent chain looking for subprogram _Postconditions
 
          Subp := N;
-         loop
-            Subp := Parent (Subp);
+         while Present (Subp) loop
             exit when Nkind (Subp) = N_Subprogram_Body
-              and then Chars (Defining_Entity (Subp)) /= Name_uPostconditions;
+              and then Chars (Defining_Entity (Subp)) = Name_uPostconditions;
+
+            Subp := Parent (Subp);
          end loop;
 
-         --  Insert the initialized object declaration at the start of the
-         --  subprogram's declarations.
+         --  'Old can only appear in a postcondition, the generated body of
+         --  _Postconditions must be in the tree.
+
+         pragma Assert (Present (Subp));
+
+         --  Generate:
+         --    Temp : constant <Pref type> := <Pref>;
 
          Asn_Stm :=
            Make_Object_Declaration (Loc,
-             Defining_Identifier => Tnn,
+             Defining_Identifier => Temp,
              Constant_Present    => True,
              Object_Definition   => New_Occurrence_Of (Etype (N), Loc),
              Expression          => Pref);
 
-         --  Push the subprogram's scope, so that the object will be analyzed
-         --  in that context (rather than the context of the Precondition
-         --  subprogram) and will have its Scope set properly.
+         --  Push the scope of the related subprogram where _Postcondition
+         --  resides as this ensures that the object will be analyzed in the
+         --  proper context.
 
-         if Present (Corresponding_Spec (Subp)) then
-            Push_Scope (Corresponding_Spec (Subp));
-         else
-            Push_Scope (Defining_Entity (Subp));
-         end if;
+         Push_Scope (Scope (Defining_Entity (Subp)));
 
-         if Is_Empty_List (Declarations (Subp)) then
-            Set_Declarations (Subp, New_List (Asn_Stm));
-            Analyze (Asn_Stm);
-         else
-            Insert_Action (First (Declarations (Subp)), Asn_Stm);
-         end if;
+         --  The object declaration is inserted before the body of subprogram
+         --  _Postconditions. This ensures that any precondition-like actions
+         --  are still executed before any parameter values are captured and
+         --  the multiple 'Old occurrences appear in order of declaration.
 
+         Insert_Before_And_Analyze (Subp, Asn_Stm);
          Pop_Scope;
 
-         Rewrite (N, New_Occurrence_Of (Tnn, Loc));
+         --  Ensure that the prefix of attribute 'Old is valid. The check must
+         --  be inserted after the expansion of the attribute has taken place
+         --  to reflect the new placement of the prefix.
+
+         if Validity_Checks_On and then Validity_Check_Operands then
+            Ensure_Valid (Pref);
+         end if;
+
+         Rewrite (N, New_Occurrence_Of (Temp, Loc));
       end Old;
 
       ----------------------
@@ -4367,7 +4454,7 @@ package body Exp_Attr is
            or else Do_Range_Check (First (Exprs))
          then
             Set_Do_Range_Check (First (Exprs), False);
-            Expand_Pred_Succ (N);
+            Expand_Pred_Succ_Attribute (N);
          end if;
       end Pred;
 
@@ -5415,7 +5502,7 @@ package body Exp_Attr is
            or else Do_Range_Check (First (Exprs))
          then
             Set_Do_Range_Check (First (Exprs), False);
-            Expand_Pred_Succ (N);
+            Expand_Pred_Succ_Attribute (N);
          end if;
       end Succ;
 
@@ -5767,7 +5854,7 @@ package body Exp_Attr is
          begin
             --  The value whose validity is being checked has been captured in
             --  an object declaration. We certainly don't want this object to
-            --  appear valid because the declaration initializes it!
+            --  appear valid because the declaration initializes it.
 
             if Is_Entity_Name (Temp) then
                Set_Is_Known_Valid (Entity (Temp), False);
@@ -5983,7 +6070,7 @@ package body Exp_Attr is
 
          --  But that's precisely what won't work because of possible
          --  unwanted optimization (and indeed the basic motivation for
-         --  the Valid attribute is exactly that this test does not work!)
+         --  the Valid attribute is exactly that this test does not work).
          --  What will work is:
 
          --     Btyp!(X) >= Btyp!(type(X)'First)
@@ -6429,17 +6516,6 @@ package body Exp_Attr is
 
       --  The following attributes are handled by the back end (except that
       --  static cases have already been evaluated during semantic processing,
-      --  but in any case the back end should not count on this). The one bit
-      --  of special processing required is that these attributes typically
-      --  generate conditionals in the code, so we need to check the relevant
-      --  restriction.
-
-      when Attribute_Max                          |
-           Attribute_Min                          =>
-         Check_Restriction (No_Implicit_Conditionals, N);
-
-      --  The following attributes are handled by the back end (except that
-      --  static cases have already been evaluated during semantic processing,
       --  but in any case the back end should not count on this).
 
       --  The back end also handles the non-class-wide cases of Size
@@ -6485,6 +6561,7 @@ package body Exp_Attr is
            Attribute_Has_Tagged_Values            |
            Attribute_Large                        |
            Attribute_Last_Valid                   |
+           Attribute_Library_Level                |
            Attribute_Lock_Free                    |
            Attribute_Machine_Emax                 |
            Attribute_Machine_Emin                 |
@@ -6500,6 +6577,7 @@ package body Exp_Attr is
            Attribute_Modulus                      |
            Attribute_Partition_ID                 |
            Attribute_Range                        |
+           Attribute_Restriction_Set              |
            Attribute_Safe_Emax                    |
            Attribute_Safe_First                   |
            Attribute_Safe_Large                   |
@@ -6539,9 +6617,9 @@ package body Exp_Attr is
          return;
    end Expand_N_Attribute_Reference;
 
-   ----------------------
-   -- Expand_Pred_Succ --
-   ----------------------
+   --------------------------------
+   -- Expand_Pred_Succ_Attribute --
+   --------------------------------
 
    --  For typ'Pred (exp), we generate the check
 
@@ -6557,7 +6635,7 @@ package body Exp_Attr is
    --  statement or the expression of an object declaration, where the flag
    --  Suppress_Assignment_Checks is set for the assignment/declaration.
 
-   procedure Expand_Pred_Succ (N : Node_Id) is
+   procedure Expand_Pred_Succ_Attribute (N : Node_Id) is
       Loc  : constant Source_Ptr := Sloc (N);
       P    : constant Node_Id    := Parent (N);
       Cnam : Name_Id;
@@ -6585,7 +6663,7 @@ package body Exp_Attr is
                      Attribute_Name => Cnam)),
              Reason => CE_Overflow_Check_Failed));
       end if;
-   end Expand_Pred_Succ;
+   end Expand_Pred_Succ_Attribute;
 
    -----------------------------
    -- Expand_Update_Attribute --
@@ -6607,12 +6685,14 @@ package body Exp_Attr is
       procedure Process_Range_Update
         (Temp : Entity_Id;
          Comp : Node_Id;
-         Expr : Node_Id);
+         Expr : Node_Id;
+         Typ  : Entity_Id);
       --  Generate the statements necessary to update a slice of the prefix.
       --  The code is inserted before the attribute N. Temp denotes the entity
       --  of the anonymous object created to reflect the changes in values.
       --  Comp is range of the slice to be updated. Expr is an expression
-      --  yielding the new value of Comp.
+      --  yielding the new value of Comp. Typ is the type of the prefix of
+      --  attribute Update.
 
       -----------------------------------------
       -- Process_Component_Or_Element_Update --
@@ -6686,10 +6766,12 @@ package body Exp_Attr is
       procedure Process_Range_Update
         (Temp : Entity_Id;
          Comp : Node_Id;
-         Expr : Node_Id)
+         Expr : Node_Id;
+         Typ  : Entity_Id)
       is
-         Loc   : constant Source_Ptr := Sloc (Comp);
-         Index : Entity_Id;
+         Index_Typ : constant Entity_Id  := Etype (First_Index (Typ));
+         Loc       : constant Source_Ptr := Sloc (Comp);
+         Index     : Entity_Id;
 
       begin
          --  A range update appears as
@@ -6701,7 +6783,7 @@ package body Exp_Attr is
          --  value of Expr:
 
          --    for Index in Low .. High loop
-         --       Temp (Index) := Expr;
+         --       Temp (<Index_Typ> (Index)) := Expr;
          --    end loop;
 
          Index := Make_Temporary (Loc, 'I');
@@ -6720,7 +6802,8 @@ package body Exp_Attr is
                  Name       =>
                    Make_Indexed_Component (Loc,
                      Prefix      => New_Reference_To (Temp, Loc),
-                     Expressions => New_List (New_Reference_To (Index, Loc))),
+                     Expressions => New_List (
+                       Convert_To (Index_Typ, New_Reference_To (Index, Loc)))),
                  Expression => Relocate_Node (Expr))),
 
              End_Label        => Empty));
@@ -6728,10 +6811,10 @@ package body Exp_Attr is
 
       --  Local variables
 
-      Aggr  : constant Node_Id := First (Expressions (N));
+      Aggr  : constant Node_Id    := First (Expressions (N));
       Loc   : constant Source_Ptr := Sloc (N);
-      Pref  : constant Node_Id := Prefix (N);
-      Typ   : constant Entity_Id := Etype (Pref);
+      Pref  : constant Node_Id    := Prefix (N);
+      Typ   : constant Entity_Id  := Etype (Pref);
       Assoc : Node_Id;
       Comp  : Node_Id;
       Expr  : Node_Id;
@@ -6761,7 +6844,7 @@ package body Exp_Attr is
          Expr := Expression (Assoc);
          while Present (Comp) loop
             if Nkind (Comp) = N_Range then
-               Process_Range_Update (Temp, Comp, Expr);
+               Process_Range_Update (Temp, Comp, Expr, Typ);
             else
                Process_Component_Or_Element_Update (Temp, Comp, Expr, Typ);
             end if;
@@ -6878,7 +6961,7 @@ package body Exp_Attr is
       --  Function to check whether the specified run-time call is available
       --  in the run time used. In the case of a configurable run time, it
       --  is normal that some subprograms are not there.
-
+      --
       --  I don't understand this routine at all, why is this not just a
       --  call to RTE_Available? And if for some reason we need a different
       --  routine with different semantics, why is not in Rtsfind ???
@@ -6892,8 +6975,7 @@ package body Exp_Attr is
          --  Assume that the unit will always be available when using a
          --  "normal" (not configurable) run time.
 
-         return not Configurable_Run_Time_Mode
-           or else RTE_Available (Entity);
+         return not Configurable_Run_Time_Mode or else RTE_Available (Entity);
       end Is_Available;
 
    --  Start of processing for Find_Stream_Subprogram
@@ -6928,9 +7010,148 @@ package body Exp_Attr is
         and then
           not Is_Predefined_File_Name (Unit_File_Name (Current_Sem_Unit))
       then
+         --  Storage_Array as defined in package System.Storage_Elements
+
+         if Is_RTE (Base_Typ, RE_Storage_Array) then
+
+            --  Case of No_Stream_Optimizations restriction active
+
+            if Restriction_Active (No_Stream_Optimizations) then
+               if Nam = TSS_Stream_Input
+                 and then Is_Available (RE_Storage_Array_Input)
+               then
+                  return RTE (RE_Storage_Array_Input);
+
+               elsif Nam = TSS_Stream_Output
+                 and then Is_Available (RE_Storage_Array_Output)
+               then
+                  return RTE (RE_Storage_Array_Output);
+
+               elsif Nam = TSS_Stream_Read
+                 and then Is_Available (RE_Storage_Array_Read)
+               then
+                  return RTE (RE_Storage_Array_Read);
+
+               elsif Nam = TSS_Stream_Write
+                 and then Is_Available (RE_Storage_Array_Write)
+               then
+                  return RTE (RE_Storage_Array_Write);
+
+               elsif Nam /= TSS_Stream_Input  and then
+                     Nam /= TSS_Stream_Output and then
+                     Nam /= TSS_Stream_Read   and then
+                     Nam /= TSS_Stream_Write
+               then
+                  raise Program_Error;
+               end if;
+
+            --  Restriction No_Stream_Optimizations is not set, so we can go
+            --  ahead and optimize using the block IO forms of the routines.
+
+            else
+               if Nam = TSS_Stream_Input
+                 and then Is_Available (RE_Storage_Array_Input_Blk_IO)
+               then
+                  return RTE (RE_Storage_Array_Input_Blk_IO);
+
+               elsif Nam = TSS_Stream_Output
+                 and then Is_Available (RE_Storage_Array_Output_Blk_IO)
+               then
+                  return RTE (RE_Storage_Array_Output_Blk_IO);
+
+               elsif Nam = TSS_Stream_Read
+                 and then Is_Available (RE_Storage_Array_Read_Blk_IO)
+               then
+                  return RTE (RE_Storage_Array_Read_Blk_IO);
+
+               elsif Nam = TSS_Stream_Write
+                 and then Is_Available (RE_Storage_Array_Write_Blk_IO)
+               then
+                  return RTE (RE_Storage_Array_Write_Blk_IO);
+
+               elsif Nam /= TSS_Stream_Input  and then
+                     Nam /= TSS_Stream_Output and then
+                     Nam /= TSS_Stream_Read   and then
+                     Nam /= TSS_Stream_Write
+               then
+                  raise Program_Error;
+               end if;
+            end if;
+
+         --  Stream_Element_Array as defined in package Ada.Streams
+
+         elsif Is_RTE (Base_Typ, RE_Stream_Element_Array) then
+
+            --  Case of No_Stream_Optimizations restriction active
+
+            if Restriction_Active (No_Stream_Optimizations) then
+               if Nam = TSS_Stream_Input
+                 and then Is_Available (RE_Stream_Element_Array_Input)
+               then
+                  return RTE (RE_Stream_Element_Array_Input);
+
+               elsif Nam = TSS_Stream_Output
+                 and then Is_Available (RE_Stream_Element_Array_Output)
+               then
+                  return RTE (RE_Stream_Element_Array_Output);
+
+               elsif Nam = TSS_Stream_Read
+                 and then Is_Available (RE_Stream_Element_Array_Read)
+               then
+                  return RTE (RE_Stream_Element_Array_Read);
+
+               elsif Nam = TSS_Stream_Write
+                 and then Is_Available (RE_Stream_Element_Array_Write)
+               then
+                  return RTE (RE_Stream_Element_Array_Write);
+
+               elsif Nam /= TSS_Stream_Input  and then
+                     Nam /= TSS_Stream_Output and then
+                     Nam /= TSS_Stream_Read   and then
+                     Nam /= TSS_Stream_Write
+               then
+                  raise Program_Error;
+               end if;
+
+            --  Restriction No_Stream_Optimizations is not set, so we can go
+            --  ahead and optimize using the block IO forms of the routines.
+
+            else
+               if Nam = TSS_Stream_Input
+                 and then Is_Available (RE_Stream_Element_Array_Input_Blk_IO)
+               then
+                  return RTE (RE_Stream_Element_Array_Input_Blk_IO);
+
+               elsif Nam = TSS_Stream_Output
+                 and then Is_Available (RE_Stream_Element_Array_Output_Blk_IO)
+               then
+                  return RTE (RE_Stream_Element_Array_Output_Blk_IO);
+
+               elsif Nam = TSS_Stream_Read
+                 and then Is_Available (RE_Stream_Element_Array_Read_Blk_IO)
+               then
+                  return RTE (RE_Stream_Element_Array_Read_Blk_IO);
+
+               elsif Nam = TSS_Stream_Write
+                 and then Is_Available (RE_Stream_Element_Array_Write_Blk_IO)
+               then
+                  return RTE (RE_Stream_Element_Array_Write_Blk_IO);
+
+               elsif Nam /= TSS_Stream_Input  and then
+                     Nam /= TSS_Stream_Output and then
+                     Nam /= TSS_Stream_Read   and then
+                     Nam /= TSS_Stream_Write
+               then
+                  raise Program_Error;
+               end if;
+            end if;
+
          --  String as defined in package Ada
 
-         if Base_Typ = Standard_String then
+         elsif Base_Typ = Standard_String then
+
+            --  Case of No_Stream_Optimizations restriction active
+
             if Restriction_Active (No_Stream_Optimizations) then
                if Nam = TSS_Stream_Input
                  and then Is_Available (RE_String_Input)
@@ -6960,6 +7181,9 @@ package body Exp_Attr is
                   raise Program_Error;
                end if;
 
+            --  Restriction No_Stream_Optimizations is not set, so we can go
+            --  ahead and optimize using the block IO forms of the routines.
+
             else
                if Nam = TSS_Stream_Input
                  and then Is_Available (RE_String_Input_Blk_IO)
@@ -6981,9 +7205,9 @@ package body Exp_Attr is
                then
                   return RTE (RE_String_Write_Blk_IO);
 
-               elsif Nam /= TSS_Stream_Input and then
+               elsif Nam /= TSS_Stream_Input  and then
                      Nam /= TSS_Stream_Output and then
-                     Nam /= TSS_Stream_Read and then
+                     Nam /= TSS_Stream_Read   and then
                      Nam /= TSS_Stream_Write
                then
                   raise Program_Error;
@@ -6993,6 +7217,9 @@ package body Exp_Attr is
          --  Wide_String as defined in package Ada
 
          elsif Base_Typ = Standard_Wide_String then
+
+            --  Case of No_Stream_Optimizations restriction active
+
             if Restriction_Active (No_Stream_Optimizations) then
                if Nam = TSS_Stream_Input
                  and then Is_Available (RE_Wide_String_Input)
@@ -7014,13 +7241,16 @@ package body Exp_Attr is
                then
                   return RTE (RE_Wide_String_Write);
 
-               elsif Nam /= TSS_Stream_Input and then
+               elsif Nam /= TSS_Stream_Input  and then
                      Nam /= TSS_Stream_Output and then
-                     Nam /= TSS_Stream_Read and then
+                     Nam /= TSS_Stream_Read   and then
                      Nam /= TSS_Stream_Write
                then
                   raise Program_Error;
                end if;
+
+            --  Restriction No_Stream_Optimizations is not set, so we can go
+            --  ahead and optimize using the block IO forms of the routines.
 
             else
                if Nam = TSS_Stream_Input
@@ -7043,9 +7273,9 @@ package body Exp_Attr is
                then
                   return RTE (RE_Wide_String_Write_Blk_IO);
 
-               elsif Nam /= TSS_Stream_Input and then
+               elsif Nam /= TSS_Stream_Input  and then
                      Nam /= TSS_Stream_Output and then
-                     Nam /= TSS_Stream_Read and then
+                     Nam /= TSS_Stream_Read   and then
                      Nam /= TSS_Stream_Write
                then
                   raise Program_Error;
@@ -7055,6 +7285,9 @@ package body Exp_Attr is
          --  Wide_Wide_String as defined in package Ada
 
          elsif Base_Typ = Standard_Wide_Wide_String then
+
+            --  Case of No_Stream_Optimizations restriction active
+
             if Restriction_Active (No_Stream_Optimizations) then
                if Nam = TSS_Stream_Input
                  and then Is_Available (RE_Wide_Wide_String_Input)
@@ -7076,13 +7309,16 @@ package body Exp_Attr is
                then
                   return RTE (RE_Wide_Wide_String_Write);
 
-               elsif Nam /= TSS_Stream_Input and then
+               elsif Nam /= TSS_Stream_Input  and then
                      Nam /= TSS_Stream_Output and then
-                     Nam /= TSS_Stream_Read and then
+                     Nam /= TSS_Stream_Read   and then
                      Nam /= TSS_Stream_Write
                then
                   raise Program_Error;
                end if;
+
+            --  Restriction No_Stream_Optimizations is not set, so we can go
+            --  ahead and optimize using the block IO forms of the routines.
 
             else
                if Nam = TSS_Stream_Input
@@ -7105,9 +7341,9 @@ package body Exp_Attr is
                then
                   return RTE (RE_Wide_Wide_String_Write_Blk_IO);
 
-               elsif Nam /= TSS_Stream_Input and then
+               elsif Nam /= TSS_Stream_Input  and then
                      Nam /= TSS_Stream_Output and then
-                     Nam /= TSS_Stream_Read and then
+                     Nam /= TSS_Stream_Read   and then
                      Nam /= TSS_Stream_Write
                then
                   raise Program_Error;
@@ -7116,9 +7352,7 @@ package body Exp_Attr is
          end if;
       end if;
 
-      if Is_Tagged_Type (Typ)
-        and then Is_Derived_Type (Typ)
-      then
+      if Is_Tagged_Type (Typ) and then Is_Derived_Type (Typ) then
          return Find_Prim_Op (Typ, Nam);
       else
          return Find_Inherited_TSS (Typ, Nam);

@@ -1,5 +1,5 @@
 /* Prints out tree in human readable form - GCC
-   Copyright (C) 1990-2013 Free Software Foundation, Inc.
+   Copyright (C) 1990-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -23,12 +23,16 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "varasm.h"
+#include "print-rtl.h"
+#include "stor-layout.h"
 #include "ggc.h"
 #include "langhooks.h"
 #include "tree-iterator.h"
 #include "diagnostic.h"
 #include "gimple-pretty-print.h" /* FIXME */
-#include "tree-flow.h"
+#include "cgraph.h"
+#include "tree-cfg.h"
 #include "tree-dump.h"
 #include "dumpfile.h"
 
@@ -71,7 +75,7 @@ print_node_brief (FILE *file, const char *prefix, const_tree node, int indent)
      name if any.  */
   if (indent > 0)
     fprintf (file, " ");
-  fprintf (file, "%s <%s", prefix, tree_code_name[(int) TREE_CODE (node)]);
+  fprintf (file, "%s <%s", prefix, get_tree_code_name (TREE_CODE (node)));
   dump_addr (file, " ", node);
 
   if (tclass == tcc_declaration)
@@ -247,7 +251,7 @@ print_node (FILE *file, const char *prefix, tree node, int indent)
   indent_to (file, indent);
 
   /* Print the slot this node is in, and its code, and address.  */
-  fprintf (file, "%s <%s", prefix, tree_code_name[(int) code]);
+  fprintf (file, "%s <%s", prefix, get_tree_code_name (code));
   dump_addr (file, " ", node);
 
   /* Print the name, if any.  */
@@ -304,6 +308,8 @@ print_node (FILE *file, const char *prefix, tree node, int indent)
 
   if (TYPE_P (node) ? TYPE_READONLY (node) : TREE_READONLY (node))
     fputs (" readonly", file);
+  if (TYPE_P (node) && TYPE_ATOMIC (node))
+    fputs (" atomic", file);
   if (!TYPE_P (node) && TREE_CONSTANT (node))
     fputs (" constant", file);
   else if (TYPE_P (node) && TYPE_SIZES_GIMPLIFIED (node))
@@ -409,8 +415,6 @@ print_node (FILE *file, const char *prefix, tree node, int indent)
       if (code == FIELD_DECL && DECL_NONADDRESSABLE_P (node))
 	fputs (" nonaddressable", file);
 
-      if (code == LABEL_DECL && DECL_ERROR_ISSUED (node))
-	fputs (" error-issued", file);
       if (code == LABEL_DECL && EH_LANDING_PAD_NR (node))
 	fprintf (file, " landing-pad:%d", EH_LANDING_PAD_NR (node));
 
@@ -579,16 +583,12 @@ print_node (FILE *file, const char *prefix, tree node, int indent)
       if (TYPE_UNSIGNED (node))
 	fputs (" unsigned", file);
 
-      /* The no-force-blk flag is used for different things in
-	 different types.  */
-      if ((code == RECORD_TYPE
-	   || code == UNION_TYPE
-	   || code == QUAL_UNION_TYPE)
-	  && TYPE_NO_FORCE_BLK (node))
+      if (TYPE_NO_FORCE_BLK (node))
 	fputs (" no-force-blk", file);
 
       if (TYPE_STRING_FLAG (node))
 	fputs (" string-flag", file);
+
       if (TYPE_NEEDS_CONSTRUCTING (node))
 	fputs (" needs-constructing", file);
 
@@ -820,7 +820,7 @@ print_node (FILE *file, const char *prefix, tree node, int indent)
 		if (ch >= ' ' && ch < 127)
 		  putc (ch, file);
 		else
-		  fprintf(file, "\\%03o", ch & 0xFF);
+		  fprintf (file, "\\%03o", ch & 0xFF);
 	      }
 	    fputc ('\"', file);
 	  }
@@ -961,30 +961,6 @@ print_node (FILE *file, const char *prefix, tree node, int indent)
   fprintf (file, ">");
 }
 
-/* Print the tree vector VEC in full on file FILE, preceded by PREFIX,
-   starting in column INDENT.  */
-
-void
-print_vec_tree (FILE *file, const char *prefix, vec<tree, va_gc> *vec, int indent)
-{
-  tree elt;
-  unsigned ix;
-
-  /* Indent to the specified column, since this is the long form.  */
-  indent_to (file, indent);
-
-  /* Print the slot this node is in, and its code, and address.  */
-  fprintf (file, "%s <VEC", prefix);
-  dump_addr (file, " ", vec->address ());
-
-  FOR_EACH_VEC_ELT (*vec, ix, elt)
-    {
-      char temp[10];
-      sprintf (temp, "elt %d", ix);
-      print_node (file, temp, elt, indent + 4);
-    }
-}
-
 
 /* Print the node NODE on standard error, for debugging.
    Most nodes referred to by this one are printed recursively
@@ -1097,26 +1073,37 @@ debug_body (const tree_node *ptr)
    down to a depth of six.  */
 
 DEBUG_FUNCTION void
-debug_vec_tree (vec<tree, va_gc> *vec)
+debug_raw (vec<tree, va_gc> &ref)
 {
   tree elt;
   unsigned ix;
 
   /* Print the slot this node is in, and its code, and address.  */
   fprintf (stderr, "<VEC");
-  dump_addr (stderr, " ", vec->address ());
+  dump_addr (stderr, " ", ref.address ());
 
-  FOR_EACH_VEC_ELT (*vec, ix, elt)
+  FOR_EACH_VEC_ELT (ref, ix, elt)
     {
       fprintf (stderr, "elt %d ", ix);
-      debug (elt);
+      debug_raw (elt);
     }
 }
 
 DEBUG_FUNCTION void
 debug (vec<tree, va_gc> &ref)
 {
-  debug_vec_tree (&ref);
+  tree elt;
+  unsigned ix;
+
+  /* Print the slot this node is in, and its code, and address.  */
+  fprintf (stderr, "<VEC");
+  dump_addr (stderr, " ", ref.address ());
+
+  FOR_EACH_VEC_ELT (ref, ix, elt)
+    {
+      fprintf (stderr, "elt %d ", ix);
+      debug (elt);
+    }
 }
 
 DEBUG_FUNCTION void
@@ -1126,4 +1113,19 @@ debug (vec<tree, va_gc> *ptr)
     debug (*ptr);
   else
     fprintf (stderr, "<nil>\n");
+}
+
+DEBUG_FUNCTION void
+debug_raw (vec<tree, va_gc> *ptr)
+{
+  if (ptr)
+    debug_raw (*ptr);
+  else
+    fprintf (stderr, "<nil>\n");
+}
+
+DEBUG_FUNCTION void
+debug_vec_tree (vec<tree, va_gc> *vec)
+{
+  debug_raw (vec);
 }

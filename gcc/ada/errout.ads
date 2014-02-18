@@ -101,10 +101,9 @@ package Errout is
    --        messages. Warning messages are only suppressed for case 1, and
    --        when they come from other than the main extended unit.
 
-   --  This normal suppression action may be overridden in cases 2-5 (but not
-   --  in case 1) by setting All_Errors mode, or by setting the special
-   --  unconditional message insertion character (!) at the end of the message
-   --  text as described below.
+   --  This normal suppression action may be overridden in cases 2-5 (but
+   --  not in case 1) by setting All_Errors mode, or by setting the special
+   --  unconditional message insertion character (!) as described below.
 
    ---------------------------------------------------------
    -- Error Message Text and Message Insertion Characters --
@@ -230,7 +229,7 @@ package Errout is
    --      name is defined, this insertion character has no effect.
 
    --    Insertion character ! (Exclamation: unconditional message)
-   --      The character ! appearing as the last character of a message makes
+   --      The character ! appearing anywhere in the text of a message makes
    --      the message unconditional which means that it is output even if it
    --      would normally be suppressed. See section above for a description
    --      of the cases in which messages are normally suppressed. Note that
@@ -249,7 +248,7 @@ package Errout is
 
    --    Insertion character !! (Double exclamation: unconditional warning)
    --      Normally warning messages issued in other than the main unit are
-   --      suppressed. If the message ends with !! then this suppression is
+   --      suppressed. If the message contains !! then this suppression is
    --      avoided. This is currently used by the Compile_Time_Warning pragma
    --      to ensure the message for a with'ed unit is output, and for warnings
    --      on ineffective back-end inlining, which is detected in units that
@@ -305,14 +304,18 @@ package Errout is
    --    Insertion character < (Less Than: conditional warning message)
    --      The character < appearing anywhere in a message is used for a
    --      conditional error message. If Error_Msg_Warn is True, then the
-   --      effect is the same as ? described above. If Error_Msg_Warn is
-   --      False, then there is no effect.
+   --      effect is the same as ? described above, and in particular << and
+   --      <X< have the effect of ?? and ?X? respectively. If Error_Msg_Warn
+   --      is False, then the < << or <X< sequence is ignored and the message
+   --      is treated as a error rather than a warning.
 
    --    Insertion character A-Z (Upper case letter: Ada reserved word)
    --      If two or more upper case letters appear in the message, they are
    --      taken as an Ada reserved word, and are converted to the default
    --      case for reserved words (see Scans package spec). Surrounding
    --      quotes are added unless manual quotation mode is currently set.
+   --      RM and SPARK are special exceptions, they are never treated as
+   --      keywords, and just appear verbatim, with no surrounding quotes.
 
    --    Insertion character ` (Backquote: set manual quotation mode)
    --      The backquote character always appears in pairs. Each backquote of
@@ -344,12 +347,38 @@ package Errout is
    --      generation of code in the presence of the -gnatQ switch. If the
    --      insertion character | appears, the message is considered to be
    --      non-serious, and does not cause Serious_Errors_Detected to be
-   --      incremented (so expansion is not prevented by such a msg).
+   --      incremented (so expansion is not prevented by such a msg). This
+   --      insertion character is ignored in continuation messages.
 
    --    Insertion character ~ (Tilde: insert string)
    --      Indicates that Error_Msg_String (1 .. Error_Msg_Strlen) is to be
    --      inserted to replace the ~ character. The string is inserted in the
    --      literal form it appears, without any action on special characters.
+
+   --    Insertion character [ (Left bracket: will/would be raised at run time)
+   --      This is used in messages about exceptions being raised at run-time.
+   --      If the current message is a warning message, then if the code is
+   --      executed, the exception will be raised, and [ inserts:
+   --
+   --        will be raised at run time
+   --
+   --      If the current message is an error message, then it is an error
+   --      because the exception would have been raised and [ inserts:
+   --
+   --        would have been raised at run time
+   --
+   --      Typically the message contains a < insertion which means that the
+   --      message is a warning or error depending on Error_Msg_Warn. This is
+   --      most typically used in the context of messages which are normally
+   --      warnings, but are errors in GNATprove mode, corresponding to the
+   --      permission in the definition of SPARK that allows an implementation
+   --      to reject a program as illegal if a situation arises in which the
+   --      compiler can determine that it is certain that a run-time check
+   --      would have fail if the statement was executed.
+
+   --    Insertion character ] (Right bracket: may/might be raised at run time)
+   --      This is like [ except that the insertion messages say may/might,
+   --      instead of will/would.
 
    ----------------------------------------
    -- Specialization of Messages for VMS --
@@ -695,7 +724,9 @@ package Errout is
 
    procedure Error_Msg_F (Msg : String; N : Node_Id);
    --  Similar to Error_Msg_N except that the message is placed on the first
-   --  node of the construct N (First_Node (N)).
+   --  node of the construct N (First_Node (N)). Note that this procedure uses
+   --  Original_Node to look at the original source tree, since that's what we
+   --  want for placing an error message flag in the right place.
 
    procedure Error_Msg_NE
      (Msg : String;
@@ -739,8 +770,11 @@ package Errout is
    --  usual manner, and need not be the same length as the original text.
 
    function First_Node (C : Node_Id) return Node_Id;
-   --  Given a construct C, finds the first node in the construct, i.e. the
-   --  one with the lowest Sloc value. This is useful in placing error msgs.
+   --  Given a construct C, finds the first node in the construct, i.e. the one
+   --  with the lowest Sloc value. This is useful in placing error msgs. Note
+   --  that this procedure uses Original_Node to look at the original source
+   --  tree, since that's what we want for placing an error message flag in
+   --  the right place.
 
    function First_Sloc (N : Node_Id) return Source_Ptr;
    --  Given the node for an expression, return a source pointer value that
@@ -807,9 +841,11 @@ package Errout is
    --  matching Warnings Off pragma preceding this one.
 
    function Compilation_Errors return Boolean;
-   --  Returns true if errors have been detected, or warnings in -gnatwe
-   --  (treat warnings as errors) mode. Note that it is mandatory to call
-   --  Finalize before calling this routine.
+   --  Returns True if errors have been detected, or warnings in -gnatwe (treat
+   --  warnings as errors) mode. Note that it is mandatory to call Finalize
+   --  before calling this routine. Always returns False in formal verification
+   --  mode, because errors issued when analyzing code are not compilation
+   --  errors, and should not result in exiting with an error status.
 
    procedure Error_Msg_CRT (Feature : String; N : Node_Id);
    --  Posts a non-fatal message on node N saying that the feature identified
@@ -820,6 +856,14 @@ package Errout is
    procedure Error_Msg_PT (Typ : Node_Id; Subp : Node_Id);
    --  Posts an error on the protected type declaration Typ indicating wrong
    --  mode of the first formal of protected type primitive Subp.
+
+   procedure Error_Msg_Ada_2012_Feature (Feature : String; Loc : Source_Ptr);
+   --  If not operating in Ada 2012 mode, posts errors complaining that Feature
+   --  is only supported in Ada 2012, with appropriate suggestions to fix this.
+   --  Loc is the location at which the flag is to be posted. Feature, which
+   --  appears at the start of the first generated message, may contain error
+   --  message insertion characters in the normal manner, and in particular
+   --  may start with | to flag a non-serious error.
 
    procedure dmsg (Id : Error_Msg_Id) renames Erroutc.dmsg;
    --  Debugging routine to dump an error message

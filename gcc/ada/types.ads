@@ -43,7 +43,7 @@
 --  Note: the declarations in this package reflect an expectation that the host
 --  machine has an efficient integer base type with a range at least 32 bits
 --  2s-complement. If there are any machines for which this is not a correct
---  assumption, a significant number of changes will be required!
+--  assumption, a significant number of changes will be required.
 
 with System;
 with Unchecked_Conversion;
@@ -172,7 +172,7 @@ package Types is
    for Physical_Line_Number'Size use 32;
    --  Line number type, used for storing physical line numbers (i.e. line
    --  numbers in the physical file being compiled, unaffected by the presence
-   --  of source reference pragmas.
+   --  of source reference pragmas).
 
    type Column_Number is range 0 .. 32767;
    for Column_Number'Size use 16;
@@ -183,11 +183,17 @@ package Types is
    No_Column_Number : constant Column_Number := 0;
    --  Special value used to indicate no column number
 
+   Source_Align : constant := 2 ** 12;
+   --  Alignment requirement for source buffers (by keeping source buffers
+   --  aligned, we can optimize the implementation of Get_Source_File_Index.
+   --  See this routine in Sinput for details.
+
    subtype Source_Buffer is Text_Buffer;
    --  Type used to store text of a source file. The buffer for the main
    --  source (the source specified on the command line) has a lower bound
    --  starting at zero. Subsequent subsidiary sources have lower bounds
-   --  which are one greater than the previous upper bound.
+   --  which are one greater than the previous upper bound, rounded up to
+   --  a multiple of Source_Align.
 
    subtype Big_Source_Buffer is Text_Buffer (0 .. Text_Ptr'Last);
    --  This is a virtual type used as the designated type of the access type
@@ -843,25 +849,26 @@ package Types is
       PE_Access_Before_Elaboration,      -- 14
       PE_Accessibility_Check_Failed,     -- 15
       PE_Address_Of_Intrinsic,           -- 16
-      PE_All_Guards_Closed,              -- 17
-      PE_Bad_Predicated_Generic_Type,    -- 18
-      PE_Current_Task_In_Entry_Body,     -- 19
-      PE_Duplicated_Entry_Address,       -- 20
-      PE_Explicit_Raise,                 -- 21
-      PE_Finalize_Raised_Exception,      -- 22
-      PE_Implicit_Return,                -- 23
-      PE_Misaligned_Address_Value,       -- 24
-      PE_Missing_Return,                 -- 25
-      PE_Overlaid_Controlled_Object,     -- 26
-      PE_Potentially_Blocking_Operation, -- 27
-      PE_Stubbed_Subprogram_Called,      -- 28
-      PE_Unchecked_Union_Restriction,    -- 29
-      PE_Non_Transportable_Actual,       -- 30
+      PE_Aliased_Parameters,             -- 17
+      PE_All_Guards_Closed,              -- 18
+      PE_Bad_Predicated_Generic_Type,    -- 19
+      PE_Current_Task_In_Entry_Body,     -- 20
+      PE_Duplicated_Entry_Address,       -- 21
+      PE_Explicit_Raise,                 -- 22
+      PE_Finalize_Raised_Exception,      -- 23
+      PE_Implicit_Return,                -- 24
+      PE_Misaligned_Address_Value,       -- 25
+      PE_Missing_Return,                 -- 26
+      PE_Overlaid_Controlled_Object,     -- 27
+      PE_Potentially_Blocking_Operation, -- 28
+      PE_Stubbed_Subprogram_Called,      -- 29
+      PE_Unchecked_Union_Restriction,    -- 30
+      PE_Non_Transportable_Actual,       -- 31
 
-      SE_Empty_Storage_Pool,             -- 31
-      SE_Explicit_Raise,                 -- 32
-      SE_Infinite_Recursion,             -- 33
-      SE_Object_Too_Large);              -- 34
+      SE_Empty_Storage_Pool,             -- 32
+      SE_Explicit_Raise,                 -- 33
+      SE_Infinite_Recursion,             -- 34
+      SE_Object_Too_Large);              -- 35
 
    subtype RT_CE_Exceptions is RT_Exception_Code range
      CE_Access_Check_Failed ..

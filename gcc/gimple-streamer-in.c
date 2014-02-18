@@ -1,6 +1,6 @@
 /* Routines for reading GIMPLE from a file stream.
 
-   Copyright (C) 2011-2013 Free Software Foundation, Inc.
+   Copyright (C) 2011-2014 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@google.com>
 
 This file is part of GCC.
@@ -24,7 +24,18 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "diagnostic.h"
 #include "tree.h"
-#include "tree-flow.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "tree-eh.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-phinodes.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
 #include "data-streamer.h"
 #include "tree-streamer.h"
 #include "gimple-streamer.h"
@@ -56,7 +67,7 @@ input_phi (struct lto_input_block *ib, basic_block bb, struct data_in *data_in,
       int src_index = streamer_read_uhwi (ib);
       bitpack_d bp = streamer_read_bitpack (ib);
       location_t arg_loc = stream_input_location (&bp, data_in);
-      basic_block sbb = BASIC_BLOCK_FOR_FUNCTION (fn, src_index);
+      basic_block sbb = BASIC_BLOCK_FOR_FN (fn, src_index);
 
       edge e = NULL;
       int j;
@@ -80,7 +91,7 @@ input_phi (struct lto_input_block *ib, basic_block bb, struct data_in *data_in,
 
 static gimple
 input_gimple_stmt (struct lto_input_block *ib, struct data_in *data_in,
-		   struct function *fn, enum LTO_tags tag)
+		   enum LTO_tags tag)
 {
   gimple stmt;
   enum gimple_code code;
@@ -95,12 +106,12 @@ input_gimple_stmt (struct lto_input_block *ib, struct data_in *data_in,
   bp = streamer_read_bitpack (ib);
   num_ops = bp_unpack_var_len_unsigned (&bp);
   stmt = gimple_alloc (code, num_ops);
-  stmt->gsbase.no_warning = bp_unpack_value (&bp, 1);
+  stmt->no_warning = bp_unpack_value (&bp, 1);
   if (is_gimple_assign (stmt))
-    stmt->gsbase.nontemporal_move = bp_unpack_value (&bp, 1);
-  stmt->gsbase.has_volatile_ops = bp_unpack_value (&bp, 1);
+    stmt->nontemporal_move = bp_unpack_value (&bp, 1);
+  stmt->has_volatile_ops = bp_unpack_value (&bp, 1);
   has_hist = bp_unpack_value (&bp, 1);
-  stmt->gsbase.subcode = bp_unpack_var_len_unsigned (&bp);
+  stmt->subcode = bp_unpack_var_len_unsigned (&bp);
 
   /* Read location information.  */
   gimple_set_location (stmt, stream_input_location (&bp, data_in));
@@ -126,13 +137,14 @@ input_gimple_stmt (struct lto_input_block *ib, struct data_in *data_in,
     case GIMPLE_ASM:
       {
 	/* FIXME lto.  Move most of this into a new gimple_asm_set_string().  */
+	gimple_statement_asm *asm_stmt = as_a <gimple_statement_asm> (stmt);
 	tree str;
-	stmt->gimple_asm.ni = streamer_read_uhwi (ib);
-	stmt->gimple_asm.no = streamer_read_uhwi (ib);
-	stmt->gimple_asm.nc = streamer_read_uhwi (ib);
-	stmt->gimple_asm.nl = streamer_read_uhwi (ib);
+	asm_stmt->ni = streamer_read_uhwi (ib);
+	asm_stmt->no = streamer_read_uhwi (ib);
+	asm_stmt->nc = streamer_read_uhwi (ib);
+	asm_stmt->nl = streamer_read_uhwi (ib);
 	str = streamer_read_string_cst (data_in, ib);
-	stmt->gimple_asm.string = TREE_STRING_POINTER (str);
+	asm_stmt->string = TREE_STRING_POINTER (str);
       }
       /* Fallthru  */
 
@@ -155,85 +167,7 @@ input_gimple_stmt (struct lto_input_block *ib, struct data_in *data_in,
 	  if (TREE_CODE (*opp) == ADDR_EXPR)
 	    opp = &TREE_OPERAND (*opp, 0);
 	  while (handled_component_p (*opp))
-	    {
-	      if (TREE_CODE (*opp) == COMPONENT_REF)
-		{
-		  /* Fixup FIELD_DECLs in COMPONENT_REFs, they are not handled
-		     by decl merging.  */
-		  tree field, type, tem;
-		  tree closest_match = NULL_TREE;
-		  field = TREE_OPERAND (*opp, 1);
-		  type = DECL_CONTEXT (field);
-		  for (tem = TYPE_FIELDS (type); tem; tem = TREE_CHAIN (tem))
-		    {
-		      if (TREE_CODE (tem) != FIELD_DECL)
-			continue;
-		      if (tem == field)
-			break;
-		      if (DECL_NONADDRESSABLE_P (tem)
-			  == DECL_NONADDRESSABLE_P (field)
-			  && gimple_compare_field_offset (tem, field))
-			{
-			  if (types_compatible_p (TREE_TYPE (tem),
-						  TREE_TYPE (field)))
-			    break;
-			  else
-			    closest_match = tem;
-			}
-		    }
-		  /* In case of type mismatches across units we can fail
-		     to unify some types and thus not find a proper
-		     field-decl here.  */
-		  if (tem == NULL_TREE)
-		    {
-		      /* Thus, emit a ODR violation warning.  */
-		      if (warning_at (gimple_location (stmt), 0,
-				      "use of type %<%E%> with two mismatching "
-				      "declarations at field %<%E%>",
-				      type, TREE_OPERAND (*opp, 1)))
-			{
-			  if (TYPE_FIELDS (type))
-			    inform (DECL_SOURCE_LOCATION (TYPE_FIELDS (type)),
-				    "original type declared here");
-			  inform (DECL_SOURCE_LOCATION (TREE_OPERAND (*opp, 1)),
-				  "field in mismatching type declared here");
-			  if (TYPE_NAME (TREE_TYPE (field))
-			      && (TREE_CODE (TYPE_NAME (TREE_TYPE (field)))
-				  == TYPE_DECL))
-			    inform (DECL_SOURCE_LOCATION
-				      (TYPE_NAME (TREE_TYPE (field))),
-				    "type of field declared here");
-			  if (closest_match
-			      && TYPE_NAME (TREE_TYPE (closest_match))
-			      && (TREE_CODE (TYPE_NAME
-				   (TREE_TYPE (closest_match))) == TYPE_DECL))
-			    inform (DECL_SOURCE_LOCATION
-				      (TYPE_NAME (TREE_TYPE (closest_match))),
-				    "type of mismatching field declared here");
-			}
-		      /* And finally fixup the types.  */
-		      TREE_OPERAND (*opp, 0)
-			= build1 (VIEW_CONVERT_EXPR, type,
-				  TREE_OPERAND (*opp, 0));
-		    }
-		  else
-		    TREE_OPERAND (*opp, 1) = tem;
-		}
-	      else if ((TREE_CODE (*opp) == ARRAY_REF
-			|| TREE_CODE (*opp) == ARRAY_RANGE_REF)
-		       && (TREE_CODE (TREE_TYPE (TREE_OPERAND (*opp, 0)))
-			   != ARRAY_TYPE))
-		{
-		  /* And ARRAY_REFs to objects that had mismatched types
-		     during symbol merging to avoid ICEs.  */
-		  TREE_OPERAND (*opp, 0)
-		    = build1 (VIEW_CONVERT_EXPR,
-			      build_array_type (TREE_TYPE (*opp), NULL_TREE),
-			      TREE_OPERAND (*opp, 0));
-		}
-
-	      opp = &TREE_OPERAND (*opp, 0);
-	    }
+	    opp = &TREE_OPERAND (*opp, 0);
 	  /* At LTO output time we wrap all global decls in MEM_REFs to
 	     allow seamless replacement with prevailing decls.  Undo this
 	     here if the prevailing decl allows for this.
@@ -282,9 +216,6 @@ input_gimple_stmt (struct lto_input_block *ib, struct data_in *data_in,
       if (lhs && TREE_CODE (lhs) == SSA_NAME)
 	SSA_NAME_DEF_STMT (lhs) = stmt;
     }
-  else if (code == GIMPLE_LABEL)
-    gcc_assert (emit_label_in_global_context_p (gimple_label_label (stmt))
-	        || DECL_CONTEXT (gimple_label_label (stmt)) == fn->decl);
   else if (code == GIMPLE_ASM)
     {
       unsigned i;
@@ -327,7 +258,7 @@ input_bb (struct lto_input_block *ib, enum LTO_tags tag,
   gcc_assert (cfun == fn);
 
   index = streamer_read_uhwi (ib);
-  bb = BASIC_BLOCK_FOR_FUNCTION (fn, index);
+  bb = BASIC_BLOCK_FOR_FN (fn, index);
 
   bb->count = apply_scale (streamer_read_gcov_count (ib),
                            count_materialization_scale);
@@ -342,7 +273,7 @@ input_bb (struct lto_input_block *ib, enum LTO_tags tag,
   tag = streamer_read_record_start (ib);
   while (tag)
     {
-      gimple stmt = input_gimple_stmt (ib, data_in, fn, tag);
+      gimple stmt = input_gimple_stmt (ib, data_in, tag);
       gsi_insert_after (&bsi, stmt, GSI_NEW_STMT);
 
       /* After the statement, expect a 0 delimiter or the EH region

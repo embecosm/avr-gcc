@@ -1,4 +1,4 @@
-/* Copyright (C) 2002-2013 Free Software Foundation, Inc.
+/* Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
    Namelist transfer functions contributed by Paul Thomas
    F2003 I/O support contributed by Jerry DeLisle
@@ -233,7 +233,7 @@ read_sf_internal (st_parameter_dt *dtp, int * length)
     {
       *length = 0;
       /* Just return something that isn't a NULL pointer, otherwise the
-         caller thinks an error occured.  */
+         caller thinks an error occurred.  */
       return (char*) empty_string;
     }
 
@@ -292,7 +292,7 @@ read_sf (st_parameter_dt *dtp, int * length)
     {
       *length = 0;
       /* Just return something that isn't a NULL pointer, otherwise the
-         caller thinks an error occured.  */
+         caller thinks an error occurred.  */
       return (char*) empty_string;
     }
 
@@ -512,7 +512,7 @@ read_block_form4 (st_parameter_dt *dtp, int * nbytes)
     {
       *nbytes = 0;
       /* Just return something that isn't a NULL pointer, otherwise the
-         caller thinks an error occured.  */
+         caller thinks an error occurred.  */
       return empty_string;
     }
 
@@ -2490,14 +2490,18 @@ data_transfer_init (st_parameter_dt *dtp, int read_flag)
   if ((cf & IOPARM_DT_HAS_NAMELIST_NAME) != 0 && dtp->u.p.ionml != NULL)
      {
 	if ((cf & IOPARM_DT_HAS_FORMAT) != 0)
-	   generate_error (&dtp->common, LIBERROR_OPTION_CONFLICT,
-		    "A format cannot be specified with a namelist");
+	  {
+	    generate_error (&dtp->common, LIBERROR_OPTION_CONFLICT,
+			"A format cannot be specified with a namelist");
+	    return;
+	  }
      }
   else if (dtp->u.p.current_unit->flags.form == FORM_FORMATTED &&
 	   !(cf & (IOPARM_DT_HAS_FORMAT | IOPARM_DT_LIST_FORMAT)))
     {
       generate_error (&dtp->common, LIBERROR_OPTION_CONFLICT,
 		      "Missing format for FORMATTED data transfer");
+      return;
     }
 
   if (is_internal_unit (dtp)

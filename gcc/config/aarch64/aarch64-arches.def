@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2013 Free Software Foundation, Inc.
+/* Copyright (C) 2011-2014 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of GCC.
@@ -26,4 +26,4 @@
    this architecture.  ARCH is the architecture revision.  FLAGS are
    the flags implied by the architecture.  */
 
-AARCH64_ARCH("armv8-a",	      generic,	     8,  AARCH64_FL_FOR_ARCH8)
+AARCH64_ARCH("armv8-a",	      cortexa53,	     8,  AARCH64_FL_FOR_ARCH8)

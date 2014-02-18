@@ -65,23 +65,35 @@ with Uintp;    use Uintp;
 package body Sem_Aggr is
 
    type Case_Bounds is record
-     Choice_Lo   : Node_Id;
-     Choice_Hi   : Node_Id;
-     Choice_Node : Node_Id;
+      Lo : Node_Id;
+      --  Low bound of choice. Once we sort the Case_Table, then entries
+      --  will be in order of ascending Choice_Lo values.
+
+      Hi : Node_Id;
+      --  High Bound of choice. The sort does not pay any attention to the
+      --  high bound, so choices 1 .. 4 and 1 .. 5 could be in either order.
+
+      Highest : Uint;
+      --  If there are duplicates or missing entries, then in the sorted
+      --  table, this records the highest value among Choice_Hi values
+      --  seen so far, including this entry.
+
+      Choice : Node_Id;
+      --  The node of the choice
    end record;
 
    type Case_Table_Type is array (Nat range <>) of Case_Bounds;
-   --  Table type used by Check_Case_Choices procedure
+   --  Table type used by Check_Case_Choices procedure. Entry zero is not
+   --  used (reserved for the sort). Real entries start at one.
 
    -----------------------
    -- Local Subprograms --
    -----------------------
 
    procedure Sort_Case_Table (Case_Table : in out Case_Table_Type);
-   --  Sort the Case Table using the Lower Bound of each Choice as the key.
-   --  A simple insertion sort is used since the number of choices in a case
-   --  statement of variant part will usually be small and probably in near
-   --  sorted order.
+   --  Sort the Case Table using the Lower Bound of each Choice as the key. A
+   --  simple insertion sort is used since the choices in a case statement will
+   --  usually be in near sorted order.
 
    procedure Check_Can_Never_Be_Null (Typ : Entity_Id; Expr : Node_Id);
    --  Ada 2005 (AI-231): Check bad usage of null for a component for which
@@ -442,10 +454,12 @@ package body Sem_Aggr is
          Check_Unset_Reference (Exp);
       end if;
 
-      --  This is really expansion activity, so make sure that expansion
-      --  is on and is allowed.
+      --  This is really expansion activity, so make sure that expansion is
+      --  on and is allowed. In GNATprove mode, we also want check flags to be
+      --  added in the tree, so that the formal verification can rely on those
+      --  to be present.
 
-      if not Expander_Active or else In_Spec_Expression then
+      if not (Expander_Active or GNATprove_Mode) or In_Spec_Expression then
          return;
       end if;
 
@@ -583,9 +597,9 @@ package body Sem_Aggr is
 
                elsif Expr_Value (This_Low) /= Expr_Value (Aggr_Low (Dim)) then
                   Set_Raises_Constraint_Error (N);
-                  Error_Msg_N ("sub-aggregate low bound mismatch??", N);
-                  Error_Msg_N
-                     ("\Constraint_Error will be raised at run time??", N);
+                  Error_Msg_Warn := SPARK_Mode /= On;
+                  Error_Msg_N ("sub-aggregate low bound mismatch<<", N);
+                  Error_Msg_N ("\Constraint_Error [<<", N);
                end if;
             end if;
 
@@ -597,9 +611,9 @@ package body Sem_Aggr is
                  Expr_Value (This_High) /= Expr_Value (Aggr_High (Dim))
                then
                   Set_Raises_Constraint_Error (N);
-                  Error_Msg_N ("sub-aggregate high bound mismatch??", N);
-                  Error_Msg_N
-                     ("\Constraint_Error will be raised at run time??", N);
+                  Error_Msg_Warn := SPARK_Mode /= On;
+                  Error_Msg_N ("sub-aggregate high bound mismatch<<", N);
+                  Error_Msg_N ("\Constraint_Error [<<", N);
                end if;
             end if;
          end if;
@@ -747,7 +761,7 @@ package body Sem_Aggr is
    begin
       --  All the components of List are matched against Component and a count
       --  is maintained of possible misspellings. When at the end of the the
-      --  analysis there are one or two (not more!) possible misspellings,
+      --  analysis there are one or two (not more) possible misspellings,
       --  these misspellings will be suggested as possible correction.
 
       Component_Elmt := First_Elmt (Elements);
@@ -984,10 +998,10 @@ package body Sem_Aggr is
       --  frozen so that initialization procedures can properly be called
       --  in the resolution that follows.  The replacement of boxes with
       --  initialization calls is properly an expansion activity but it must
-      --  be done during revolution.
+      --  be done during resolution.
 
       if Expander_Active
-        and then  Present (Component_Associations (N))
+        and then Present (Component_Associations (N))
       then
          declare
             Comp : Node_Id;
@@ -1442,8 +1456,9 @@ package body Sem_Aggr is
 
          if OK_BH and then OK_AH and then Val_BH < Val_AH then
             Set_Raises_Constraint_Error (N);
-            Error_Msg_N ("upper bound out of range??", AH);
-            Error_Msg_N ("\Constraint_Error will be raised at run time??", AH);
+            Error_Msg_Warn := SPARK_Mode /= On;
+            Error_Msg_N ("upper bound out of range<<", AH);
+            Error_Msg_N ("\Constraint_Error [<<", AH);
 
             --  You need to set AH to BH or else in the case of enumerations
             --  indexes we will not be able to resolve the aggregate bounds.
@@ -1485,14 +1500,16 @@ package body Sem_Aggr is
 
          if OK_L and then Val_L > Val_AL then
             Set_Raises_Constraint_Error (N);
-            Error_Msg_N ("lower bound of aggregate out of range??", N);
-            Error_Msg_N ("\Constraint_Error will be raised at run time??", N);
+            Error_Msg_Warn := SPARK_Mode /= On;
+            Error_Msg_N ("lower bound of aggregate out of range<<", N);
+            Error_Msg_N ("\Constraint_Error [<<", N);
          end if;
 
          if OK_H and then Val_H < Val_AH then
             Set_Raises_Constraint_Error (N);
-            Error_Msg_N ("upper bound of aggregate out of range??", N);
-            Error_Msg_N ("\Constraint_Error will be raised at run time??", N);
+            Error_Msg_Warn := SPARK_Mode /= On;
+            Error_Msg_N ("upper bound of aggregate out of range<<", N);
+            Error_Msg_N ("\Constraint_Error [<<", N);
          end if;
       end Check_Bounds;
 
@@ -1531,8 +1548,9 @@ package body Sem_Aggr is
 
          if Range_Len < Len then
             Set_Raises_Constraint_Error (N);
-            Error_Msg_N ("too many elements??", N);
-            Error_Msg_N ("\Constraint_Error will be raised at run time??", N);
+            Error_Msg_Warn := SPARK_Mode /= On;
+            Error_Msg_N ("too many elements<<", N);
+            Error_Msg_N ("\Constraint_Error [<<", N);
          end if;
       end Check_Length;
 
@@ -1569,7 +1587,7 @@ package body Sem_Aggr is
             Value := Expr_Value (From);
 
          --  If expression From is something like Some_Type'Val (10) then
-         --  Value = 10
+         --  Value = 10.
 
          elsif Nkind (From) = N_Attribute_Reference
            and then Attribute_Name (From) = Name_Val
@@ -1666,7 +1684,6 @@ package body Sem_Aggr is
               (Expr, Nxt_Ind, Nxt_Ind_Constr, Component_Typ, Others_Allowed);
 
          else
-
             --  If it's "... => <>", nothing to resolve
 
             if Nkind (Expr) = N_Component_Association then
@@ -1684,7 +1701,7 @@ package body Sem_Aggr is
             --  performed safely.
 
             if Single_Elmt
-              or else not Full_Expander_Active
+              or else not Expander_Active
               or else In_Spec_Expression
             then
                Analyze_And_Resolve (Expr, Component_Typ);
@@ -1723,9 +1740,9 @@ package body Sem_Aggr is
 
       --  Variables local to Resolve_Array_Aggregate
 
-      Assoc   : Node_Id;
-      Choice  : Node_Id;
-      Expr    : Node_Id;
+      Assoc  : Node_Id;
+      Choice : Node_Id;
+      Expr   : Node_Id;
 
       Discard : Node_Id;
       pragma Warnings (Off, Discard);
@@ -1900,21 +1917,14 @@ package body Sem_Aggr is
             High : Node_Id;
             --  Denote the lowest and highest values in an aggregate choice
 
-            Hi_Val : Uint;
-            Lo_Val : Uint;
-            --  High end of one range and Low end of the next. Should be
-            --  contiguous if there is no hole in the list of values.
-
-            Missing_Values : Boolean;
-            --  Set True if missing index values
-
             S_Low  : Node_Id := Empty;
             S_High : Node_Id := Empty;
             --  if a choice in an aggregate is a subtype indication these
             --  denote the lowest and highest values of the subtype
 
-            Table : Case_Table_Type (1 .. Case_Table_Size);
-            --  Used to sort all the different choice values
+            Table : Case_Table_Type (0 .. Case_Table_Size);
+            --  Used to sort all the different choice values. Entry zero is
+            --  reserved for sorting purposes.
 
             Single_Choice : Boolean;
             --  Set to true every time there is a single discrete choice in a
@@ -1926,6 +1936,25 @@ package body Sem_Aggr is
 
             Errors_Posted_On_Choices : Boolean := False;
             --  Keeps track of whether any choices have semantic errors
+
+            function Empty_Range (A : Node_Id)  return Boolean;
+            --  If an association covers an empty range, some warnings on the
+            --  expression of the association can be disabled.
+
+            -----------------
+            -- Empty_Range --
+            -----------------
+
+            function Empty_Range (A : Node_Id)  return Boolean is
+               R : constant Node_Id := First (Choices (A));
+            begin
+               return No (Next (R))
+                 and then Nkind (R) = N_Range
+                 and then Compile_Time_Compare
+                            (Low_Bound (R), High_Bound (R), False) = GT;
+            end Empty_Range;
+
+         --  Start of processing for Step_2
 
          begin
             --  STEP 2 (A): Check discrete choices validity
@@ -2026,9 +2055,9 @@ package body Sem_Aggr is
                   end if;
 
                   Nb_Discrete_Choices := Nb_Discrete_Choices + 1;
-                  Table (Nb_Discrete_Choices).Choice_Lo := Low;
-                  Table (Nb_Discrete_Choices).Choice_Hi := High;
-                  Table (Nb_Discrete_Choices).Choice_Node := Choice;
+                  Table (Nb_Discrete_Choices).Lo := Low;
+                  Table (Nb_Discrete_Choices).Hi := High;
+                  Table (Nb_Discrete_Choices).Choice := Choice;
 
                   Next (Choice);
 
@@ -2049,6 +2078,7 @@ package body Sem_Aggr is
 
                if Ada_Version >= Ada_2005
                  and then Known_Null (Expression (Assoc))
+                 and then not Empty_Range (Assoc)
                then
                   Check_Can_Never_Be_Null (Etype (N), Expression (Assoc));
                end if;
@@ -2064,14 +2094,14 @@ package body Sem_Aggr is
                   --  Resolve_Aggr_Expr to check the rules about
                   --  dimensionality.
 
-                  if not Resolve_Aggr_Expr (Assoc,
-                                            Single_Elmt => Single_Choice)
+                  if not Resolve_Aggr_Expr
+                           (Assoc, Single_Elmt => Single_Choice)
                   then
                      return Failure;
                   end if;
 
-               elsif not Resolve_Aggr_Expr (Expression (Assoc),
-                                            Single_Elmt => Single_Choice)
+               elsif not Resolve_Aggr_Expr
+                           (Expression (Assoc), Single_Elmt => Single_Choice)
                then
                   return Failure;
 
@@ -2134,87 +2164,207 @@ package body Sem_Aggr is
             end loop;
 
             --  If aggregate contains more than one choice then these must be
-            --  static. Sort them and check that they are contiguous.
+            --  static. Check for duplicate and missing values.
+
+            --  Note: there is duplicated code here wrt Check_Choice_Set in
+            --  the body of Sem_Case, and it is possible we could just reuse
+            --  that procedure. To be checked ???
 
             if Nb_Discrete_Choices > 1 then
-               Sort_Case_Table (Table);
-               Missing_Values := False;
+               Check_Choices : declare
+                  Choice : Node_Id;
+                  --  Location of choice for messages
 
-               Outer : for J in 1 .. Nb_Discrete_Choices - 1 loop
-                  if Expr_Value (Table (J).Choice_Hi) >=
-                       Expr_Value (Table (J + 1).Choice_Lo)
-                  then
-                     Error_Msg_N
-                       ("duplicate choice values in array aggregate",
-                        Table (J).Choice_Node);
-                     return Failure;
+                  Hi_Val : Uint;
+                  Lo_Val : Uint;
+                  --  High end of one range and Low end of the next. Should be
+                  --  contiguous if there is no hole in the list of values.
 
-                  elsif not Others_Present then
-                     Hi_Val := Expr_Value (Table (J).Choice_Hi);
-                     Lo_Val := Expr_Value (Table (J + 1).Choice_Lo);
+                  Lo_Dup : Uint;
+                  Hi_Dup : Uint;
+                  --  End points of duplicated range
 
-                     --  If missing values, output error messages
+                  Missing_Or_Duplicates : Boolean := False;
+                  --  Set True if missing or duplicate choices found
 
-                     if Lo_Val - Hi_Val > 1 then
+                  procedure Output_Bad_Choices (Lo, Hi : Uint; C : Node_Id);
+                  --  Output continuation message with a representation of the
+                  --  bounds (just Lo if Lo = Hi, else Lo .. Hi). C is the
+                  --  choice node where the message is to be posted.
 
-                        --  Header message if not first missing value
+                  ------------------------
+                  -- Output_Bad_Choices --
+                  ------------------------
 
-                        if not Missing_Values then
-                           Error_Msg_N
-                             ("missing index value(s) in array aggregate", N);
-                           Missing_Values := True;
+                  procedure Output_Bad_Choices (Lo, Hi : Uint; C : Node_Id) is
+                  begin
+                     --  Enumeration type case
+
+                     if Is_Enumeration_Type (Index_Typ) then
+                        Error_Msg_Name_1 :=
+                          Chars (Get_Enum_Lit_From_Pos (Index_Typ, Lo, Loc));
+                        Error_Msg_Name_2 :=
+                          Chars (Get_Enum_Lit_From_Pos (Index_Typ, Hi, Loc));
+
+                        if Lo = Hi then
+                           Error_Msg_N ("\\  %!", C);
+                        else
+                           Error_Msg_N ("\\  % .. %!", C);
                         end if;
-
-                        --  Output values of missing indexes
-
-                        Lo_Val := Lo_Val - 1;
-                        Hi_Val := Hi_Val + 1;
-
-                        --  Enumeration type case
-
-                        if Is_Enumeration_Type (Index_Typ) then
-                           Error_Msg_Name_1 :=
-                             Chars
-                               (Get_Enum_Lit_From_Pos
-                                 (Index_Typ, Hi_Val, Loc));
-
-                           if Lo_Val = Hi_Val then
-                              Error_Msg_N ("\  %", N);
-                           else
-                              Error_Msg_Name_2 :=
-                                Chars
-                                  (Get_Enum_Lit_From_Pos
-                                    (Index_Typ, Lo_Val, Loc));
-                              Error_Msg_N ("\  % .. %", N);
-                           end if;
 
                         --  Integer types case
 
-                        else
-                           Error_Msg_Uint_1 := Hi_Val;
+                     else
+                        Error_Msg_Uint_1 := Lo;
+                        Error_Msg_Uint_2 := Hi;
 
-                           if Lo_Val = Hi_Val then
-                              Error_Msg_N ("\  ^", N);
-                           else
-                              Error_Msg_Uint_2 := Lo_Val;
-                              Error_Msg_N ("\  ^ .. ^", N);
-                           end if;
+                        if Lo = Hi then
+                           Error_Msg_N ("\\  ^!", C);
+                        else
+                           Error_Msg_N ("\\  ^ .. ^!", C);
                         end if;
                      end if;
-                  end if;
-               end loop Outer;
+                  end Output_Bad_Choices;
 
-               if Missing_Values then
-                  Set_Etype (N, Any_Composite);
-                  return Failure;
-               end if;
+               --  Start of processing for Check_Choices
+
+               begin
+                  Sort_Case_Table (Table);
+
+                  --  First we do a quick linear loop to find out if we have
+                  --  any duplicates or missing entries (usually we have a
+                  --  legal aggregate, so this will get us out quickly).
+
+                  for J in 1 .. Nb_Discrete_Choices - 1 loop
+                     Hi_Val := Expr_Value (Table (J).Hi);
+                     Lo_Val := Expr_Value (Table (J + 1).Lo);
+
+                     if Lo_Val <= Hi_Val
+                       or else (Lo_Val > Hi_Val + 1
+                                 and then not Others_Present)
+                     then
+                        Missing_Or_Duplicates := True;
+                        exit;
+                     end if;
+                  end loop;
+
+                  --  If we have missing or duplicate entries, first fill in
+                  --  the Highest entries to make life easier in the following
+                  --  loops to detect bad entries.
+
+                  if Missing_Or_Duplicates then
+                     Table (1).Highest := Expr_Value (Table (1).Hi);
+
+                     for J in 2 .. Nb_Discrete_Choices loop
+                        Table (J).Highest :=
+                          UI_Max
+                            (Table (J - 1).Highest, Expr_Value (Table (J).Hi));
+                     end loop;
+
+                     --  Loop through table entries to find duplicate indexes
+
+                     for J in 2 .. Nb_Discrete_Choices loop
+                        Lo_Val := Expr_Value (Table (J).Lo);
+                        Hi_Val := Expr_Value (Table (J).Hi);
+
+                        --  Case where we have duplicates (the lower bound of
+                        --  this choice is less than or equal to the highest
+                        --  high bound found so far).
+
+                        if Lo_Val <= Table (J - 1).Highest then
+
+                           --  We move backwards looking for duplicates. We can
+                           --  abandon this loop as soon as we reach a choice
+                           --  highest value that is less than Lo_Val.
+
+                           for K in reverse 1 .. J - 1 loop
+                              exit when Table (K).Highest < Lo_Val;
+
+                              --  Here we may have duplicates between entries
+                              --  for K and J. Get range of duplicates.
+
+                              Lo_Dup :=
+                                UI_Max (Lo_Val, Expr_Value (Table (K).Lo));
+                              Hi_Dup :=
+                                UI_Min (Hi_Val, Expr_Value (Table (K).Hi));
+
+                              --  Nothing to do if duplicate range is null
+
+                              if Lo_Dup > Hi_Dup then
+                                 null;
+
+                              --  Otherwise place proper message
+
+                              else
+                                 --  We place message on later choice, with a
+                                 --  line reference to the earlier choice.
+
+                                 if Sloc (Table (J).Choice) <
+                                   Sloc (Table (K).Choice)
+                                 then
+                                    Choice := Table (K).Choice;
+                                    Error_Msg_Sloc := Sloc (Table (J).Choice);
+                                 else
+                                    Choice := Table (J).Choice;
+                                    Error_Msg_Sloc := Sloc (Table (K).Choice);
+                                 end if;
+
+                                 if Lo_Dup = Hi_Dup then
+                                    Error_Msg_N
+                                      ("index value in array aggregate "
+                                       & "duplicates the one given#!", Choice);
+                                 else
+                                    Error_Msg_N
+                                      ("index values in array aggregate "
+                                       & "duplicate those given#!", Choice);
+                                 end if;
+
+                                 Output_Bad_Choices (Lo_Dup, Hi_Dup, Choice);
+                              end if;
+                           end loop;
+                        end if;
+                     end loop;
+
+                     --  Loop through entries in table to find missing indexes.
+                     --  Not needed if others, since missing impossible.
+
+                     if not Others_Present then
+                        for J in 2 .. Nb_Discrete_Choices loop
+                           Lo_Val := Expr_Value (Table (J).Lo);
+                           Hi_Val := Table (J - 1).Highest;
+
+                           if Lo_Val > Hi_Val + 1 then
+                              Choice := Table (J).Lo;
+
+                              if Hi_Val + 1 = Lo_Val - 1 then
+                                 Error_Msg_N
+                                   ("missing index value in array aggregate!",
+                                    Choice);
+                              else
+                                 Error_Msg_N
+                                   ("missing index values in array aggregate!",
+                                    Choice);
+                              end if;
+
+                              Output_Bad_Choices
+                                (Hi_Val + 1, Lo_Val - 1, Choice);
+                           end if;
+                        end loop;
+                     end if;
+
+                     --  If either missing or duplicate values, return failure
+
+                     Set_Etype (N, Any_Composite);
+                     return Failure;
+                  end if;
+               end Check_Choices;
             end if;
 
             --  STEP 2 (B): Compute aggregate bounds and min/max choices values
 
             if Nb_Discrete_Choices > 0 then
-               Choices_Low  := Table (1).Choice_Lo;
-               Choices_High := Table (Nb_Discrete_Choices).Choice_Hi;
+               Choices_Low  := Table (1).Lo;
+               Choices_High := Table (Nb_Discrete_Choices).Hi;
             end if;
 
             --  If Others is present, then bounds of aggregate come from the
@@ -2525,8 +2675,9 @@ package body Sem_Aggr is
       Check_Unset_Reference (Aggregate_Bounds (N));
 
       if not Others_Present and then Nb_Discrete_Choices = 0 then
-         Set_High_Bound (Aggregate_Bounds (N),
-             Duplicate_Subexpr (High_Bound (Aggregate_Bounds (N))));
+         Set_High_Bound
+           (Aggregate_Bounds (N),
+            Duplicate_Subexpr (High_Bound (Aggregate_Bounds (N))));
       end if;
 
       --  Check the dimensions of each component in the array aggregate
@@ -3416,6 +3567,7 @@ package body Sem_Aggr is
 
    begin
       --  A record aggregate is restricted in SPARK:
+
       --    Each named association can have only a single choice.
       --    OTHERS cannot be used.
       --    Positional and named associations cannot be mixed.
@@ -3758,6 +3910,8 @@ package body Sem_Aggr is
             end loop;
          end Find_Private_Ancestor;
 
+      --  Start of processing for Step_5
+
       begin
          if Is_Derived_Type (Typ) and then Is_Tagged_Type (Typ) then
             Parent_Typ_List := New_Elmt_List;
@@ -3822,11 +3976,12 @@ package body Sem_Aggr is
 
                if Nkind (Dnode) = N_Full_Type_Declaration then
                   Record_Def := Type_Definition (Dnode);
-                  Gather_Components (Base_Type (Typ),
-                    Component_List (Record_Def),
-                    Governed_By   => New_Assoc_List,
-                    Into          => Components,
-                    Report_Errors => Errors_Found);
+                  Gather_Components
+                    (Base_Type (Typ),
+                     Component_List (Record_Def),
+                     Governed_By   => New_Assoc_List,
+                     Into          => Components,
+                     Report_Errors => Errors_Found);
                end if;
             end if;
 
@@ -3915,19 +4070,20 @@ package body Sem_Aggr is
                null;
 
             elsif not Has_Unknown_Discriminants (Typ) then
-               Gather_Components (Base_Type (Typ),
-                 Component_List (Record_Def),
-                 Governed_By   => New_Assoc_List,
-                 Into          => Components,
-                 Report_Errors => Errors_Found);
+               Gather_Components
+                 (Base_Type (Typ),
+                  Component_List (Record_Def),
+                  Governed_By   => New_Assoc_List,
+                  Into          => Components,
+                  Report_Errors => Errors_Found);
 
             else
                Gather_Components
                  (Base_Type (Underlying_Record_View (Typ)),
-                 Component_List (Record_Def),
-                 Governed_By   => New_Assoc_List,
-                 Into          => Components,
-                 Report_Errors => Errors_Found);
+                  Component_List (Record_Def),
+                  Governed_By   => New_Assoc_List,
+                  Into          => Components,
+                  Report_Errors => Errors_Found);
             end if;
          end if;
 
@@ -4067,6 +4223,17 @@ package body Sem_Aggr is
                            Assoc_List => New_Assoc_List);
                      end;
                   end if;
+
+               --  Ada 2012: If component is scalar with default value, use it
+
+               elsif Is_Scalar_Type (Ctyp)
+                 and then Has_Default_Aspect (Ctyp)
+               then
+                  Add_Association
+                    (Component  => Component,
+                     Expr       => Default_Aspect_Value
+                                     (First_Subtype (Underlying_Type (Ctyp))),
+                     Assoc_List => New_Assoc_List);
 
                elsif Has_Non_Null_Base_Init_Proc (Ctyp)
                  or else not Expander_Active
@@ -4570,16 +4737,17 @@ package body Sem_Aggr is
          --  Apply_Compile_Time_Constraint_Error here to the Expr, which might
          --  seem the more natural approach. That's because in some cases the
          --  components are rewritten, and the replacement would be missed.
+         --  We do not mark the whole aggregate as raising a constraint error,
+         --  because the association may be a null array range.
 
-         Insert_Action
-           (Compile_Time_Constraint_Error
-              (Expr,
-               "(Ada 2005) null not allowed in null-excluding component??"),
-            Make_Raise_Constraint_Error
-              (Sloc (Expr), Reason => CE_Access_Check_Failed));
+         Error_Msg_N
+           ("(Ada 2005) null not allowed in null-excluding component??", Expr);
+         Error_Msg_N
+           ("\Constraint_Error will be raised at run time?", Expr);
 
-         --  Set proper type for bogus component (why is this needed???)
-
+         Rewrite (Expr,
+           Make_Raise_Constraint_Error
+             (Sloc (Expr), Reason => CE_Access_Check_Failed));
          Set_Etype    (Expr, Comp_Typ);
          Set_Analyzed (Expr);
       end if;
@@ -4590,21 +4758,19 @@ package body Sem_Aggr is
    ---------------------
 
    procedure Sort_Case_Table (Case_Table : in out Case_Table_Type) is
-      L : constant Int := Case_Table'First;
       U : constant Int := Case_Table'Last;
       K : Int;
       J : Int;
       T : Case_Bounds;
 
    begin
-      K := L;
-      while K /= U loop
+      K := 1;
+      while K < U loop
          T := Case_Table (K + 1);
 
          J := K + 1;
-         while J /= L
-           and then Expr_Value (Case_Table (J - 1).Choice_Lo) >
-                    Expr_Value (T.Choice_Lo)
+         while J > 1
+           and then Expr_Value (Case_Table (J - 1).Lo) > Expr_Value (T.Lo)
          loop
             Case_Table (J) := Case_Table (J - 1);
             J := J - 1;

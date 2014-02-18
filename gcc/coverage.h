@@ -1,5 +1,5 @@
 /* coverage.h - Defines data exported from coverage.c
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -34,6 +34,9 @@ extern void coverage_end_function (unsigned, unsigned);
 
 /* Compute the control flow checksum for the current function.  */
 extern unsigned coverage_compute_cfg_checksum (void);
+
+/* Compute the profile id of function N.  */
+extern unsigned coverage_compute_profile_id (struct cgraph_node *n);
 
 /* Compute the line number checksum for the current function.  */
 extern unsigned coverage_compute_lineno_checksum (void);

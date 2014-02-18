@@ -1,6 +1,6 @@
 /* Instruction scheduling pass.  This file computes dependencies between
    instructions.
-   Copyright (C) 1992-2013 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com) Enhanced by,
    and currently maintained by, Jim Wilson (wilson@cygnus.com)
 
@@ -1938,8 +1938,8 @@ create_insn_reg_use (int regno, rtx insn)
   return use;
 }
 
-/* Allocate and return reg_set_data structure for REGNO and INSN.  */
-static struct reg_set_data *
+/* Allocate reg_set_data structure for REGNO and INSN.  */
+static void
 create_insn_reg_set (int regno, rtx insn)
 {
   struct reg_set_data *set;
@@ -1949,7 +1949,6 @@ create_insn_reg_set (int regno, rtx insn)
   set->insn = insn;
   set->next_insn_set = INSN_REG_SET_LIST (insn);
   INSN_REG_SET_LIST (insn) = set;
-  return set;
 }
 
 /* Set up insn register uses for INSN and dependency context DEPS.  */
@@ -2690,8 +2689,15 @@ sched_analyze_2 (struct deps_desc *deps, rtx x, rtx insn)
 
 	/* Always add these dependencies to pending_reads, since
 	   this insn may be followed by a write.  */
-        if (!deps->readonly)
-          add_insn_mem_dependence (deps, true, insn, x);
+	if (!deps->readonly)
+	  {
+	    if ((deps->pending_read_list_length
+		 + deps->pending_write_list_length)
+		> MAX_PENDING_LIST_LENGTH
+		&& !DEBUG_INSN_P (insn))
+	      flush_pending_lists (deps, insn, true, true);
+	    add_insn_mem_dependence (deps, true, insn, x);
+	  }
 
 	sched_analyze_2 (deps, XEXP (x, 0), insn);
 
@@ -2814,6 +2820,37 @@ sched_analyze_2 (struct deps_desc *deps, rtx x, rtx insn)
     sched_deps_info->finish_rhs ();
 }
 
+/* Try to group comparison and the following conditional jump INSN if
+   they're already adjacent. This is to prevent scheduler from scheduling
+   them apart.  */
+
+static void
+try_group_insn (rtx insn)
+{
+  unsigned int condreg1, condreg2;
+  rtx cc_reg_1;
+  rtx prev;
+
+  if (!any_condjump_p (insn))
+    return;
+
+  targetm.fixed_condition_code_regs (&condreg1, &condreg2);
+  cc_reg_1 = gen_rtx_REG (CCmode, condreg1);
+  prev = prev_nonnote_nondebug_insn (insn);
+  if (!reg_referenced_p (cc_reg_1, PATTERN (insn))
+      || !prev
+      || !modified_in_p (cc_reg_1, prev))
+    return;
+
+  /* Different microarchitectures support macro fusions for different
+     combinations of insn pairs.  */
+  if (!targetm.sched.macro_fusion_pair_p
+      || !targetm.sched.macro_fusion_pair_p (prev, insn))
+    return;
+
+  SCHED_GROUP_P (insn) = 1;
+}
+
 /* Analyze an INSN with pattern X to find all dependencies.  */
 static void
 sched_analyze_insn (struct deps_desc *deps, rtx x, rtx insn)
@@ -2836,6 +2873,11 @@ sched_analyze_insn (struct deps_desc *deps, rtx x, rtx insn)
 
   can_start_lhs_rhs_p = (NONJUMP_INSN_P (insn)
 			 && code == SET);
+
+  /* Group compare and branch insns for macro-fusion.  */
+  if (targetm.sched.macro_fusion_p
+      && targetm.sched.macro_fusion_p ())
+    try_group_insn (insn);
 
   if (may_trap_p (x))
     /* Avoid moving trapping instructions across function calls that might
@@ -3428,6 +3470,15 @@ sched_analyze_insn (struct deps_desc *deps, rtx x, rtx insn)
             change_spec_dep_to_hard (sd_it);
         }
     }
+
+  /* We do not yet have code to adjust REG_ARGS_SIZE, therefore we must
+     honor their original ordering.  */
+  if (find_reg_note (insn, REG_ARGS_SIZE, NULL))
+    {
+      if (deps->last_args_size)
+	add_dependence (insn, deps->last_args_size, REG_DEP_OUTPUT);
+      deps->last_args_size = insn;
+    }
 }
 
 /* Return TRUE if INSN might not always return normally (e.g. call exit,
@@ -3727,6 +3778,10 @@ sched_analyze (struct deps_desc *deps, rtx head, rtx tail)
 	{
 	  /* And initialize deps_lists.  */
 	  sd_init_insn (insn);
+	  /* Clean up SCHED_GROUP_P which may be set by last
+	     scheduler pass.  */
+	  if (SCHED_GROUP_P (insn))
+	    SCHED_GROUP_P (insn) = 0;
 	}
 
       deps_analyze_insn (deps, insn);
@@ -3830,6 +3885,7 @@ init_deps (struct deps_desc *deps, bool lazy_reg_last)
   deps->sched_before_next_jump = 0;
   deps->in_post_call_group_p = not_post_call;
   deps->last_debug_insn = 0;
+  deps->last_args_size = 0;
   deps->last_reg_pending_barrier = NOT_A_BARRIER;
   deps->readonly = 0;
 }
@@ -3957,7 +4013,7 @@ sched_deps_init (bool global_p)
 {
   /* Average number of insns in the basic block.
      '+ 1' is used to make it nonzero.  */
-  int insns_in_block = sched_max_luid / n_basic_blocks + 1;
+  int insns_in_block = sched_max_luid / n_basic_blocks_for_fn (cfun) + 1;
 
   init_deps_data_vector ();
 
@@ -4170,8 +4226,9 @@ add_dependence_1 (rtx insn, rtx elem, enum reg_note dep_type)
     cur_insn = NULL;
 }
 
-/* Return weakness of speculative type TYPE in the dep_status DS.  */
-dw_t
+/* Return weakness of speculative type TYPE in the dep_status DS,
+   without checking to prevent ICEs on malformed input.  */
+static dw_t
 get_dep_weak_1 (ds_t ds, ds_t type)
 {
   ds = ds & type;
@@ -4188,6 +4245,7 @@ get_dep_weak_1 (ds_t ds, ds_t type)
   return (dw_t) ds;
 }
 
+/* Return weakness of speculative type TYPE in the dep_status DS.  */
 dw_t
 get_dep_weak (ds_t ds, ds_t type)
 {
@@ -4565,7 +4623,7 @@ attempt_change (struct mem_inc_info *mii, rtx new_addr)
   rtx mem = *mii->mem_loc;
   rtx new_mem;
 
-  /* Jump thru a lot of hoops to keep the attributes up to date.  We
+  /* Jump through a lot of hoops to keep the attributes up to date.  We
      do not want to call one of the change address variants that take
      an offset even though we know the offset in many cases.  These
      assume you are changing where the address is pointing by the

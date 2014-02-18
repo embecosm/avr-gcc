@@ -1,5 +1,5 @@
 /* Command line option handling.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Neil Booth.
 
 This file is part of GCC.
@@ -169,7 +169,7 @@ base_of_path (const char *path, const char **base_out)
   char c = *p;
   while (c)
     {
-      if (IS_DIR_SEPARATOR(c))
+      if (IS_DIR_SEPARATOR (c))
         {
           base = p + 1;
           dot = 0;
@@ -279,10 +279,15 @@ init_options_struct (struct gcc_options *opts, struct gcc_options *opts_set)
   gcc_obstack_init (&opts_obstack);
 
   *opts = global_options_init;
-  memset (opts_set, 0, sizeof (*opts_set));
+
+  if (opts_set)
+    memset (opts_set, 0, sizeof (*opts_set));
 
   opts->x_param_values = XNEWVEC (int, num_params);
-  opts_set->x_param_values = XCNEWVEC (int, num_params);
+
+  if (opts_set)
+    opts_set->x_param_values = XCNEWVEC (int, num_params);
+
   init_param_values (opts->x_param_values);
 
   /* Initialize whether `char' is signed.  */
@@ -449,6 +454,9 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_1_PLUS, OPT_fcombine_stack_adjustments, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fcompare_elim, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_ftree_slsr, NULL, 1 },
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fbranch_count_reg, NULL, 1 },
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fmove_loop_invariants, NULL, 1 },
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_ftree_pta, NULL, 1 },
 
     /* -O2 optimizations.  */
     { OPT_LEVELS_2_PLUS, OPT_finline_small_functions, NULL, 1 },
@@ -468,7 +476,6 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_2_PLUS_SPEED_ONLY, OPT_fschedule_insns, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fschedule_insns2, NULL, 1 },
 #endif
-    { OPT_LEVELS_2_PLUS, OPT_fregmove, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fstrict_aliasing, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fstrict_overflow, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_freorder_blocks, NULL, 1 },
@@ -479,14 +486,18 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_2_PLUS, OPT_ftree_switch_conversion, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fipa_cp, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fdevirtualize, NULL, 1 },
+    { OPT_LEVELS_2_PLUS, OPT_fdevirtualize_speculatively, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fipa_sra, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_falign_loops, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_falign_jumps, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_falign_labels, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_falign_functions, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_ftree_tail_merge, NULL, 1 },
+    { OPT_LEVELS_2_PLUS, OPT_fvect_cost_model_, NULL, VECT_COST_MODEL_CHEAP },
     { OPT_LEVELS_2_PLUS_SPEED_ONLY, OPT_foptimize_strlen, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fhoist_adjacent_loads, NULL, 1 },
+    { OPT_LEVELS_2_PLUS, OPT_fipa_sem_equality, NULL, 1 },
+    { OPT_LEVELS_2_PLUS, OPT_fisolate_erroneous_paths_dereference, NULL, 1 },
 
     /* -O3 optimizations.  */
     { OPT_LEVELS_3_PLUS, OPT_ftree_loop_distribute_patterns, NULL, 1 },
@@ -497,8 +508,9 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_finline_functions_called_once, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_funswitch_loops, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_fgcse_after_reload, NULL, 1 },
-    { OPT_LEVELS_3_PLUS, OPT_ftree_vectorize, NULL, 1 },
-    { OPT_LEVELS_3_PLUS, OPT_fvect_cost_model, NULL, 1 },
+    { OPT_LEVELS_3_PLUS, OPT_ftree_loop_vectorize, NULL, 1 },
+    { OPT_LEVELS_3_PLUS, OPT_ftree_slp_vectorize, NULL, 1 },
+    { OPT_LEVELS_3_PLUS, OPT_fvect_cost_model_, NULL, VECT_COST_MODEL_DYNAMIC },
     { OPT_LEVELS_3_PLUS, OPT_fipa_cp_clone, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_ftree_partial_pre, NULL, 1 },
 
@@ -729,9 +741,10 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
       && opts->x_flag_reorder_blocks_and_partition
       && (ui_except == UI_SJLJ || ui_except >= UI_TARGET))
     {
-      inform (loc,
-	      "-freorder-blocks-and-partition does not work "
-	      "with exceptions on this architecture");
+      if (opts_set->x_flag_reorder_blocks_and_partition)
+        inform (loc,
+                "-freorder-blocks-and-partition does not work "
+                "with exceptions on this architecture");
       opts->x_flag_reorder_blocks_and_partition = 0;
       opts->x_flag_reorder_blocks = 1;
     }
@@ -744,9 +757,10 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
       && opts->x_flag_reorder_blocks_and_partition
       && (ui_except == UI_SJLJ || ui_except >= UI_TARGET))
     {
-      inform (loc,
-	      "-freorder-blocks-and-partition does not support "
-	      "unwind info on this architecture");
+      if (opts_set->x_flag_reorder_blocks_and_partition)
+        inform (loc,
+                "-freorder-blocks-and-partition does not support "
+                "unwind info on this architecture");
       opts->x_flag_reorder_blocks_and_partition = 0;
       opts->x_flag_reorder_blocks = 1;
     }
@@ -761,9 +775,10 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
 	      && targetm_common.unwind_tables_default
 	      && (ui_except == UI_SJLJ || ui_except >= UI_TARGET))))
     {
-      inform (loc,
-	      "-freorder-blocks-and-partition does not work "
-	      "on this architecture");
+      if (opts_set->x_flag_reorder_blocks_and_partition)
+        inform (loc,
+                "-freorder-blocks-and-partition does not work "
+                "on this architecture");
       opts->x_flag_reorder_blocks_and_partition = 0;
       opts->x_flag_reorder_blocks = 1;
     }
@@ -797,9 +812,16 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
 #else
       error_at (loc, "LTO support has not been enabled in this configuration");
 #endif
-      if (!opts->x_flag_fat_lto_objects && !HAVE_LTO_PLUGIN)
-        error_at (loc, "-fno-fat-lto-objects are supported only with linker plugin.");
-}
+      if (!opts->x_flag_fat_lto_objects
+	  && (!HAVE_LTO_PLUGIN
+	      || (opts_set->x_flag_use_linker_plugin
+		  && !opts->x_flag_use_linker_plugin)))
+	{
+	  if (opts_set->x_flag_fat_lto_objects)
+            error_at (loc, "-fno-fat-lto-objects are supported only with linker plugin");
+	  opts->x_flag_fat_lto_objects = 1;
+	}
+    }
   if ((opts->x_flag_lto_partition_balanced != 0) + (opts->x_flag_lto_partition_1to1 != 0)
        + (opts->x_flag_lto_partition_none != 0) >= 1)
     {
@@ -823,9 +845,21 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
 	}
     }
 
+  /* Tune vectorization related parametees according to cost model.  */
+  if (opts->x_flag_vect_cost_model == VECT_COST_MODEL_CHEAP)
+    {
+      maybe_set_param_value (PARAM_VECT_MAX_VERSION_FOR_ALIAS_CHECKS,
+            6, opts->x_param_values, opts_set->x_param_values);
+      maybe_set_param_value (PARAM_VECT_MAX_VERSION_FOR_ALIGNMENT_CHECKS,
+            0, opts->x_param_values, opts_set->x_param_values);
+      maybe_set_param_value (PARAM_VECT_MAX_PEELING_FOR_ALIGNMENT,
+            0, opts->x_param_values, opts_set->x_param_values);
+    }
+
   /* Set PARAM_MAX_STORES_TO_SINK to 0 if either vectorization or if-conversion
      is disabled.  */
-  if (!opts->x_flag_tree_vectorize || !opts->x_flag_tree_loop_if_convert)
+  if ((!opts->x_flag_tree_loop_vectorize && !opts->x_flag_tree_slp_vectorize)
+       || !opts->x_flag_tree_loop_if_convert)
     maybe_set_param_value (PARAM_MAX_STORES_TO_SINK, 0,
                            opts->x_param_values, opts_set->x_param_values);
 
@@ -873,7 +907,7 @@ wrap_help (const char *help,
 	    }
 	}
 
-      printf( "  %-*.*s %.*s\n", col_width, item_width, item, len, help);
+      printf ("  %-*.*s %.*s\n", col_width, item_width, item, len, help);
       item_width = 0;
       while (help[len] == ' ')
 	len++;
@@ -1405,6 +1439,82 @@ common_handle_option (struct gcc_options *opts,
       opts->x_exit_after_options = true;
       break;
 
+    case OPT_fsanitize_:
+      {
+	const char *p = arg;
+	while (*p != 0)
+	  {
+	    static const struct
+	    {
+	      const char *const name;
+	      unsigned int flag;
+	      size_t len;
+	    } spec[] =
+	    {
+	      { "address", SANITIZE_ADDRESS, sizeof "address" - 1 },
+	      { "thread", SANITIZE_THREAD, sizeof "thread" - 1 },
+	      { "leak", SANITIZE_LEAK, sizeof "leak" - 1 },
+	      { "shift", SANITIZE_SHIFT, sizeof "shift" - 1 },
+	      { "integer-divide-by-zero", SANITIZE_DIVIDE,
+		sizeof "integer-divide-by-zero" - 1 },
+	      { "undefined", SANITIZE_UNDEFINED, sizeof "undefined" - 1 },
+	      { "unreachable", SANITIZE_UNREACHABLE,
+		sizeof "unreachable" - 1 },
+	      { "vla-bound", SANITIZE_VLA, sizeof "vla-bound" - 1 },
+	      { "return", SANITIZE_RETURN, sizeof "return" - 1 },
+	      { "null", SANITIZE_NULL, sizeof "null" - 1 },
+	      { "signed-integer-overflow", SANITIZE_SI_OVERFLOW,
+		sizeof "signed-integer-overflow" -1 },
+	      { "bool", SANITIZE_BOOL, sizeof "bool" - 1 },
+	      { "enum", SANITIZE_ENUM, sizeof "enum" - 1 },
+	      { NULL, 0, 0 }
+	    };
+	    const char *comma;
+	    size_t len, i;
+	    bool found = false;
+
+	    comma = strchr (p, ',');
+	    if (comma == NULL)
+	      len = strlen (p);
+	    else
+	      len = comma - p;
+	    if (len == 0)
+	      {
+		p = comma + 1;
+		continue;
+	      }
+
+	    /* Check to see if the string matches an option class name.  */
+	    for (i = 0; spec[i].name != NULL; ++i)
+	      if (len == spec[i].len
+		  && memcmp (p, spec[i].name, len) == 0)
+		{
+		  /* Handle both -fsanitize and -fno-sanitize cases.  */
+		  if (value)
+		    flag_sanitize |= spec[i].flag;
+		  else
+		    flag_sanitize &= ~spec[i].flag;
+		  found = true;
+		  break;
+		}
+
+	    if (! found)
+	      warning_at (loc, 0,
+			  "unrecognized argument to -fsanitize= option: %q.*s",
+			  (int) len, p);
+
+	    if (comma == NULL)
+	      break;
+	    p = comma + 1;
+	  }
+
+	/* When instrumenting the pointers, we don't want to remove
+	   the null pointer checks.  */
+	if (flag_sanitize & SANITIZE_NULL)
+	  opts->x_flag_delete_null_pointer_checks = 0;
+	break;
+      }
+
     case OPT_O:
     case OPT_Os:
     case OPT_Ofast:
@@ -1595,12 +1705,23 @@ common_handle_option (struct gcc_options *opts,
 	opts->x_flag_unswitch_loops = value;
       if (!opts_set->x_flag_gcse_after_reload)
 	opts->x_flag_gcse_after_reload = value;
-      if (!opts_set->x_flag_tree_vectorize)
-	opts->x_flag_tree_vectorize = value;
+      if (!opts_set->x_flag_tree_loop_vectorize
+          && !opts_set->x_flag_tree_vectorize)
+	opts->x_flag_tree_loop_vectorize = value;
+      if (!opts_set->x_flag_tree_slp_vectorize
+          && !opts_set->x_flag_tree_vectorize)
+	opts->x_flag_tree_slp_vectorize = value;
       if (!opts_set->x_flag_vect_cost_model)
-	opts->x_flag_vect_cost_model = value;
+	opts->x_flag_vect_cost_model = VECT_COST_MODEL_DYNAMIC;
       if (!opts_set->x_flag_tree_loop_distribute_patterns)
 	opts->x_flag_tree_loop_distribute_patterns = value;
+      if (!opts_set->x_flag_profile_reorder_functions)
+	opts->x_flag_profile_reorder_functions = value;
+      /* Indirect call profiling should do all useful transformations
+ 	 speculative devirtualization does.  */
+      if (!opts_set->x_flag_devirtualize_speculatively
+	  && opts->x_flag_value_profile_transformations)
+	opts->x_flag_devirtualize_speculatively = false;
       break;
 
     case OPT_fprofile_generate_:
@@ -1621,6 +1742,12 @@ common_handle_option (struct gcc_options *opts,
         opts->x_flag_ipa_reference = false;
       break;
 
+    case OPT_ftree_vectorize:
+      if (!opts_set->x_flag_tree_loop_vectorize)
+        opts->x_flag_tree_loop_vectorize = value;
+      if (!opts_set->x_flag_tree_slp_vectorize)
+        opts->x_flag_tree_slp_vectorize = value;
+      break;
     case OPT_fshow_column:
       dc->show_column = value;
       break;
@@ -1690,15 +1817,14 @@ common_handle_option (struct gcc_options *opts,
       opts->x_flag_stack_usage_info = value != 0;
       break;
 
-    case OPT_ftree_vectorizer_verbose_:
-      /* -ftree-vectorizer-verbose is deprecated. It is defined in
-         -terms of fopt-info=N. */
-      /* Deferred.  */
-      break;
-
     case OPT_g:
-      set_debug_level (NO_DEBUG, DEFAULT_GDB_EXTENSIONS, arg, opts, opts_set,
-		       loc);
+      /* -g by itself should force -g2.  */
+      if (*arg == '\0')
+	set_debug_level (NO_DEBUG, DEFAULT_GDB_EXTENSIONS, "2", opts, opts_set,
+			 loc);
+      else
+	set_debug_level (NO_DEBUG, DEFAULT_GDB_EXTENSIONS, arg, opts, opts_set,
+			 loc);
       break;
 
     case OPT_gcoff:
@@ -2090,14 +2216,10 @@ option_name (diagnostic_context *context, int option_index,
 	return xstrdup (cl_options[option_index].opt_text);
     }
   /* A warning without option classified as an error.  */
-  else if (orig_diag_kind == DK_WARNING || orig_diag_kind == DK_PEDWARN
-	   || diag_kind == DK_WARNING)
-    {
-      if (context->warning_as_error_requested)
-	return xstrdup (cl_options[OPT_Werror].opt_text);
-      else
-	return xstrdup (_("enabled by default"));
-    }
+  else if ((orig_diag_kind == DK_WARNING || orig_diag_kind == DK_PEDWARN
+	    || diag_kind == DK_WARNING)
+	   && context->warning_as_error_requested)
+    return xstrdup (cl_options[OPT_Werror].opt_text);
   else
     return NULL;
 }

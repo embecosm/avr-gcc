@@ -1,3 +1,49 @@
+2014-01-02  Tobias Burnus  <burnus@net-b.de>
+
+	* gnu/gcj/convert/Convert.java (version): Update copyright notice
+	dates.
+	* gnu/gcj/tools/gcj_dbtool/Main.java (main): Ditto.
+
+2013-12-09  Andreas Schwab  <schwab@suse.de>
+
+	* Makefile.am (toolexeclib_LTLIBRARIES) [USE_LIBGCJ_BC]: Use
+	install/libgcj_bc.la instead of libgcj_bc.la.
+	(noinst_LTLIBRARIES) [USE_LIBGCJ_BC]: Define.
+	(install_libgcj_bc_la_SOURCES): Define.
+	(install/libgcj_bc.la): New rule.
+	* Makefile.in: Regenerate.
+
+2013-09-20  Alan Modra  <amodra@gmail.com>
+
+	* configure: Regenerate.
+
+2013-06-20  Roland Lutz  <rlutz@hedmen.org>
+
+ 	* contrib/aot-compile.in: Fix typo in option list.
+
+2013-06-20  Matthias Klose  <doko@ubuntu.com>
+
+	* pkg.m4 (PKG_CHECK_MODULES): Use AC_PATH_TOOL to check for pkg-config.
+	* classpath/m4/pkg.m4 (PKG_CHECK_MODULES): Likewise.
+	* configure: Regenerate.
+	* classpath/configure: Regenerate.
+
+2013-06-20  Matthias Klose  <doko@ubuntu.com>
+
+	* libtool-version: Bump soversion.
+
+2013-05-22  Mark Mitchell  <mark@codesourcery.com>
+	    Sandra Loosemore  <sandra@codesourcery.com>
+
+	* configure.ac (dbexecdir): Base on $(toolexeclibdir), not
+	$(libdir).
+	* Makefile.am (pkgconfigdir): Likewise.
+	* configure: Regenerated.
+	* Makefile.in: Regenerated.
+	* gcj/Makefile.in: Regenerated.
+	* include/Makefile.in: Regenerated.
+	* testsuite/Makefile.in: Regenerated.
+
 2013-04-16  Andreas Schwab  <schwab@suse.de>
 
 	* configure.host: Add support for aarch64.
@@ -21,7 +67,7 @@
 	dates.
 	* gnu/gcj/tools/gcj_dbtool/Main.java (main): Likewise.
 
-Copyright (C) 2013 Free Software Foundation, Inc.
+Copyright (C) 2014 Free Software Foundation, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright

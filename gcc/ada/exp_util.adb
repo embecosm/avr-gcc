@@ -106,6 +106,10 @@ package body Exp_Util is
    --  record with task components, or for a dynamically created task that is
    --  assigned to a selected component.
 
+   procedure Evaluate_Slice_Bounds (Slice : Node_Id);
+   --  Force evaluation of bounds of a slice, which may be given by a range
+   --  or by a subtype indication with or without a constraint.
+
    function Make_CW_Equivalent_Type
      (T : Entity_Id;
       E : Node_Id) return Entity_Id;
@@ -507,13 +511,32 @@ package body Exp_Util is
 
          Expr := E;
          loop
-            if Nkind_In (Expr, N_Qualified_Expression,
-                               N_Unchecked_Type_Conversion)
-            then
+            if Nkind (Expr) = N_Explicit_Dereference then
+               Expr := Prefix (Expr);
+
+            elsif Nkind (Expr) = N_Qualified_Expression then
                Expr := Expression (Expr);
 
-            elsif Nkind (Expr) = N_Explicit_Dereference then
-               Expr := Prefix (Expr);
+            elsif Nkind (Expr) = N_Unchecked_Type_Conversion then
+
+               --  When interface class-wide types are involved in allocation,
+               --  the expander introduces several levels of address arithmetic
+               --  to perform dispatch table displacement. In this scenario the
+               --  object appears as:
+
+               --    Tag_Ptr (Base_Address (<object>'Address))
+
+               --  Detect this case and utilize the whole expression as the
+               --  "object" since it now points to the proper dispatch table.
+
+               if Is_RTE (Etype (Expr), RE_Tag_Ptr) then
+                  exit;
+
+               --  Continue to strip the object
+
+               else
+                  Expr := Expression (Expr);
+               end if;
 
             else
                exit;
@@ -560,13 +583,6 @@ package body Exp_Util is
    --  Start of processing for Build_Allocate_Deallocate_Proc
 
    begin
-      --  Do not perform this expansion in SPARK mode because it is not
-      --  necessary.
-
-      if SPARK_Mode then
-         return;
-      end if;
-
       --  Obtain the attributes of the allocation / deallocation
 
       if Nkind (N) = N_Free_Statement then
@@ -793,101 +809,106 @@ package body Exp_Util is
 
          --  h) Is_Controlled
 
-         --  Generate a run-time check to determine whether a class-wide object
-         --  is truly controlled.
-
          if Needs_Finalization (Desig_Typ) then
-            if Is_Class_Wide_Type (Desig_Typ)
-              or else Is_Generic_Actual_Type (Desig_Typ)
-            then
-               declare
-                  Flag_Id   : constant Entity_Id := Make_Temporary (Loc, 'F');
-                  Flag_Expr : Node_Id;
-                  Param     : Node_Id;
-                  Temp      : Node_Id;
+            declare
+               Flag_Id   : constant Entity_Id := Make_Temporary (Loc, 'F');
+               Flag_Expr : Node_Id;
+               Param     : Node_Id;
+               Temp      : Node_Id;
 
-               begin
-                  if Is_Allocate then
-                     Temp := Find_Object (Expression (Expr));
-                  else
-                     Temp := Expr;
-                  end if;
+            begin
+               if Is_Allocate then
+                  Temp := Find_Object (Expression (Expr));
+               else
+                  Temp := Expr;
+               end if;
 
-                  --  Processing for generic actuals
+               --  Processing for allocations where the expression is a subtype
+               --  indication.
 
-                  if Is_Generic_Actual_Type (Desig_Typ) then
-                     Flag_Expr :=
-                       New_Reference_To (Boolean_Literals
-                         (Needs_Finalization (Base_Type (Desig_Typ))), Loc);
-
-                  --  Processing for subtype indications
-
-                  elsif Nkind (Temp) in N_Has_Entity
-                    and then Is_Type (Entity (Temp))
-                  then
-                     Flag_Expr :=
-                       New_Reference_To (Boolean_Literals
+               if Is_Allocate
+                 and then Is_Entity_Name (Temp)
+                 and then Is_Type (Entity (Temp))
+               then
+                  Flag_Expr :=
+                    New_Reference_To
+                      (Boolean_Literals
                          (Needs_Finalization (Entity (Temp))), Loc);
 
-                  --  Generate a runtime check to test the controlled state of
-                  --  an object for the purposes of allocation / deallocation.
+               --  The allocation / deallocation of a class-wide object relies
+               --  on a runtime check to determine whether the object is truly
+               --  controlled or not. Depending on this check, the finalization
+               --  machinery will request or reclaim extra storage reserved for
+               --  a list header.
+
+               elsif Is_Class_Wide_Type (Desig_Typ) then
+
+                  --  Detect a special case where interface class-wide types
+                  --  are involved as the object appears as:
+
+                  --    Tag_Ptr (Base_Address (<object>'Address))
+
+                  --  The expression already yields the proper tag, generate:
+
+                  --    Temp.all
+
+                  if Is_RTE (Etype (Temp), RE_Tag_Ptr) then
+                     Param :=
+                       Make_Explicit_Dereference (Loc,
+                         Prefix => Relocate_Node (Temp));
+
+                  --  In the default case, obtain the tag of the object about
+                  --  to be allocated / deallocated. Generate:
+
+                  --    Temp'Tag
 
                   else
-                     --  The following case arises when allocating through an
-                     --  interface class-wide type, generate:
-                     --
-                     --    Temp.all
-
-                     if Is_RTE (Etype (Temp), RE_Tag_Ptr) then
-                        Param :=
-                          Make_Explicit_Dereference (Loc,
-                            Prefix =>
-                              Relocate_Node (Temp));
-
-                     --  Generate:
-                     --    Temp'Tag
-
-                     else
-                        Param :=
-                          Make_Attribute_Reference (Loc,
-                            Prefix =>
-                              Relocate_Node (Temp),
-                            Attribute_Name => Name_Tag);
-                     end if;
-
-                     --  Generate:
-                     --    Needs_Finalization (<Param>)
-
-                     Flag_Expr :=
-                       Make_Function_Call (Loc,
-                         Name =>
-                           New_Reference_To (RTE (RE_Needs_Finalization), Loc),
-                         Parameter_Associations => New_List (Param));
+                     Param :=
+                       Make_Attribute_Reference (Loc,
+                         Prefix         => Relocate_Node (Temp),
+                         Attribute_Name => Name_Tag);
                   end if;
 
-                  --  Create the temporary which represents the finalization
-                  --  state of the expression. Generate:
-                  --
-                  --    F : constant Boolean := <Flag_Expr>;
+                  --  Generate:
+                  --    Needs_Finalization (<Param>)
 
-                  Insert_Action (N,
-                    Make_Object_Declaration (Loc,
-                      Defining_Identifier => Flag_Id,
-                      Constant_Present => True,
-                      Object_Definition =>
-                        New_Reference_To (Standard_Boolean, Loc),
-                      Expression => Flag_Expr));
+                  Flag_Expr :=
+                    Make_Function_Call (Loc,
+                      Name                   =>
+                        New_Reference_To (RTE (RE_Needs_Finalization), Loc),
+                      Parameter_Associations => New_List (Param));
 
-                  --  The flag acts as the last actual
+               --  Processing for generic actuals
 
-                  Append_To (Actuals, New_Reference_To (Flag_Id, Loc));
-               end;
+               elsif Is_Generic_Actual_Type (Desig_Typ) then
+                  Flag_Expr :=
+                    New_Reference_To (Boolean_Literals
+                      (Needs_Finalization (Base_Type (Desig_Typ))), Loc);
 
-            --  The object is statically known to be controlled
+               --  The object does not require any specialized checks, it is
+               --  known to be controlled.
 
-            else
-               Append_To (Actuals, New_Reference_To (Standard_True, Loc));
-            end if;
+               else
+                  Flag_Expr := New_Reference_To (Standard_True, Loc);
+               end if;
+
+               --  Create the temporary which represents the finalization state
+               --  of the expression. Generate:
+               --
+               --    F : constant Boolean := <Flag_Expr>;
+
+               Insert_Action (N,
+                 Make_Object_Declaration (Loc,
+                   Defining_Identifier => Flag_Id,
+                   Constant_Present    => True,
+                   Object_Definition   =>
+                     New_Reference_To (Standard_Boolean, Loc),
+                    Expression          => Flag_Expr));
+
+               Append_To (Actuals, New_Reference_To (Flag_Id, Loc));
+            end;
+
+         --  The object is not controlled
 
          else
             Append_To (Actuals, New_Reference_To (Standard_False, Loc));
@@ -1406,6 +1427,12 @@ package body Exp_Util is
                          Low_Bound => Make_Integer_Literal (Loc, 1),
                          High_Bound => New_Occurrence_Of (Len, Loc)))))));
 
+      --  Indicate that the result is an internal temporary, so it does not
+      --  receive a bogus initialization when declaration is expanded. This
+      --  is both efficient, and prevents anomalies in the handling of
+      --  dynamic objects on the secondary stack.
+
+      Set_Is_Internal (Res);
       Pos := Make_Temporary (Loc, 'P');
 
       Append_To (Decls,
@@ -1631,13 +1658,19 @@ package body Exp_Util is
             --  node to recognize this case.
 
            or else Present (Interface_List (Parent (Typ)))
-           or else
-             (((Has_Attach_Handler (Typ) and then not Restricted_Profile)
-                 or else Has_Interrupt_Handler (Typ))
-               and then not Restriction_Active (No_Dynamic_Attachment))
+
+            --  Protected types with interrupt handlers (when not using a
+            --  restricted profile) are also considered equivalent to
+            --  protected types with entries. The types which are used
+            --  (Static_Interrupt_Protection and Dynamic_Interrupt_Protection)
+            --  are derived from Protection_Entries.
+
+           or else (Has_Attach_Handler (Typ) and then not Restricted_Profile)
+           or else Has_Interrupt_Handler (Typ)
          then
             if Abort_Allowed
               or else Restriction_Active (No_Entry_Queue) = False
+              or else Restriction_Active (No_Select_Statements) = False
               or else Number_Entries (Typ) > 1
               or else (Has_Attach_Handler (Typ)
                         and then not Restricted_Profile)
@@ -1773,35 +1806,6 @@ package body Exp_Util is
       end if;
    end Ensure_Defined;
 
-   ---------------
-   -- Entity_Of --
-   ---------------
-
-   function Entity_Of (N : Node_Id) return Entity_Id is
-      Id : Entity_Id;
-
-   begin
-      Id := Empty;
-
-      if Is_Entity_Name (N) then
-         Id := Entity (N);
-
-         --  Follow a possible chain of renamings to reach the root renamed
-         --  object.
-
-         while Present (Renamed_Object (Id)) loop
-            if Is_Entity_Name (Renamed_Object (Id)) then
-               Id := Entity (Renamed_Object (Id));
-            else
-               Id := Empty;
-               exit;
-            end if;
-         end loop;
-      end if;
-
-      return Id;
-   end Entity_Of;
-
    --------------------
    -- Entry_Names_OK --
    --------------------
@@ -1866,28 +1870,7 @@ package body Exp_Util is
 
       elsif K = N_Slice then
          Evaluate_Name (Prefix (Nam));
-
-         declare
-            DR     : constant Node_Id := Discrete_Range (Nam);
-            Constr : Node_Id;
-            Rexpr  : Node_Id;
-
-         begin
-            if Nkind (DR) = N_Range then
-               Force_Evaluation (Low_Bound (DR));
-               Force_Evaluation (High_Bound (DR));
-
-            elsif Nkind (DR) = N_Subtype_Indication then
-               Constr := Constraint (DR);
-
-               if Nkind (Constr) = N_Range_Constraint then
-                  Rexpr := Range_Expression (Constr);
-
-                  Force_Evaluation (Low_Bound (Rexpr));
-                  Force_Evaluation (High_Bound (Rexpr));
-               end if;
-            end if;
-         end;
+         Evaluate_Slice_Bounds (Nam);
 
       --  For a type conversion, the expression of the conversion must be the
       --  name of an object, and we simply need to evaluate this name.
@@ -1908,6 +1891,32 @@ package body Exp_Util is
          return;
       end if;
    end Evaluate_Name;
+
+   ---------------------------
+   -- Evaluate_Slice_Bounds --
+   ---------------------------
+
+   procedure Evaluate_Slice_Bounds (Slice : Node_Id) is
+      DR     : constant Node_Id := Discrete_Range (Slice);
+      Constr : Node_Id;
+      Rexpr  : Node_Id;
+
+   begin
+      if Nkind (DR) = N_Range then
+         Force_Evaluation (Low_Bound (DR));
+         Force_Evaluation (High_Bound (DR));
+
+      elsif Nkind (DR) = N_Subtype_Indication then
+         Constr := Constraint (DR);
+
+         if Nkind (Constr) = N_Range_Constraint then
+            Rexpr := Range_Expression (Constr);
+
+            Force_Evaluation (Low_Bound (Rexpr));
+            Force_Evaluation (High_Bound (Rexpr));
+         end if;
+      end if;
+   end Evaluate_Slice_Bounds;
 
    ---------------------
    -- Evolve_And_Then --
@@ -1940,6 +1949,69 @@ package body Exp_Util is
              Right_Opnd => Cond1);
       end if;
    end Evolve_Or_Else;
+
+   -----------------------------------------
+   -- Expand_Static_Predicates_In_Choices --
+   -----------------------------------------
+
+   procedure Expand_Static_Predicates_In_Choices (N : Node_Id) is
+      pragma Assert (Nkind_In (N, N_Case_Statement_Alternative, N_Variant));
+
+      Choices : constant List_Id := Discrete_Choices (N);
+
+      Choice : Node_Id;
+      Next_C : Node_Id;
+      P      : Node_Id;
+      C      : Node_Id;
+
+   begin
+      Choice := First (Choices);
+      while Present (Choice) loop
+         Next_C := Next (Choice);
+
+         --  Check for name of subtype with static predicate
+
+         if Is_Entity_Name (Choice)
+           and then Is_Type (Entity (Choice))
+           and then Has_Predicates (Entity (Choice))
+         then
+            --  Loop through entries in predicate list, converting to choices
+            --  and inserting in the list before the current choice. Note that
+            --  if the list is empty, corresponding to a False predicate, then
+            --  no choices are inserted.
+
+            P := First (Static_Predicate (Entity (Choice)));
+            while Present (P) loop
+
+               --  If low bound and high bounds are equal, copy simple choice
+
+               if Expr_Value (Low_Bound (P)) = Expr_Value (High_Bound (P)) then
+                  C := New_Copy (Low_Bound (P));
+
+               --  Otherwise copy a range
+
+               else
+                  C := New_Copy (P);
+               end if;
+
+               --  Change Sloc to referencing choice (rather than the Sloc of
+               --  the predicate declaration element itself).
+
+               Set_Sloc (C, Sloc (Choice));
+               Insert_Before (Choice, C);
+               Next (P);
+            end loop;
+
+            --  Delete the predicated entry
+
+            Remove (Choice);
+         end if;
+
+         --  Move to next choice to check
+
+         Choice := Next_C;
+      end loop;
+   end Expand_Static_Predicates_In_Choices;
 
    ------------------------------
    -- Expand_Subtype_From_Expr --
@@ -2002,9 +2074,19 @@ package body Exp_Util is
       --  may be constants that depend on the bounds of a string literal, both
       --  standard string types and more generally arrays of characters.
 
-      if not Expander_Active
+      --  In GNATprove mode, we also need the more precise subtype to be set
+
+      if not (Expander_Active or GNATprove_Mode)
         and then (No (Etype (Exp)) or else not Is_String_Type (Etype (Exp)))
       then
+         return;
+      end if;
+
+      --  In GNATprove mode, Unc_Type might not be complete when analyzing
+      --  a generic unit. As generic units are not analyzed directly in
+      --  GNATprove, return here rather than failing later.
+
+      if GNATprove_Mode and then No (Underlying_Type (Unc_Type)) then
          return;
       end if;
 
@@ -2025,8 +2107,7 @@ package body Exp_Util is
             --  we better make sure that if a variable was used as a bound of
             --  of the original slice, its value is frozen.
 
-            Force_Evaluation (Low_Bound (Scalar_Range (Slice_Type)));
-            Force_Evaluation (High_Bound (Scalar_Range (Slice_Type)));
+            Evaluate_Slice_Bounds (Exp);
          end;
 
       elsif Ekind (Exp_Typ) = E_String_Literal_Subtype then
@@ -2166,7 +2247,7 @@ package body Exp_Util is
       --  function being called is build-in-place. This will have to be revised
       --  when build-in-place functions are generalized to other types.
 
-      elsif Is_Immutably_Limited_Type (Exp_Typ)
+      elsif Is_Limited_View (Exp_Typ)
         and then
          (Is_Class_Wide_Type (Exp_Typ)
            or else Is_Interface (Exp_Typ)
@@ -2645,18 +2726,36 @@ package body Exp_Util is
         (N : Node_Id;
          S : Boolean)
       is
-         Cond : Node_Id;
-         Sens : Boolean;
+         Cond      : Node_Id;
+         Prev_Cond : Node_Id;
+         Sens      : Boolean;
 
       begin
          Cond := N;
          Sens := S;
 
-         --  Deal with NOT operators, inverting sense
+         loop
+            Prev_Cond := Cond;
 
-         while Nkind (Cond) = N_Op_Not loop
-            Cond := Right_Opnd (Cond);
-            Sens := not Sens;
+            --  Deal with NOT operators, inverting sense
+
+            while Nkind (Cond) = N_Op_Not loop
+               Cond := Right_Opnd (Cond);
+               Sens := not Sens;
+            end loop;
+
+            --  Deal with conversions, qualifications, and expressions with
+            --  actions.
+
+            while Nkind_In (Cond,
+                    N_Type_Conversion,
+                    N_Qualified_Expression,
+                    N_Expression_With_Actions)
+            loop
+               Cond := Expression (Cond);
+            end loop;
+
+            exit when Cond = Prev_Cond;
          end loop;
 
          --  Deal with AND THEN and AND cases
@@ -2737,8 +2836,15 @@ package body Exp_Util is
 
             return;
 
-            --  Case of Boolean variable reference, return as though the
-            --  reference had said var = True.
+         elsif Nkind_In (Cond,
+                 N_Type_Conversion,
+                 N_Qualified_Expression,
+                 N_Expression_With_Actions)
+         then
+            Cond := Expression (Cond);
+
+         --  Case of Boolean variable reference, return as though the
+         --  reference had said var = True.
 
          else
             if Is_Entity_Name (Cond) and then Ent = Entity (Cond) then
@@ -3250,7 +3356,21 @@ package body Exp_Util is
 
                   Kill_Current_Values;
 
-                  if Present (Actions (P)) then
+                  --  If P has already been expanded, we can't park new actions
+                  --  on it, so we need to expand them immediately, introducing
+                  --  an Expression_With_Actions. N can't be an expression
+                  --  with actions, or else then the actions would have been
+                  --  inserted at an inner level.
+
+                  if Analyzed (P) then
+                     pragma Assert (Nkind (N) /= N_Expression_With_Actions);
+                     Rewrite (N,
+                       Make_Expression_With_Actions (Sloc (N),
+                         Actions    => Ins_Actions,
+                         Expression => Relocate_Node (N)));
+                     Analyze_And_Resolve (N);
+
+                  elsif Present (Actions (P)) then
                      Insert_List_After_And_Analyze
                        (Last (Actions (P)), Ins_Actions);
                   else
@@ -3340,14 +3460,27 @@ package body Exp_Util is
             --  the new actions come from the expression of the expression with
             --  actions, they must be added to the existing actions. The other
             --  alternative is when the new actions are related to one of the
-            --  existing actions of the expression with actions. In that case
-            --  they must be inserted further up the tree.
+            --  existing actions of the expression with actions, and should
+            --  never reach here: if actions are inserted on a statement
+            --  within the Actions of an expression with actions, or on some
+            --  sub-expression of such a statement, then the outermost proper
+            --  insertion point is right before the statement, and we should
+            --  never climb up as far as the N_Expression_With_Actions itself.
 
             when N_Expression_With_Actions =>
                if N = Expression (P) then
-                  Insert_List_After_And_Analyze
-                    (Last (Actions (P)), Ins_Actions);
+                  if Is_Empty_List (Actions (P)) then
+                     Append_List_To (Actions (P), Ins_Actions);
+                     Analyze_List (Actions (P));
+                  else
+                     Insert_List_After_And_Analyze
+                       (Last (Actions (P)), Ins_Actions);
+                  end if;
+
                   return;
+
+               else
+                  raise Program_Error;
                end if;
 
             --  Case of appearing in the condition of a while expression or
@@ -3448,7 +3581,8 @@ package body Exp_Util is
 
                --  Freeze entity behaves like a declaration or statement
 
-               N_Freeze_Entity
+               N_Freeze_Entity                          |
+               N_Freeze_Generic_Entity
             =>
                --  Do not insert here if the item is not a list member (this
                --  happens for example with a triggering statement, and the
@@ -3734,7 +3868,6 @@ package body Exp_Util is
                N_Single_Protected_Declaration           |
                N_Slice                                  |
                N_String_Literal                         |
-               N_Subprogram_Info                        |
                N_Subtype_Indication                     |
                N_Subunit                                |
                N_Task_Definition                        |
@@ -4583,7 +4716,7 @@ package body Exp_Util is
             --  The following code is historical, it used to be present but it
             --  is too cautious, because the front-end does not know the proper
             --  default alignments for the target. Also, if the alignment is
-            --  not known, the front end can't know in any case! If a copy is
+            --  not known, the front end can't know in any case. If a copy is
             --  needed, the back-end will take care of it. This whole section
             --  including this comment can be removed later ???
 
@@ -5472,11 +5605,12 @@ package body Exp_Util is
       Typ := Etype (Expr);
 
       --  Subtypes may be subject to invariants coming from their respective
-      --  base types.
+      --  base types. The subtype may be fully or partially private.
 
       if Ekind_In (Typ, E_Array_Subtype,
                         E_Private_Subtype,
-                        E_Record_Subtype)
+                        E_Record_Subtype,
+                        E_Record_Subtype_With_Private)
       then
          Typ := Base_Type (Typ);
       end if;
@@ -5615,6 +5749,13 @@ package body Exp_Util is
       --  to check a specific entity's setting, they must do it manually.
 
       if Predicate_Checks_Suppressed (Empty) then
+         return Make_Null_Statement (Loc);
+      end if;
+
+      --  Do not generate a check within an internal subprogram (stream
+      --  functions and the like, including including predicate functions).
+
+      if Within_Internal_Subprogram then
          return Make_Null_Statement (Loc);
       end if;
 
@@ -6116,7 +6257,7 @@ package body Exp_Util is
             end;
 
          --  For a slice, test the prefix, if that is possibly misaligned,
-         --  then for sure the slice is!
+         --  then for sure the slice is.
 
          when N_Slice =>
             return Possible_Bit_Aligned_Component (Prefix (N));
@@ -6640,6 +6781,14 @@ package body Exp_Util is
             when N_Explicit_Dereference =>
                return Safe_Prefixed_Reference (N);
 
+            --  An expression with action is side effect free if its expression
+            --  is side effect free and it has no actions.
+
+            when N_Expression_With_Actions =>
+               return Is_Empty_List (Actions (N))
+                        and then
+                      Side_Effect_Free (Expression (N));
+
             --  A call to _rep_to_pos is side effect free, since we generate
             --  this pure function call ourselves. Moreover it is critically
             --  important to make this exception, since otherwise we can have
@@ -6791,9 +6940,11 @@ package body Exp_Util is
    --  Start of processing for Remove_Side_Effects
 
    begin
-      --  Handle cases in which there is nothing to do
+      --  Handle cases in which there is nothing to do. In GNATprove mode,
+      --  removal of side effects is useful for the light expansion of
+      --  renamings.
 
-      if not Expander_Active then
+      if not (Expander_Active or (Full_Analysis and GNATprove_Mode)) then
          return;
       end if;
 
@@ -7003,7 +7154,7 @@ package body Exp_Util is
          --  free if the resulting value is captured by a variable or a
          --  constant.
 
-         if SPARK_Mode
+         if GNATprove_Mode
            and then Nkind (Parent (Exp)) = N_Object_Declaration
          then
             goto Leave;
@@ -7019,7 +7170,7 @@ package body Exp_Util is
 
          if Ada_Version >= Ada_2005
            and then Nkind (Exp) = N_Function_Call
-           and then Is_Immutably_Limited_Type (Etype (Exp))
+           and then Is_Limited_View (Etype (Exp))
            and then Nkind (Parent (Exp)) /= N_Object_Declaration
          then
             declare
@@ -7041,7 +7192,6 @@ package body Exp_Util is
          end if;
 
          Def_Id := Make_Temporary (Loc, 'R', Exp);
-         Set_Etype (Def_Id, Exp_Type);
 
          --  The regular expansion of functions with side effects involves the
          --  generation of an access type to capture the return value found on
@@ -7049,7 +7199,7 @@ package body Exp_Util is
          --  types, use a different approach which ignores the secondary stack
          --  and "copies" the returned object.
 
-         if SPARK_Mode then
+         if GNATprove_Mode then
             Res := New_Reference_To (Def_Id, Loc);
             Ref_Type := Exp_Type;
 
@@ -7086,7 +7236,7 @@ package body Exp_Util is
             --  Do not generate a 'reference in SPARK mode since the access
             --  type is not created in the first place.
 
-            if SPARK_Mode then
+            if GNATprove_Mode then
                New_Exp := E;
 
             --  Otherwise generate reference, marking the value as non-null
@@ -7718,7 +7868,14 @@ package body Exp_Util is
                Set_Entity_Current_Value (Right_Opnd (Cond));
             end if;
 
-            --  Check possible boolean variable reference
+         elsif Nkind_In (Cond,
+                 N_Type_Conversion,
+                 N_Qualified_Expression,
+                 N_Expression_With_Actions)
+         then
+            Set_Expression_Current_Value (Expression (Cond));
+
+         --  Check possible boolean variable reference
 
          else
             Set_Entity_Current_Value (Cond);
@@ -7833,7 +7990,7 @@ package body Exp_Util is
       --  We need the last guard because we don't want to raise CE for empty
       --  arrays since no out of range values result. (Empty arrays with a
       --  component type of True .. True -- very useful -- even the ACATS
-      --  does not test that marginal case!)
+      --  does not test that marginal case).
 
       Insert_Action (N,
         Make_Raise_Constraint_Error (Loc,
@@ -7884,7 +8041,7 @@ package body Exp_Util is
       --  We need the last guard because we don't want to raise CE for empty
       --  arrays since no out of range values result (Empty arrays with a
       --  component type of True .. True -- very useful -- even the ACATS
-      --  does not test that marginal case!).
+      --  does not test that marginal case).
 
       Insert_Action (N,
         Make_Raise_Constraint_Error (Loc,
@@ -7914,7 +8071,7 @@ package body Exp_Util is
 
    Integer_Sized_Small : Ureal;
    --  Set to 2.0 ** -(Integer'Size - 1) the first time that this function is
-   --  called (we don't want to compute it more than once!)
+   --  called (we don't want to compute it more than once).
 
    Long_Integer_Sized_Small : Ureal;
    --  Set to 2.0 ** -(Long_Integer'Size - 1) the first time that this function
@@ -8040,11 +8197,11 @@ package body Exp_Util is
       Par : Node_Id;
 
    begin
-      --  Locate an enclosing case or if expression. Note: these constructs can
-      --  get expanded into Expression_With_Actions, hence the need to test
-      --  using the original node.
+      --  Locate an enclosing case or if expression. Note that these constructs
+      --  can be expanded into Expression_With_Actions, hence the test of the
+      --  original node.
 
-      Par := N;
+      Par := Parent (N);
       while Present (Par) loop
          if Nkind_In (Original_Node (Par), N_Case_Expression,
                                            N_If_Expression)
@@ -8062,6 +8219,24 @@ package body Exp_Util is
 
       return False;
    end Within_Case_Or_If_Expression;
+
+   --------------------------------
+   -- Within_Internal_Subprogram --
+   --------------------------------
+
+   function Within_Internal_Subprogram return Boolean is
+      S : Entity_Id;
+
+   begin
+      S := Current_Scope;
+      while Present (S) and then not Is_Subprogram (S) loop
+         S := Scope (S);
+      end loop;
+
+      return Present (S)
+        and then Get_TSS_Name (S) /= TSS_Null
+        and then not Is_Predicate_Function (S);
+   end Within_Internal_Subprogram;
 
    ----------------------------
    -- Wrap_Cleanup_Procedure --

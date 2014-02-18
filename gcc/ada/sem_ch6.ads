@@ -28,8 +28,7 @@ package Sem_Ch6 is
 
    type Conformance_Type is
      (Type_Conformant, Mode_Conformant, Subtype_Conformant, Fully_Conformant);
-   --  pragma Ordered (Conformance_Type);
-   --  Why is above line commented out ???
+   pragma Ordered (Conformance_Type);
    --  Conformance type used in conformance checks between specs and bodies,
    --  and for overriding. The literals match the RM definitions of the
    --  corresponding terms. This is an ordered type, since each conformance
@@ -46,9 +45,21 @@ package Sem_Ch6 is
    procedure Analyze_Subprogram_Declaration          (N : Node_Id);
    procedure Analyze_Subprogram_Body                 (N : Node_Id);
 
+   procedure Analyze_Subprogram_Body_Contract (Body_Id : Entity_Id);
+   --  Analyze all delayed aspects chained on the contract of subprogram body
+   --  Body_Id as if they appeared at the end of a declarative region. The
+   --  aspects in question are:
+   --    Refined_Depends
+   --    Refined_Global
+
    procedure Analyze_Subprogram_Contract (Subp : Entity_Id);
    --  Analyze all delayed aspects chained on the contract of subprogram Subp
-   --  as if they appeared at the end of a declarative region.
+   --  as if they appeared at the end of a declarative region. The aspects in
+   --  question are:
+   --    Contract_Cases
+   --    Postcondition
+   --    Precondition
+   --    Test_Case
 
    function Analyze_Subprogram_Specification (N : Node_Id) return Entity_Id;
    --  Analyze subprogram specification in both subprogram declarations
@@ -233,6 +244,13 @@ package Sem_Ch6 is
    procedure List_Inherited_Pre_Post_Aspects (E : Entity_Id);
    --  E is the entity for a subprogram or generic subprogram spec. This call
    --  lists all inherited Pre/Post aspects if List_Inherited_Pre_Post is True.
+
+   procedure May_Need_Actuals (Fun : Entity_Id);
+   --  Flag functions that can be called without parameters, i.e. those that
+   --  have no parameters, or those for which defaults exist for all parameters
+   --  Used for subprogram declarations and for access subprogram declarations,
+   --  where they apply to the anonymous designated type. On return the flag
+   --  Set_Needs_No_Actuals is set appropriately in Fun.
 
    function Mode_Conformant (New_Id, Old_Id : Entity_Id) return Boolean;
    --  Determine whether two callable entities (subprograms, entries,

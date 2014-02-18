@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler, for IBM S/390
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
    Contributed by Hartmut Penner (hpenner@de.ibm.com) and
                   Ulrich Weigand (uweigand@de.ibm.com).
                   Andreas Krebbel (Andreas.Krebbel@de.ibm.com)
@@ -34,7 +34,8 @@ enum processor_flags
   PF_DFP = 16,
   PF_Z10 = 32,
   PF_Z196 = 64,
-  PF_ZEC12 = 128
+  PF_ZEC12 = 128,
+  PF_TX = 256
 };
 
 /* This is necessary to avoid a warning about comparing different enum
@@ -61,6 +62,8 @@ enum processor_flags
  	(s390_arch_flags & PF_Z196)
 #define TARGET_CPU_ZEC12 \
  	(s390_arch_flags & PF_ZEC12)
+#define TARGET_CPU_HTM \
+ 	(s390_arch_flags & PF_TX)
 
 /* These flags indicate that the generated code should run on a cpu
    providing the respective hardware facility when run in
@@ -78,6 +81,7 @@ enum processor_flags
        (TARGET_ZARCH && TARGET_CPU_Z196)
 #define TARGET_ZEC12 \
        (TARGET_ZARCH && TARGET_CPU_ZEC12)
+#define TARGET_HTM (TARGET_OPT_HTM)
 
 
 #define TARGET_AVOID_CMP_AND_BRANCH (s390_tune == PROCESSOR_2817_Z196)
@@ -93,23 +97,25 @@ enum processor_flags
 #define TARGET_TPF 0
 
 /* Target CPU builtins.  */
-#define TARGET_CPU_CPP_BUILTINS()			\
-  do							\
-    {							\
-      builtin_assert ("cpu=s390");			\
-      builtin_assert ("machine=s390");			\
-      builtin_define ("__s390__");			\
-      if (TARGET_ZARCH)					\
-	builtin_define ("__zarch__");			\
-      if (TARGET_64BIT)					\
-        builtin_define ("__s390x__");			\
-      if (TARGET_LONG_DOUBLE_128)			\
-        builtin_define ("__LONG_DOUBLE_128__");		\
-    }							\
+#define TARGET_CPU_CPP_BUILTINS()					\
+  do									\
+    {									\
+      builtin_assert ("cpu=s390");					\
+      builtin_assert ("machine=s390");					\
+      builtin_define ("__s390__");					\
+      if (TARGET_ZARCH)							\
+	builtin_define ("__zarch__");					\
+      if (TARGET_64BIT)							\
+        builtin_define ("__s390x__");					\
+      if (TARGET_LONG_DOUBLE_128)					\
+        builtin_define ("__LONG_DOUBLE_128__");				\
+      if (TARGET_HTM)							\
+	builtin_define ("__HTM__");					\
+    }									\
   while (0)
 
 #ifdef DEFAULT_TARGET_64BIT
-#define TARGET_DEFAULT             (MASK_64BIT | MASK_ZARCH | MASK_HARD_DFP)
+#define TARGET_DEFAULT             (MASK_64BIT | MASK_ZARCH | MASK_HARD_DFP | MASK_OPT_HTM)
 #else
 #define TARGET_DEFAULT             0
 #endif
@@ -211,7 +217,7 @@ enum processor_flags
 #define STACK_BOUNDARY 64
 
 /* Allocation boundary (in *bits*) for the code of a function.  */
-#define FUNCTION_BOUNDARY 32
+#define FUNCTION_BOUNDARY 64
 
 /* There is no point aligning anything to a rounder boundary than this.  */
 #define BIGGEST_ALIGNMENT 64
@@ -221,7 +227,7 @@ enum processor_flags
 
 /* Alignment on even addresses for LARL instruction.  */
 #define CONSTANT_ALIGNMENT(EXP, ALIGN) (ALIGN) < 16 ? 16 : (ALIGN)
-#define DATA_ALIGNMENT(TYPE, ALIGN) (ALIGN) < 16 ? 16 : (ALIGN)
+#define DATA_ABI_ALIGNMENT(TYPE, ALIGN) (ALIGN) < 16 ? 16 : (ALIGN)
 
 /* Alignment is not required by the hardware.  */
 #define STRICT_ALIGNMENT 0
@@ -872,6 +878,13 @@ do {									\
   fputc ('\n', (FILE));							\
 } while (0)
 
+/* Mark the return register as used by the epilogue so that we can
+   use it in unadorned (return) and (simple_return) instructions.  */
+#define EPILOGUE_USES(REGNO) ((REGNO) == RETURN_REGNUM)
+
+#undef ASM_OUTPUT_FUNCTION_LABEL
+#define ASM_OUTPUT_FUNCTION_LABEL(FILE, NAME, DECL) \
+  s390_asm_output_function_label (FILE, NAME, DECL)
 
 /* Miscellaneous parameters.  */
 

@@ -1,5 +1,5 @@
 /* Definitions for PA_RISC with ELF format
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,6 +22,9 @@ along with GCC; see the file COPYING3.  If not see
 #define TARGET_OS_CPP_BUILTINS()		\
   do						\
     {						\
+	builtin_define ("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");	\
+	builtin_define ("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");	\
+	builtin_define ("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");	\
 	GNU_USER_TARGET_OS_CPP_BUILTINS();	\
 	builtin_assert ("machine=bigendian");	\
     }						\

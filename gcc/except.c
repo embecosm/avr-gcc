@@ -1,5 +1,5 @@
 /* Implements exception handling.
-   Copyright (C) 1989-2013 Free Software Foundation, Inc.
+   Copyright (C) 1989-2014 Free Software Foundation, Inc.
    Contributed by Mike Stump <mrs@cygnus.com>.
 
 This file is part of GCC.
@@ -115,6 +115,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "stor-layout.h"
 #include "flags.h"
 #include "function.h"
 #include "expr.h"
@@ -122,7 +124,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "insn-config.h"
 #include "except.h"
 #include "hard-reg-set.h"
-#include "basic-block.h"
 #include "output.h"
 #include "dwarf2asm.h"
 #include "dwarf2out.h"
@@ -130,7 +131,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "toplev.h"
 #include "hash-table.h"
 #include "intl.h"
-#include "ggc.h"
 #include "tm_p.h"
 #include "target.h"
 #include "common/common-target.h"
@@ -139,7 +139,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic.h"
 #include "tree-pretty-print.h"
 #include "tree-pass.h"
-#include "tree-flow.h"
+#include "pointer-set.h"
 #include "cfgloop.h"
 
 /* Provide defaults for stuff that may not be defined when using
@@ -313,20 +313,20 @@ init_eh (void)
       /* Cache the interesting field offsets so that we have
 	 easy access from rtl.  */
       sjlj_fc_call_site_ofs
-	= (tree_low_cst (DECL_FIELD_OFFSET (f_cs), 1)
-	   + tree_low_cst (DECL_FIELD_BIT_OFFSET (f_cs), 1) / BITS_PER_UNIT);
+	= (tree_to_uhwi (DECL_FIELD_OFFSET (f_cs))
+	   + tree_to_uhwi (DECL_FIELD_BIT_OFFSET (f_cs)) / BITS_PER_UNIT);
       sjlj_fc_data_ofs
-	= (tree_low_cst (DECL_FIELD_OFFSET (f_data), 1)
-	   + tree_low_cst (DECL_FIELD_BIT_OFFSET (f_data), 1) / BITS_PER_UNIT);
+	= (tree_to_uhwi (DECL_FIELD_OFFSET (f_data))
+	   + tree_to_uhwi (DECL_FIELD_BIT_OFFSET (f_data)) / BITS_PER_UNIT);
       sjlj_fc_personality_ofs
-	= (tree_low_cst (DECL_FIELD_OFFSET (f_per), 1)
-	   + tree_low_cst (DECL_FIELD_BIT_OFFSET (f_per), 1) / BITS_PER_UNIT);
+	= (tree_to_uhwi (DECL_FIELD_OFFSET (f_per))
+	   + tree_to_uhwi (DECL_FIELD_BIT_OFFSET (f_per)) / BITS_PER_UNIT);
       sjlj_fc_lsda_ofs
-	= (tree_low_cst (DECL_FIELD_OFFSET (f_lsda), 1)
-	   + tree_low_cst (DECL_FIELD_BIT_OFFSET (f_lsda), 1) / BITS_PER_UNIT);
+	= (tree_to_uhwi (DECL_FIELD_OFFSET (f_lsda))
+	   + tree_to_uhwi (DECL_FIELD_BIT_OFFSET (f_lsda)) / BITS_PER_UNIT);
       sjlj_fc_jbuf_ofs
-	= (tree_low_cst (DECL_FIELD_OFFSET (f_jbuf), 1)
-	   + tree_low_cst (DECL_FIELD_BIT_OFFSET (f_jbuf), 1) / BITS_PER_UNIT);
+	= (tree_to_uhwi (DECL_FIELD_OFFSET (f_jbuf))
+	   + tree_to_uhwi (DECL_FIELD_BIT_OFFSET (f_jbuf)) / BITS_PER_UNIT);
     }
 }
 
@@ -641,7 +641,7 @@ eh_region_outermost (struct function *ifun, eh_region region_a,
   gcc_assert (ifun->eh->region_array);
   gcc_assert (ifun->eh->region_tree);
 
-  b_outer = sbitmap_alloc (ifun->eh->region_array->length());
+  b_outer = sbitmap_alloc (ifun->eh->region_array->length ());
   bitmap_clear (b_outer);
 
   do
@@ -1156,7 +1156,7 @@ sjlj_mark_call_sites (void)
       start_sequence ();
       mem = adjust_address (crtl->eh.sjlj_fc, TYPE_MODE (integer_type_node),
 			    sjlj_fc_call_site_ofs);
-      emit_move_insn (mem, GEN_INT (this_call_site));
+      emit_move_insn (mem, gen_int_mode (this_call_site, GET_MODE (mem)));
       p = get_insns ();
       end_sequence ();
 
@@ -1239,7 +1239,7 @@ sjlj_emit_function_enter (rtx dispatch_label)
       }
 
   if (fn_begin_outside_block)
-    insert_insn_on_edge (seq, single_succ_edge (ENTRY_BLOCK_PTR));
+    insert_insn_on_edge (seq, single_succ_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun)));
   else
     emit_insn_after (seq, fn_begin);
 }
@@ -1507,11 +1507,11 @@ finish_eh_generation (void)
 
   if (targetm_common.except_unwind_info (&global_options) == UI_SJLJ
       /* Kludge for Alpha (see alpha_gp_save_rtx).  */
-      || single_succ_edge (ENTRY_BLOCK_PTR)->insns.r)
+      || single_succ_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun))->insns.r)
     commit_edge_insertions ();
 
   /* Redirect all EH edges from the post_landing_pad to the landing pad.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       eh_landing_pad lp;
       edge_iterator ei;
@@ -2001,25 +2001,42 @@ set_nothrow_function_flags (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_set_nothrow_function_flags =
+namespace {
+
+const pass_data pass_data_set_nothrow_function_flags =
 {
- {
-  RTL_PASS,
-  "nothrow",                            /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  NULL,                                 /* gate */
-  set_nothrow_function_flags,           /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_NONE,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  0                                     /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "nothrow", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  false, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_set_nothrow_function_flags : public rtl_opt_pass
+{
+public:
+  pass_set_nothrow_function_flags (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_set_nothrow_function_flags, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  unsigned int execute () { return set_nothrow_function_flags (); }
+
+}; // class pass_set_nothrow_function_flags
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_set_nothrow_function_flags (gcc::context *ctxt)
+{
+  return new pass_set_nothrow_function_flags (ctxt);
+}
 
 
 /* Various hooks for unwind library.  */
@@ -2033,8 +2050,8 @@ expand_builtin_eh_common (tree region_nr_t)
   HOST_WIDE_INT region_nr;
   eh_region region;
 
-  gcc_assert (host_integerp (region_nr_t, 0));
-  region_nr = tree_low_cst (region_nr_t, 0);
+  gcc_assert (tree_fits_shwi_p (region_nr_t));
+  region_nr = tree_to_shwi (region_nr_t);
 
   region = (*cfun->eh->region_array)[region_nr];
 
@@ -2128,7 +2145,7 @@ expand_builtin_eh_return_data_regno (tree exp)
       return constm1_rtx;
     }
 
-  iwhich = tree_low_cst (which, 1);
+  iwhich = tree_to_uhwi (which);
   iwhich = EH_RETURN_DATA_REGNO (iwhich);
   if (iwhich == INVALID_REGNUM)
     return constm1_rtx;
@@ -2615,25 +2632,43 @@ gate_convert_to_eh_region_ranges (void)
   return true;
 }
 
-struct rtl_opt_pass pass_convert_to_eh_region_ranges =
+namespace {
+
+const pass_data pass_data_convert_to_eh_region_ranges =
 {
- {
-  RTL_PASS,
-  "eh_ranges",                          /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_convert_to_eh_region_ranges,	/* gate */
-  convert_to_eh_region_ranges,          /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_NONE,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  0              			/* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "eh_ranges", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_convert_to_eh_region_ranges : public rtl_opt_pass
+{
+public:
+  pass_convert_to_eh_region_ranges (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_convert_to_eh_region_ranges, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_convert_to_eh_region_ranges (); }
+  unsigned int execute () { return convert_to_eh_region_ranges (); }
+
+}; // class pass_convert_to_eh_region_ranges
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_convert_to_eh_region_ranges (gcc::context *ctxt)
+{
+  return new pass_convert_to_eh_region_ranges (ctxt);
+}
 
 static void
 push_uleb128 (vec<uchar, va_gc> **data_area, unsigned int value)

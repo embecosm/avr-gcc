@@ -1,5 +1,5 @@
 /* Data structures and function exported by the C++ Parser.
-   Copyright (C) 2010-2013 Free Software Foundation, Inc.
+   Copyright (C) 2010-2014 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -196,6 +196,14 @@ typedef struct GTY (()) cp_parser_context {
 } cp_parser_context;
 
 
+/* Control structure for #pragma omp declare simd parsing.  */
+struct cp_omp_declare_simd_data {
+  bool error_seen; /* Set if error has been reported.  */
+  bool fndecl_seen; /* Set if one fn decl/definition has been seen already.  */
+  vec<cp_token_cache_ptr> tokens;
+};
+
+
 /* The cp_parser structure represents the C++ parser.  */
 
 typedef struct GTY(()) cp_parser {
@@ -292,6 +300,8 @@ typedef struct GTY(()) cp_parser {
 #define IN_OMP_BLOCK		4
 #define IN_OMP_FOR		8
 #define IN_IF_STMT             16
+#define IN_CILK_SIMD_FOR       32
+#define IN_CILK_SPAWN          64
   unsigned char in_statement;
 
   /* TRUE if we are presently parsing the body of a switch statement.
@@ -324,6 +334,12 @@ typedef struct GTY(()) cp_parser {
   /* TRUE if we can auto-correct a colon to a scope operator.  */
   bool colon_corrects_to_scope_p;
 
+  /* TRUE if : doesn't start a class definition.  Should be only used
+     together with type_definition_forbidden_message non-NULL, in
+     contexts where new types may not be defined, and the type list
+     is terminated by colon.  */
+  bool colon_doesnt_start_class_def_p;
+
   /* If non-NULL, then we are parsing a construct where new type
      definitions are not permitted.  The string stored here will be
      issued as an error message if a type is defined.  */
@@ -341,6 +357,42 @@ typedef struct GTY(()) cp_parser {
   /* The number of template parameter lists that apply directly to the
      current declaration.  */
   unsigned num_template_parameter_lists;
+
+  /* When parsing #pragma omp declare simd, this is a pointer to a
+     data structure with everything needed for parsing the clauses.  */
+  cp_omp_declare_simd_data * GTY((skip)) omp_declare_simd;
+
+  /* When parsing the vector attribute in Cilk Plus SIMD-enabled function,
+     this is a pointer to data structure with everything needed for parsing
+     the clauses.  The cp_omp_declare_simd_data struct will hold all the
+     necessary information, so creating another struct for this is not
+     necessary.  */
+  cp_omp_declare_simd_data * GTY((skip)) cilk_simd_fn_info;
+
+  /* Nonzero if parsing a parameter list where 'auto' should trigger an implicit
+     template parameter.  */
+  bool auto_is_implicit_function_template_parm_p;
+
+  /* TRUE if the function being declared was made a template due to its
+     parameter list containing generic type specifiers (`auto' or concept
+     identifiers) rather than an explicit template parameter list.  */
+  bool fully_implicit_function_template_p;
+
+  /* Tracks the function's template parameter list when declaring a function
+     using generic type parameters.  This is either a new chain in the case of a
+     fully implicit function template or an extension of the function's existing
+     template parameter list.  This is tracked to optimize calls subsequent
+     calls to synthesize_implicit_template_parm during
+     cp_parser_parameter_declaration.  */
+  tree implicit_template_parms;
+
+  /* The scope into which an implicit template parameter list has been
+     introduced or an existing template parameter list is being extended with
+     implicit template paramaters.  In most cases this is the sk_function_parms
+     scope containing the use of a generic type.  In the case of an out-of-line
+     member definition using a generic type, it is the sk_class scope.  */
+  cp_binding_level* implicit_template_scope;
+
 } cp_parser;
 
 /* In parser.c  */

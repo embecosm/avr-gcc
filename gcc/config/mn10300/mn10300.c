@@ -1,5 +1,5 @@
 /* Subroutines for insn-output.c for Matsushita MN10300 series
-   Copyright (C) 1996-2013 Free Software Foundation, Inc.
+   Copyright (C) 1996-2014 Free Software Foundation, Inc.
    Contributed by Jeff Law (law@cygnus.com).
 
    This file is part of GCC.
@@ -24,6 +24,9 @@
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "varasm.h"
+#include "calls.h"
 #include "regs.h"
 #include "hard-reg-set.h"
 #include "insn-config.h"
@@ -65,7 +68,6 @@ static int cc_flags_for_mode(enum machine_mode);
 static int cc_flags_for_code(enum rtx_code);
 
 /* Implement TARGET_OPTION_OVERRIDE.  */
-
 static void
 mn10300_option_override (void)
 {
@@ -739,16 +741,31 @@ mn10300_gen_multiple_store (unsigned int mask)
   F (emit_insn (x));
 }
 
+static inline unsigned int
+popcount (unsigned int mask)
+{
+  unsigned int count = 0;
+  
+  while (mask)
+    {
+      ++ count;
+      mask &= ~ (mask & - mask);
+    }
+  return count;
+}
+
 void
 mn10300_expand_prologue (void)
 {
   HOST_WIDE_INT size = mn10300_frame_size ();
+  unsigned int mask;
+
+  mask = mn10300_get_live_callee_saved_regs (NULL);
+  /* If we use any of the callee-saved registers, save them now.  */
+  mn10300_gen_multiple_store (mask);
 
   if (flag_stack_usage_info)
-    current_function_static_stack_size = size;
-
-  /* If we use any of the callee-saved registers, save them now.  */
-  mn10300_gen_multiple_store (mn10300_get_live_callee_saved_regs (NULL));
+    current_function_static_stack_size = size + popcount (mask) * 4;
 
   if (TARGET_AM33_2 && fp_regs_to_save ())
     {
@@ -764,6 +781,9 @@ mn10300_expand_prologue (void)
       } strategy;
       unsigned int strategy_size = (unsigned)-1, this_strategy_size;
       rtx reg;
+
+      if (flag_stack_usage_info)
+	current_function_static_stack_size += num_regs_to_save * 4;
 
       /* We have several different strategies to save FP registers.
 	 We can store them using SP offsets, which is beneficial if
@@ -1236,9 +1256,8 @@ mn10300_expand_epilogue (void)
    parallel.  If OP is a multiple store, return a mask indicating which
    registers it saves.  Return 0 otherwise.  */
 
-int
-mn10300_store_multiple_operation (rtx op,
-				  enum machine_mode mode ATTRIBUTE_UNUSED)
+unsigned int
+mn10300_store_multiple_regs (rtx op)
 {
   int count;
   int mask;
@@ -1411,7 +1430,6 @@ mn10300_secondary_reload (bool in_p, rtx x, reg_class_t rclass_i,
       if (addr && CONSTANT_ADDRESS_P (addr))
 	return GENERAL_REGS;
     }
-
   /* Otherwise assume no secondary reloads are needed.  */
   return NO_REGS;
 }
@@ -2612,7 +2630,10 @@ mn10300_hard_regno_mode_ok (unsigned int regno, enum machine_mode mode)
       || REGNO_REG_CLASS (regno) == FP_ACC_REGS)
     /* Do not store integer values in FP registers.  */
     return GET_MODE_CLASS (mode) == MODE_FLOAT && ((regno & 1) == 0);
-  
+
+  if (! TARGET_AM33 && REGNO_REG_CLASS (regno) == EXTENDED_REGS)
+    return false;
+
   if (((regno) & 1) == 0 || GET_MODE_SIZE (mode) == 4)
     return true;
 
@@ -3226,7 +3247,6 @@ mn10300_loop_contains_call_insn (loop_p loop)
 static void
 mn10300_scan_for_setlb_lcc (void)
 {
-  loop_iterator liter;
   loop_p loop;
 
   DUMP ("Looking for loops that can use the SETLB insn", NULL_RTX);
@@ -3241,7 +3261,7 @@ mn10300_scan_for_setlb_lcc (void)
      if an inner loop is not suitable for use with the SETLB/Lcc insns, it may
      be the case that its parent loop is suitable.  Thus we should check all
      loops, but work from the innermost outwards.  */
-  FOR_EACH_LOOP (liter, loop, LI_ONLY_INNERMOST)
+  FOR_EACH_LOOP (loop, LI_ONLY_INNERMOST)
     {
       const char * reason = NULL;
 

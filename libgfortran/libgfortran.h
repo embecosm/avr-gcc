@@ -1,5 +1,5 @@
 /* Common declarations for all of libgfortran.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>, and
    Andy Vaught <andy@xena.eas.asu.edu>
 
@@ -534,6 +534,7 @@ typedef struct
   size_t record_marker;
   int max_subrecord_length;
   int bounds_check;
+  int fpe_summary;
 }
 compile_options_t;
 
@@ -742,6 +743,15 @@ internal_proto(gf_strerror);
 
 extern void set_fpu (void);
 internal_proto(set_fpu);
+
+extern int get_fpu_except_flags (void);
+internal_proto(get_fpu_except_flags);
+
+extern void set_fpu_rounding_mode (int round);
+internal_proto(set_fpu_rounding_mode);
+
+extern int get_fpu_rounding_mode (void);
+internal_proto(get_fpu_rounding_mode);
 
 /* memory.c */
 

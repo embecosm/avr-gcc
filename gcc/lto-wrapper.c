@@ -1,5 +1,5 @@
 /* Wrapper to call lto.  Used by collect2 and the linker plugin.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
    Factored out of collect2 by Rafael Espindola <espindola@google.com>
 
@@ -409,6 +409,7 @@ merge_and_complain (struct cl_decoded_option **decoded_options,
 	case OPT_fpie:
 	case OPT_fcommon:
 	case OPT_fexceptions:
+	case OPT_fnon_call_exceptions:
 	case OPT_fgnu_tm:
 	  /* Do what the old LTO code did - collect exactly one option
 	     setting per OPT code, we pick the first we encounter.
@@ -419,6 +420,18 @@ merge_and_complain (struct cl_decoded_option **decoded_options,
 	      break;
 	  if (j == *decoded_options_count)
 	    append_option (decoded_options, decoded_options_count, foption);
+	  break;
+
+	case OPT_ffp_contract_:
+	  /* For selected options we can merge conservatively.  */
+	  for (j = 0; j < *decoded_options_count; ++j)
+	    if ((*decoded_options)[j].opt_index == foption->opt_index)
+	      break;
+	  if (j == *decoded_options_count)
+	    append_option (decoded_options, decoded_options_count, foption);
+	  /* FP_CONTRACT_OFF < FP_CONTRACT_ON < FP_CONTRACT_FAST.  */
+	  else if (foption->value < (*decoded_options)[j].value)
+	    (*decoded_options)[j] = *foption;
 	  break;
 
 	case OPT_freg_struct_return:
@@ -573,9 +586,11 @@ run_gcc (unsigned argc, char *argv[])
 	case OPT_fpie:
 	case OPT_fcommon:
 	case OPT_fexceptions:
+	case OPT_fnon_call_exceptions:
 	case OPT_fgnu_tm:
 	case OPT_freg_struct_return:
 	case OPT_fpcc_struct_return:
+	case OPT_ffp_contract_:
 	  break;
 
 	default:
@@ -730,7 +745,16 @@ run_gcc (unsigned argc, char *argv[])
       tmp += list_option_len;
       strcpy (tmp, ltrans_output_file);
 
-      obstack_ptr_grow (&argv_obstack, "-fwpa");
+      if (jobserver)
+	obstack_ptr_grow (&argv_obstack, xstrdup ("-fwpa=jobserver"));
+      else if (parallel > 1)
+	{
+	  char buf[256];
+	  sprintf (buf, "-fwpa=%i", parallel);
+	  obstack_ptr_grow (&argv_obstack, xstrdup (buf));
+	}
+      else
+        obstack_ptr_grow (&argv_obstack, "-fwpa");
     }
 
   /* Append the input objects and possible preceding arguments.  */
@@ -744,7 +768,7 @@ run_gcc (unsigned argc, char *argv[])
 
   if (lto_mode == LTO_MODE_LTO)
     {
-      printf("%s\n", flto_out);
+      printf ("%s\n", flto_out);
       free (flto_out);
       flto_out = NULL;
     }
@@ -820,9 +844,9 @@ cont:
 	    {
 	      char *dumpbase
 		  = (char *) xmalloc (strlen (linker_output)
-				      + sizeof(DUMPBASE_SUFFIX) + 1);
+				      + sizeof (DUMPBASE_SUFFIX) + 1);
 	      snprintf (dumpbase,
-			strlen (linker_output) + sizeof(DUMPBASE_SUFFIX),
+			strlen (linker_output) + sizeof (DUMPBASE_SUFFIX),
 			"%s.ltrans%u", linker_output, i);
 	      argv_ptr[0] = dumpbase;
 	    }

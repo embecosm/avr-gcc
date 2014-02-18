@@ -1,6 +1,6 @@
 // Debugging unordered_set/unordered_multiset implementation -*- C++ -*-
 
-// Copyright (C) 2003-2013 Free Software Foundation, Inc.
+// Copyright (C) 2003-2014 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -207,42 +207,42 @@ namespace __debug
       begin(size_type __b)
       {
 	__glibcxx_check_bucket_index(__b);
-	return local_iterator(_Base::begin(__b), __b, this);
+	return local_iterator(_Base::begin(__b), this);
       }
 
       local_iterator
       end(size_type __b)
       {
 	__glibcxx_check_bucket_index(__b);
-	return local_iterator(_Base::end(__b), __b, this);
+	return local_iterator(_Base::end(__b), this);
       }
 
       const_local_iterator
       begin(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::begin(__b), __b, this);
+	return const_local_iterator(_Base::begin(__b), this);
       }
 
       const_local_iterator
       end(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::end(__b), __b, this);
+	return const_local_iterator(_Base::end(__b), this);
       }
 
       const_local_iterator
       cbegin(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::cbegin(__b), __b, this);
+	return const_local_iterator(_Base::cbegin(__b), this);
       }
 
       const_local_iterator
       cend(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::cend(__b), __b, this);
+	return const_local_iterator(_Base::cend(__b), this);
       }
 
       size_type
@@ -383,7 +383,7 @@ namespace __debug
 			    { return __it == __victim; });
 	    this->_M_invalidate_local_if(
 			    [__victim](_Base_const_local_iterator __it)
-			    { return __it._M_cur == __victim._M_cur; });
+			    { return __it._M_curr() == __victim._M_cur; });
 	    size_type __bucket_count = this->bucket_count();
 	    _Base::erase(__victim);
 	    _M_check_rehashed(__bucket_count);
@@ -402,7 +402,7 @@ namespace __debug
 			{ return __it == __victim; });
 	this->_M_invalidate_local_if(
 			[__victim](_Base_const_local_iterator __it)
-			{ return __it._M_cur == __victim._M_cur; });
+			{ return __it._M_curr() == __victim._M_cur; });
 	size_type __bucket_count = this->bucket_count();
 	_Base_iterator __next = _Base::erase(__it.base());
 	_M_check_rehashed(__bucket_count);
@@ -429,7 +429,7 @@ namespace __debug
 			    { return __it == __tmp; });
 	    this->_M_invalidate_local_if(
 			    [__tmp](_Base_const_local_iterator __it)
-			    { return __it._M_cur == __tmp._M_cur; });
+			    { return __it._M_curr() == __tmp._M_cur; });
 	  }
 	size_type __bucket_count = this->bucket_count();
 	_Base_iterator __next = _Base::erase(__first.base(),
@@ -658,42 +658,42 @@ namespace __debug
       begin(size_type __b)
       {
 	__glibcxx_check_bucket_index(__b);
-	return local_iterator(_Base::begin(__b), __b, this);
+	return local_iterator(_Base::begin(__b), this);
       }
 
       local_iterator
       end(size_type __b)
       {
 	__glibcxx_check_bucket_index(__b);
-	return local_iterator(_Base::end(__b), __b, this);
+	return local_iterator(_Base::end(__b), this);
       }
 
       const_local_iterator
       begin(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::begin(__b), __b, this);
+	return const_local_iterator(_Base::begin(__b), this);
       }
 
       const_local_iterator
       end(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::end(__b), __b, this);
+	return const_local_iterator(_Base::end(__b), this);
       }
 
       const_local_iterator
       cbegin(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::cbegin(__b), __b, this);
+	return const_local_iterator(_Base::cbegin(__b), this);
       }
 
       const_local_iterator
       cend(size_type __b) const
       {
 	__glibcxx_check_bucket_index(__b);
-	return const_local_iterator(_Base::cend(__b), __b, this);
+	return const_local_iterator(_Base::cend(__b), this);
       }
 
       size_type
@@ -832,7 +832,7 @@ namespace __debug
 			    { return __it == __victim; });
 	    this->_M_invalidate_local_if(
 			    [__victim](_Base_const_local_iterator __it)
-			    { return __it._M_cur == __victim._M_cur; });
+			    { return __it._M_curr() == __victim._M_cur; });
 	    _Base::erase(__victim++);
 	    ++__ret;
 	  }
@@ -848,7 +848,7 @@ namespace __debug
 			{ return __it == __victim; });
 	this->_M_invalidate_local_if(
 			[__victim](_Base_const_local_iterator __it)
-			{ return __it._M_cur == __victim._M_cur; });
+			{ return __it._M_curr() == __victim._M_cur; });
 	return iterator(_Base::erase(__it.base()), this);
       }
 
@@ -871,7 +871,7 @@ namespace __debug
 			    { return __it == __tmp; });
 	    this->_M_invalidate_local_if(
 			    [__tmp](_Base_const_local_iterator __it)
-			    { return __it._M_cur == __tmp._M_cur; });
+			    { return __it._M_curr() == __tmp._M_cur; });
 	  }
 	return iterator(_Base::erase(__first.base(),
 				     __last.base()), this);

@@ -1,6 +1,6 @@
 /* Process declarations and variables for the GNU compiler for the
    Java(TM) language.
-   Copyright (C) 1996-2013 Free Software Foundation, Inc.
+   Copyright (C) 1996-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -28,6 +28,9 @@ The Free Software Foundation is independent of Sun Microsystems, Inc.  */
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "stringpool.h"
+#include "varasm.h"
 #include "diagnostic-core.h"
 #include "toplev.h"
 #include "flags.h"
@@ -1904,7 +1907,7 @@ java_mark_decl_local (tree decl)
   if (TREE_CODE (decl) == FUNCTION_DECL)
     {
       struct cgraph_node *node = cgraph_get_node (decl);
-      gcc_assert (!node || !node->local.finalized);
+      gcc_assert (!node || !node->definition);
     }
 #endif
   gcc_assert (!DECL_RTL_SET_P (decl));
@@ -2015,7 +2018,7 @@ java_add_stmt (tree new_stmt)
   tree stmts = current_binding_level->stmts;
   tree_stmt_iterator i;
 
-  if (input_filename)
+  if (LOCATION_FILE (input_location))
     walk_tree (&new_stmt, set_input_location, NULL, NULL);
 
   if (stmts == NULL)

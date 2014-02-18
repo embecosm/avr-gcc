@@ -388,6 +388,16 @@ package body Targparm is
             Opt.Init_Or_Norm_Scalars := True;
             goto Line_Loop_Continue;
 
+         --  Partition_Elaboration_Policy
+
+         elsif System_Text (P .. P + 36) =
+                 "pragma Partition_Elaboration_Policy ("
+         then
+            P := P + 37;
+            Opt.Partition_Elaboration_Policy := System_Text (P);
+            Opt.Partition_Elaboration_Policy_Sloc := System_Location;
+            goto Line_Loop_Continue;
+
          --  Polling (On)
 
          elsif System_Text (P .. P + 19) = "pragma Polling (On);" then
@@ -577,6 +587,7 @@ package body Targparm is
                      when EXS => Exit_Status_Supported_On_Target     := Result;
                      when FEL => Frontend_Layout_On_Target           := Result;
                      when FFO => Fractional_Fixed_Ops_On_Target      := Result;
+
                      when JVM =>
                         if Result then
                            VM_Target := JVM_Target;

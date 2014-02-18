@@ -1,4 +1,4 @@
-#  Copyright (C) 2003-2013 Free Software Foundation, Inc.
+#  Copyright (C) 2003-2014 Free Software Foundation, Inc.
 #  Contributed by Kelley Cook, June 2004.
 #  Original code from Neil Booth, May 2003.
 #
@@ -284,7 +284,7 @@ if (have_assert)
 	print "";
 
 print "  if (targetm.target_option.save)";
-print "    targetm.target_option.save (ptr);";
+print "    targetm.target_option.save (ptr, opts);";
 print "";
 
 for (i = 0; i < n_extra_target_vars; i++) {
@@ -347,7 +347,7 @@ for (i = 0; i < n_target_char; i++) {
 # variables.
 print "";
 print "  if (targetm.target_option.restore)";
-print "    targetm.target_option.restore (ptr);";
+print "    targetm.target_option.restore (opts, ptr);";
 
 print "}";
 

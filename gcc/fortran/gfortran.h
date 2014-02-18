@@ -1,5 +1,5 @@
 /* gfortran header file
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -2252,6 +2252,7 @@ typedef struct
   int warn_align_commons;
   int warn_real_q_constant;
   int warn_unused_dummy_argument;
+  int warn_zerotrip;
   int warn_realloc_lhs;
   int warn_realloc_lhs_all;
   int warn_compare_reals;
@@ -2285,6 +2286,7 @@ typedef struct
   int flag_cray_pointer;
   int flag_d_lines;
   int gfc_flag_openmp;
+  int gfc_flag_openmp_simd;
   int flag_sign_zero;
   int flag_stack_arrays;
   int flag_module_private;
@@ -2303,6 +2305,7 @@ typedef struct
   int flag_frontend_optimize;
 
   int fpe;
+  int fpe_summary;
   int rtcheck;
   gfc_fcoarray coarray;
 
@@ -2394,7 +2397,6 @@ void gfc_add_include_path (const char *, bool, bool, bool);
 void gfc_add_intrinsic_modules_path (const char *);
 void gfc_release_include_path (void);
 FILE *gfc_open_included_file (const char *, bool, bool);
-FILE *gfc_open_intrinsic_module (const char *);
 
 int gfc_at_end (void);
 int gfc_at_eof (void);
@@ -2436,7 +2438,6 @@ void gfc_start_source_files (void);
 void gfc_end_source_files (void);
 
 /* misc.c */
-int gfc_terminal_width (void);
 void gfc_clear_ts (gfc_typespec *);
 FILE *gfc_open_file (const char *);
 const char *gfc_basic_typename (bt);
@@ -2820,7 +2821,7 @@ bool gfc_check_vardef_context (gfc_expr*, bool, bool, bool, const char*);
 extern gfc_code new_st;
 
 void gfc_clear_new_st (void);
-gfc_code *gfc_get_code (void);
+gfc_code *gfc_get_code (gfc_exec_op);
 gfc_code *gfc_append_code (gfc_code *, gfc_code *);
 void gfc_free_statement (gfc_code *);
 void gfc_free_statements (gfc_code *);
@@ -2845,6 +2846,7 @@ gfc_expr *gfc_expr_to_initialize (gfc_expr *);
 bool gfc_type_is_extensible (gfc_symbol *);
 bool gfc_resolve_intrinsic (gfc_symbol *, locus *);
 bool gfc_explicit_interface_required (gfc_symbol *, char *, int);
+extern int gfc_do_concurrent_flag;
 
 
 /* array.c */
@@ -2983,12 +2985,12 @@ void gfc_add_class_array_ref (gfc_expr *);
 bool gfc_is_class_array_ref (gfc_expr *, bool *);
 bool gfc_is_class_scalar_expr (gfc_expr *);
 bool gfc_is_class_container_ref (gfc_expr *e);
-gfc_expr *gfc_class_null_initializer (gfc_typespec *, gfc_expr *);
+gfc_expr *gfc_class_initializer (gfc_typespec *, gfc_expr *);
 unsigned int gfc_hash_value (gfc_symbol *);
 bool gfc_build_class_symbol (gfc_typespec *, symbol_attribute *,
 				gfc_array_spec **, bool);
 gfc_symbol *gfc_find_derived_vtab (gfc_symbol *);
-gfc_symbol *gfc_find_intrinsic_vtab (gfc_typespec *);
+gfc_symbol *gfc_find_vtab (gfc_typespec *);
 gfc_symtree* gfc_find_typebound_proc (gfc_symbol*, bool*,
 				      const char*, bool, locus*);
 gfc_symtree* gfc_find_typebound_user_op (gfc_symbol*, bool*,

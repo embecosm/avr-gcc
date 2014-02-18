@@ -1,5 +1,5 @@
 /* Machine description for AArch64 architecture.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of GCC.
@@ -68,6 +68,24 @@ enum aarch64_symbol_context
    Each of of these represents a thread-local symbol, and corresponds to the
    thread local storage relocation operator for the symbol being referred to.
 
+   SYMBOL_TINY_ABSOLUTE
+
+   Generate symbol accesses as a PC relative address using a single
+   instruction.  To compute the address of symbol foo, we generate:
+
+   ADR x0, foo
+
+   SYMBOL_TINY_GOT
+
+   Generate symbol accesses via the GOT using a single PC relative
+   instruction.  To compute the address of symbol foo, we generate:
+
+   ldr t0, :got:foo
+
+   The value of foo can subsequently read using:
+
+   ldrb    t0, [t0]
+
    SYMBOL_FORCE_TO_MEM : Global variables are addressed using
    constant pool.  All variable addresses are spilled into constant
    pools.  The constant pools themselves are addressed using PC
@@ -81,31 +99,14 @@ enum aarch64_symbol_type
   SYMBOL_SMALL_TLSDESC,
   SYMBOL_SMALL_GOTTPREL,
   SYMBOL_SMALL_TPREL,
+  SYMBOL_TINY_ABSOLUTE,
+  SYMBOL_TINY_GOT,
   SYMBOL_FORCE_TO_MEM
 };
 
 /* A set of tuning parameters contains references to size and time
    cost models and vectors for address cost calculations, register
    move costs and memory move costs.  */
-
-/* Extra costs for specific insns.  Only records the cost above a
-   single insn.  */
-
-struct cpu_rtx_cost_table
-{
-  const int memory_load;
-  const int memory_store;
-  const int register_shift;
-  const int int_divide;
-  const int float_divide;
-  const int double_divide;
-  const int int_multiply;
-  const int int_multiply_extend;
-  const int int_multiply_add;
-  const int int_multiply_extend_add;
-  const int float_multiply;
-  const int double_multiply;
-};
 
 /* Additional cost for addresses.  */
 struct cpu_addrcost_table
@@ -126,16 +127,45 @@ struct cpu_regmove_cost
   const int FP2FP;
 };
 
+/* Cost for vector insn classes.  */
+struct cpu_vector_cost
+{
+  const int scalar_stmt_cost;		 /* Cost of any scalar operation,
+					    excluding load and store.  */
+  const int scalar_load_cost;		 /* Cost of scalar load.  */
+  const int scalar_store_cost;		 /* Cost of scalar store.  */
+  const int vec_stmt_cost;		 /* Cost of any vector operation,
+					    excluding load, store,
+					    vector-to-scalar and
+					    scalar-to-vector operation.  */
+  const int vec_to_scalar_cost;		 /* Cost of vec-to-scalar operation.  */
+  const int scalar_to_vec_cost;		 /* Cost of scalar-to-vector
+					    operation.  */
+  const int vec_align_load_cost;	 /* Cost of aligned vector load.  */
+  const int vec_unalign_load_cost;	 /* Cost of unaligned vector load.  */
+  const int vec_unalign_store_cost;	 /* Cost of unaligned vector store.  */
+  const int vec_store_cost;		 /* Cost of vector store.  */
+  const int cond_taken_branch_cost;	 /* Cost of taken branch.  */
+  const int cond_not_taken_branch_cost;  /* Cost of not taken branch.  */
+};
+
 struct tune_params
 {
-  const struct cpu_rtx_cost_table *const insn_extra_cost;
+  const struct cpu_cost_table *const insn_extra_cost;
   const struct cpu_addrcost_table *const addr_cost;
   const struct cpu_regmove_cost *const regmove_cost;
+  const struct cpu_vector_cost *const vec_costs;
   const int memmov_cost;
+  const int issue_rate;
 };
 
 HOST_WIDE_INT aarch64_initial_elimination_offset (unsigned, unsigned);
 bool aarch64_bitmask_imm (HOST_WIDE_INT val, enum machine_mode);
+bool aarch64_cannot_change_mode_class (enum machine_mode,
+				       enum machine_mode,
+				       enum reg_class);
+enum aarch64_symbol_type
+aarch64_classify_symbolic_expression (rtx, enum aarch64_symbol_context);
 bool aarch64_constant_address_p (rtx);
 bool aarch64_float_const_zero_rtx_p (rtx);
 bool aarch64_function_arg_regno_p (unsigned);
@@ -146,6 +176,10 @@ bool aarch64_is_long_call_p (rtx);
 bool aarch64_label_mentioned_p (rtx);
 bool aarch64_legitimate_pic_operand_p (rtx);
 bool aarch64_move_imm (HOST_WIDE_INT, enum machine_mode);
+bool aarch64_mov_operand_p (rtx, enum aarch64_symbol_context,
+			    enum machine_mode);
+char *aarch64_output_scalar_simd_mov_immediate (rtx, enum machine_mode);
+char *aarch64_output_simd_mov_immediate (rtx, enum machine_mode, unsigned);
 bool aarch64_pad_arg_upward (enum machine_mode, const_tree);
 bool aarch64_pad_reg_upward (enum machine_mode, const_tree, bool);
 bool aarch64_regno_ok_for_base_p (int, bool);
@@ -154,11 +188,13 @@ bool aarch64_simd_imm_scalar_p (rtx x, enum machine_mode mode);
 bool aarch64_simd_imm_zero_p (rtx, enum machine_mode);
 bool aarch64_simd_scalar_immediate_valid_for_move (rtx, enum machine_mode);
 bool aarch64_simd_shift_imm_p (rtx, enum machine_mode, bool);
+bool aarch64_simd_valid_immediate (rtx, enum machine_mode, bool,
+				   struct simd_immediate_info *);
 bool aarch64_symbolic_address_p (rtx);
-bool aarch64_symbolic_constant_p (rtx, enum aarch64_symbol_context,
-				  enum aarch64_symbol_type *);
 bool aarch64_uimm12_shift (HOST_WIDE_INT);
 const char *aarch64_output_casesi (rtx *);
+const char *aarch64_rewrite_selected_cpu (const char *name);
+
 enum aarch64_symbol_type aarch64_classify_symbol (rtx,
 						  enum aarch64_symbol_context);
 enum aarch64_symbol_type aarch64_classify_tls_symbol (rtx);
@@ -167,9 +203,6 @@ int aarch64_asm_preferred_eh_data_format (int, int);
 int aarch64_hard_regno_mode_ok (unsigned, enum machine_mode);
 int aarch64_hard_regno_nregs (unsigned, enum machine_mode);
 int aarch64_simd_attr_length_move (rtx);
-int aarch64_simd_immediate_valid_for_move (rtx, enum machine_mode, rtx *,
-					   int *, unsigned char *, int *,
-					   int *);
 int aarch64_uxt_size (int, HOST_WIDE_INT);
 rtx aarch64_final_eh_return_addr (void);
 rtx aarch64_legitimize_reload_address (rtx *, enum machine_mode, int, int, int);
@@ -219,6 +252,8 @@ void aarch64_split_128bit_move (rtx, rtx);
 
 bool aarch64_split_128bit_move_p (rtx, rtx);
 
+void aarch64_split_simd_combine (rtx, rtx, rtx);
+
 void aarch64_split_simd_move (rtx, rtx);
 
 /* Check for a legitimate floating point constant for FMOV.  */
@@ -254,6 +289,4 @@ extern void aarch64_split_combinev16qi (rtx operands[3]);
 extern void aarch64_expand_vec_perm (rtx target, rtx op0, rtx op1, rtx sel);
 extern bool
 aarch64_expand_vec_perm_const (rtx target, rtx op0, rtx op1, rtx sel);
-
-char* aarch64_output_simd_mov_immediate (rtx *, enum machine_mode, unsigned);
 #endif /* GCC_AARCH64_PROTOS_H */

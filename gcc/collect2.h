@@ -1,5 +1,5 @@
 /* Header file for collect/tlink routines.
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -24,8 +24,6 @@ extern void do_tlink (char **, char **);
 
 extern struct pex_obj *collect_execute (const char *, char **, const char *,
 					const char *, int flags);
-
-extern void collect_exit (int) ATTRIBUTE_NORETURN;
 
 extern int collect_wait (const char *, struct pex_obj *);
 

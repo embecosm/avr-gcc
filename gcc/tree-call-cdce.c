@@ -1,5 +1,5 @@
 /* Conditional Dead Call Elimination pass for the GNU compiler.
-   Copyright (C) 2008-2013 Free Software Foundation, Inc.
+   Copyright (C) 2008-2014 Free Software Foundation, Inc.
    Contributed by Xinliang David Li <davidxl@google.com>
 
 This file is part of GCC.
@@ -24,9 +24,19 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 #include "basic-block.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "gimple-pretty-print.h"
-#include "tree-flow.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
 #include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "tree-into-ssa.h"
 #include "tree-pass.h"
 #include "flags.h"
 
@@ -710,7 +720,6 @@ shrink_wrap_one_built_in_call (gimple bi_call)
   basic_block bi_call_bb, join_tgt_bb, guard_bb, guard_bb0;
   edge join_tgt_in_edge_from_call, join_tgt_in_edge_fall_thru;
   edge bi_call_in_edge0, guard_bb_in_edge;
-  vec<gimple> conds;
   unsigned tn_cond_stmts, nconds;
   unsigned ci;
   gimple cond_expr = NULL;
@@ -718,7 +727,7 @@ shrink_wrap_one_built_in_call (gimple bi_call)
   tree bi_call_label_decl;
   gimple bi_call_label;
 
-  conds.create (12);
+  auto_vec<gimple, 12> conds;
   gen_shrink_wrap_conditions (bi_call, conds, &nconds);
 
   /* This can happen if the condition generator decides
@@ -730,11 +739,18 @@ shrink_wrap_one_built_in_call (gimple bi_call)
 
   bi_call_bb = gimple_bb (bi_call);
 
-  /* Now find the join target bb -- split
-     bi_call_bb if needed.  */
-  bi_call_bsi = gsi_for_stmt (bi_call);
+  /* Now find the join target bb -- split bi_call_bb if needed.  */
+  if (stmt_ends_bb_p (bi_call))
+    {
+      /* If the call must be the last in the bb, don't split the block,
+	 it could e.g. have EH edges.  */
+      join_tgt_in_edge_from_call = find_fallthru_edge (bi_call_bb->succs);
+      if (join_tgt_in_edge_from_call == NULL)
+        return false;
+    }
+  else
+    join_tgt_in_edge_from_call = split_block (bi_call_bb, bi_call);
 
-  join_tgt_in_edge_from_call = split_block (bi_call_bb, bi_call);
   bi_call_bsi = gsi_for_stmt (bi_call);
 
   join_tgt_bb = join_tgt_in_edge_from_call->dest;
@@ -816,7 +832,6 @@ shrink_wrap_one_built_in_call (gimple bi_call)
       guard_bb_in_edge->count = guard_bb->count - bi_call_in_edge->count;
     }
 
-  conds.release ();
   if (dump_file && (dump_flags & TDF_DETAILS))
     {
       location_t loc;
@@ -860,8 +875,8 @@ tree_call_cdce (void)
   basic_block bb;
   gimple_stmt_iterator i;
   bool something_changed = false;
-  vec<gimple> cond_dead_built_in_calls = vNULL;
-  FOR_EACH_BB (bb)
+  auto_vec<gimple> cond_dead_built_in_calls;
+  FOR_EACH_BB_FN (bb, cfun)
     {
       /* Collect dead call candidates.  */
       for (i = gsi_start_bb (bb); !gsi_end_p (i); gsi_next (&i))
@@ -889,8 +904,6 @@ tree_call_cdce (void)
   something_changed
     = shrink_wrap_conditional_dead_built_in_calls (cond_dead_built_in_calls);
 
-  cond_dead_built_in_calls.release ();
-
   if (something_changed)
     {
       free_dominance_info (CDI_DOMINATORS);
@@ -913,22 +926,40 @@ gate_call_cdce (void)
   return flag_tree_builtin_call_dce != 0 && optimize_function_for_speed_p (cfun);
 }
 
-struct gimple_opt_pass pass_call_cdce =
+namespace {
+
+const pass_data pass_data_call_cdce =
 {
- {
-  GIMPLE_PASS,
-  "cdce",                               /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_call_cdce,                       /* gate */
-  tree_call_cdce,                       /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_TREE_CALL_CDCE,                    /* tv_id */
-  PROP_cfg | PROP_ssa,                  /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_verify_ssa                       /* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "cdce", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_CALL_CDCE, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_ssa, /* todo_flags_finish */
 };
+
+class pass_call_cdce : public gimple_opt_pass
+{
+public:
+  pass_call_cdce (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_call_cdce, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_call_cdce (); }
+  unsigned int execute () { return tree_call_cdce (); }
+
+}; // class pass_call_cdce
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_call_cdce (gcc::context *ctxt)
+{
+  return new pass_call_cdce (ctxt);
+}

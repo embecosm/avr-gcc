@@ -1,5 +1,5 @@
 /* Output routines for graphical representation.
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
    Rewritten for DOT output by Steven Bosscher, 2012.
 
@@ -56,26 +56,6 @@ open_graph_file (const char *base, const char *mode)
   return fp;
 }
 
-/* Return a pretty-print buffer for output to file FP.  */
-
-static pretty_printer *
-init_graph_slim_pretty_print (FILE *fp)
-{
-  static bool initialized = false;
-  static pretty_printer graph_slim_pp;
-
-  if (! initialized)
-    {
-      pp_construct (&graph_slim_pp, /*prefix=*/NULL, /*linewidth=*/0);
-      initialized = true;
-    }
-  else
-    gcc_assert (! pp_last_position_in_text (&graph_slim_pp));
-
-  graph_slim_pp.buffer->stream = fp;
-  return &graph_slim_pp;
-}
-
 /* Draw a basic block BB belonging to the function with FUNCDEF_NO
    as its unique number.  */
 static void
@@ -109,10 +89,10 @@ draw_cfg_node (pretty_printer *pp, int funcdef_no, basic_block bb)
     pp_string (pp, "EXIT");
   else
     {
-      pp_character (pp, '{');
+      pp_left_brace (pp);
       pp_write_text_to_stream (pp);
       dump_bb_for_graph (pp, bb);
-      pp_character (pp, '}');
+      pp_right_brace (pp);
     }
 
   pp_string (pp, "\"];\n\n");
@@ -173,24 +153,24 @@ draw_cfg_node_succ_edges (pretty_printer *pp, int funcdef_no, basic_block bb)
 static void
 draw_cfg_nodes_no_loops (pretty_printer *pp, struct function *fun)
 {
-  int *rpo = XNEWVEC (int, n_basic_blocks_for_function (fun));
+  int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
   int i, n;
   sbitmap visited;
 
-  visited = sbitmap_alloc (last_basic_block);
+  visited = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (visited);
 
-  /* FIXME: pre_and_rev_post_order_compute only works if fun == cfun.  */
-  n = pre_and_rev_post_order_compute (NULL, rpo, true);
-  for (i = 0; i < n; i++)
+  n = pre_and_rev_post_order_compute_fn (fun, NULL, rpo, true);
+  for (i = n_basic_blocks_for_fn (fun) - n;
+       i < n_basic_blocks_for_fn (fun); i++)
     {
-      basic_block bb = BASIC_BLOCK (rpo[i]);
+      basic_block bb = BASIC_BLOCK_FOR_FN (cfun, rpo[i]);
       draw_cfg_node (pp, fun->funcdef_no, bb);
       bitmap_set_bit (visited, bb->index);
     }
   free (rpo);
 
-  if (n != n_basic_blocks_for_function (fun))
+  if (n != n_basic_blocks_for_fn (fun))
     {
       /* Some blocks are unreachable.  We still want to dump them.  */
       basic_block bb;
@@ -215,7 +195,7 @@ draw_cfg_nodes_for_loop (pretty_printer *pp, int funcdef_no,
   const char *fillcolors[3] = { "grey88", "grey77", "grey66" };
 
   if (loop->header != NULL
-      && loop->latch != EXIT_BLOCK_PTR)
+      && loop->latch != EXIT_BLOCK_PTR_FOR_FN (cfun))
     pp_printf (pp,
 	       "\tsubgraph cluster_%d_%d {\n"
 	       "\tstyle=\"filled\";\n"
@@ -234,7 +214,7 @@ draw_cfg_nodes_for_loop (pretty_printer *pp, int funcdef_no,
   if (loop->header == NULL)
     return;
 
-  if (loop->latch == EXIT_BLOCK_PTR)
+  if (loop->latch == EXIT_BLOCK_PTR_FOR_FN (cfun))
     body = get_loop_body (loop);
   else
     body = get_loop_body_in_bfs_order (loop);
@@ -248,7 +228,7 @@ draw_cfg_nodes_for_loop (pretty_printer *pp, int funcdef_no,
 
   free (body);
 
-  if (loop->latch != EXIT_BLOCK_PTR)
+  if (loop->latch != EXIT_BLOCK_PTR_FOR_FN (cfun))
     pp_printf (pp, "\t}\n");
 }
 
@@ -275,7 +255,7 @@ draw_cfg_edges (pretty_printer *pp, struct function *fun)
 {
   basic_block bb;
   mark_dfs_back_edges ();
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
     draw_cfg_node_succ_edges (pp, fun->funcdef_no, bb);
 
   /* Add an invisible edge from ENTRY to EXIT, to improve the graph layout.  */
@@ -297,7 +277,9 @@ print_graph_cfg (const char *base, struct function *fun)
 {
   const char *funcname = function_name (fun);
   FILE *fp = open_graph_file (base, "a");
-  pretty_printer *pp = init_graph_slim_pretty_print (fp);
+  pretty_printer graph_slim_pp;
+  graph_slim_pp.buffer->stream = fp;
+  pretty_printer *const pp = &graph_slim_pp;
   pp_printf (pp, "subgraph \"%s\" {\n"
 	         "\tcolor=\"black\";\n"
 		 "\tlabel=\"%s\";\n",
@@ -313,7 +295,9 @@ print_graph_cfg (const char *base, struct function *fun)
 static void
 start_graph_dump (FILE *fp, const char *base)
 {
-  pretty_printer *pp = init_graph_slim_pretty_print (fp);
+  pretty_printer graph_slim_pp;
+  graph_slim_pp.buffer->stream = fp;
+  pretty_printer *const pp = &graph_slim_pp;
   pp_string (pp, "digraph \"");
   pp_write_text_to_stream (pp);
   pp_string (pp, base);

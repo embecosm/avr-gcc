@@ -1,5 +1,5 @@
 ;; Predicate definitions for ARM and Thumb
-;; Copyright (C) 2004-2013 Free Software Foundation, Inc.
+;; Copyright (C) 2004-2014 Free Software Foundation, Inc.
 ;; Contributed by ARM Ltd.
 
 ;; This file is part of GCC.
@@ -42,11 +42,22 @@
   (ior (match_operand 0 "imm_for_neon_inv_logic_operand")
        (match_operand 0 "s_register_operand")))
 
-;; Any hard register.
-(define_predicate "arm_hard_register_operand"
+(define_predicate "imm_for_neon_logic_operand"
+  (match_code "const_vector")
+{
+  return (TARGET_NEON
+          && neon_immediate_valid_for_logic (op, mode, 0, NULL, NULL));
+})
+
+(define_predicate "neon_logic_op2"
+  (ior (match_operand 0 "imm_for_neon_logic_operand")
+       (match_operand 0 "s_register_operand")))
+
+;; Any general register.
+(define_predicate "arm_hard_general_register_operand"
   (match_code "reg")
 {
-  return REGNO (op) < FIRST_PSEUDO_REGISTER;
+  return REGNO (op) <= LAST_ARM_REGNUM;
 })
 
 ;; A low register.
@@ -85,6 +96,12 @@
 	      || REGNO_REG_CLASS (REGNO (op)) == VFP_LO_REGS
 	      || (TARGET_VFPD32
 		  && REGNO_REG_CLASS (REGNO (op)) == VFP_REGS)));
+})
+
+(define_predicate "vfp_hard_register_operand"
+  (match_code "reg")
+{
+  return (IS_VFP_REGNUM (REGNO (op)));
 })
 
 (define_predicate "zero_operand"
@@ -162,6 +179,17 @@
 	    (match_test "const_ok_for_dimode_op (INTVAL (op), AND)"))
        (match_operand 0 "neon_inv_logic_op2")))
 
+(define_predicate "arm_iordi_operand_neon"
+  (ior (match_operand 0 "s_register_operand")
+       (and (match_code "const_int")
+	    (match_test "const_ok_for_dimode_op (INTVAL (op), IOR)"))
+       (match_operand 0 "neon_logic_op2")))
+
+(define_predicate "arm_xordi_operand"
+  (ior (match_operand 0 "s_register_operand")
+       (and (match_code "const_int")
+	    (match_test "const_ok_for_dimode_op (INTVAL (op), XOR)"))))
+
 (define_predicate "arm_adddi_operand"
   (ior (match_operand 0 "s_register_operand")
        (and (match_code "const_int")
@@ -222,6 +250,10 @@
 ;; True for operators that can be combined with a shift in ARM state.
 (define_special_predicate "shiftable_operator"
   (and (match_code "plus,minus,ior,xor,and")
+       (match_test "mode == GET_MODE (op)")))
+
+(define_special_predicate "shiftable_operator_strict_it"
+  (and (match_code "plus,and")
        (match_test "mode == GET_MODE (op)")))
 
 ;; True for logical binary operators.
@@ -298,6 +330,12 @@
                     || maybe_get_arm_condition_code (op) == ARM_LE
                     || maybe_get_arm_condition_code (op) == ARM_NE
                     || maybe_get_arm_condition_code (op) == ARM_VC")))
+
+(define_special_predicate "arm_cond_move_operator"
+  (if_then_else (match_test "arm_restrict_it")
+                (and (match_test "TARGET_FPU_ARMV8")
+                     (match_operand 0 "arm_vsel_comparison_operator"))
+                (match_operand 0 "expandable_comparison_operator")))
 
 (define_special_predicate "noov_comparison_operator"
   (match_code "lt,ge,eq,ne"))
@@ -535,17 +573,6 @@
   (ior (match_operand 0 "s_register_operand")
        (match_operand 0 "imm_for_neon_rshift_operand")))
 
-(define_predicate "imm_for_neon_logic_operand"
-  (match_code "const_vector")
-{
-  return (TARGET_NEON
-          && neon_immediate_valid_for_logic (op, mode, 0, NULL, NULL));
-})
-
-(define_predicate "neon_logic_op2"
-  (ior (match_operand 0 "imm_for_neon_logic_operand")
-       (match_operand 0 "s_register_operand")))
-
 ;; Predicates for named expanders that overlap multiple ISAs.
 
 (define_predicate "cmpdi_operand"
@@ -618,15 +645,24 @@
 
 (define_predicate "const_double_vcvt_power_of_two_reciprocal"
   (and (match_code "const_double")
-       (match_test "TARGET_32BIT && TARGET_VFP 
-       		   && vfp3_const_double_for_fract_bits (op)")))
+       (match_test "TARGET_32BIT && TARGET_VFP
+                   && vfp3_const_double_for_fract_bits (op)")))
+
+(define_predicate "const_double_vcvt_power_of_two"
+  (and (match_code "const_double")
+       (match_test "TARGET_32BIT && TARGET_VFP
+                   && vfp3_const_double_for_bits (op)")))
 
 (define_predicate "neon_struct_operand"
   (and (match_code "mem")
-       (match_test "TARGET_32BIT && neon_vector_mem_operand (op, 2)")))
+       (match_test "TARGET_32BIT && neon_vector_mem_operand (op, 2, true)")))
 
-(define_predicate "neon_struct_or_register_operand"
-  (ior (match_operand 0 "neon_struct_operand")
+(define_predicate "neon_permissive_struct_operand"
+  (and (match_code "mem")
+       (match_test "TARGET_32BIT && neon_vector_mem_operand (op, 2, false)")))
+
+(define_predicate "neon_perm_struct_or_reg_operand"
+  (ior (match_operand 0 "neon_permissive_struct_operand")
        (match_operand 0 "s_register_operand")))
 
 (define_special_predicate "add_operator"
@@ -635,3 +671,7 @@
 (define_predicate "mem_noofs_operand"
   (and (match_code "mem")
        (match_code "reg" "0")))
+
+(define_predicate "call_insn_operand"
+  (ior (match_code "symbol_ref")
+       (match_operand 0 "s_register_operand")))

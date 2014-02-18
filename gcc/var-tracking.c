@@ -1,5 +1,5 @@
 /* Variable tracking routines for the GNU compiler.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -91,26 +91,30 @@
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "varasm.h"
+#include "stor-layout.h"
+#include "pointer-set.h"
+#include "hash-table.h"
+#include "basic-block.h"
 #include "tm_p.h"
 #include "hard-reg-set.h"
-#include "basic-block.h"
 #include "flags.h"
 #include "insn-config.h"
 #include "reload.h"
 #include "sbitmap.h"
 #include "alloc-pool.h"
 #include "fibheap.h"
-#include "hash-table.h"
 #include "regs.h"
 #include "expr.h"
 #include "tree-pass.h"
-#include "tree-flow.h"
+#include "bitmap.h"
+#include "tree-dfa.h"
+#include "tree-ssa.h"
 #include "cselib.h"
 #include "target.h"
 #include "params.h"
 #include "diagnostic.h"
 #include "tree-pretty-print.h"
-#include "pointer-set.h"
 #include "recog.h"
 #include "tm_p.h"
 #include "alias.h"
@@ -831,16 +835,18 @@ vt_stack_adjustments (void)
   int sp;
 
   /* Initialize entry block.  */
-  VTI (ENTRY_BLOCK_PTR)->visited = true;
-  VTI (ENTRY_BLOCK_PTR)->in.stack_adjust = INCOMING_FRAME_SP_OFFSET;
-  VTI (ENTRY_BLOCK_PTR)->out.stack_adjust = INCOMING_FRAME_SP_OFFSET;
+  VTI (ENTRY_BLOCK_PTR_FOR_FN (cfun))->visited = true;
+  VTI (ENTRY_BLOCK_PTR_FOR_FN (cfun))->in.stack_adjust =
+ INCOMING_FRAME_SP_OFFSET;
+  VTI (ENTRY_BLOCK_PTR_FOR_FN (cfun))->out.stack_adjust =
+ INCOMING_FRAME_SP_OFFSET;
 
   /* Allocate stack for back-tracking up CFG.  */
-  stack = XNEWVEC (edge_iterator, n_basic_blocks + 1);
+  stack = XNEWVEC (edge_iterator, n_basic_blocks_for_fn (cfun) + 1);
   sp = 0;
 
   /* Push the first edge on to the stack.  */
-  stack[sp++] = ei_start (ENTRY_BLOCK_PTR->succs);
+  stack[sp++] = ei_start (ENTRY_BLOCK_PTR_FOR_FN (cfun)->succs);
 
   while (sp)
     {
@@ -861,7 +867,7 @@ vt_stack_adjustments (void)
 	  VTI (dest)->visited = true;
 	  VTI (dest)->in.stack_adjust = offset = VTI (src)->out.stack_adjust;
 
-	  if (dest != EXIT_BLOCK_PTR)
+	  if (dest != EXIT_BLOCK_PTR_FOR_FN (cfun))
 	    for (insn = BB_HEAD (dest);
 		 insn != NEXT_INSN (BB_END (dest));
 		 insn = NEXT_INSN (insn))
@@ -880,8 +886,25 @@ vt_stack_adjustments (void)
 	}
       else
 	{
-	  /* Check whether the adjustments on the edges are the same.  */
-	  if (VTI (dest)->in.stack_adjust != VTI (src)->out.stack_adjust)
+	  /* We can end up with different stack adjustments for the exit block
+	     of a shrink-wrapped function if stack_adjust_offset_pre_post
+	     doesn't understand the rtx pattern used to restore the stack
+	     pointer in the epilogue.  For example, on s390(x), the stack
+	     pointer is often restored via a load-multiple instruction
+	     and so no stack_adjust offset is recorded for it.  This means
+	     that the stack offset at the end of the epilogue block is the
+	     the same as the offset before the epilogue, whereas other paths
+	     to the exit block will have the correct stack_adjust.
+
+	     It is safe to ignore these differences because (a) we never
+	     use the stack_adjust for the exit block in this pass and
+	     (b) dwarf2cfi checks whether the CFA notes in a shrink-wrapped
+	     function are correct.
+
+	     We must check whether the adjustments on other edges are
+	     the same though.  */
+	  if (dest != EXIT_BLOCK_PTR_FOR_FN (cfun)
+	      && VTI (dest)->in.stack_adjust != VTI (src)->out.stack_adjust)
 	    {
 	      free (stack);
 	      return false;
@@ -1045,9 +1068,10 @@ adjust_mems (rtx loc, const_rtx old_rtx, void *data)
     case PRE_INC:
     case PRE_DEC:
       addr = gen_rtx_PLUS (GET_MODE (loc), XEXP (loc, 0),
-			   GEN_INT (GET_CODE (loc) == PRE_INC
-				    ? GET_MODE_SIZE (amd->mem_mode)
-				    : -GET_MODE_SIZE (amd->mem_mode)));
+			   gen_int_mode (GET_CODE (loc) == PRE_INC
+					 ? GET_MODE_SIZE (amd->mem_mode)
+					 : -GET_MODE_SIZE (amd->mem_mode),
+					 GET_MODE (loc)));
     case POST_INC:
     case POST_DEC:
       if (addr == loc)
@@ -1055,14 +1079,18 @@ adjust_mems (rtx loc, const_rtx old_rtx, void *data)
       gcc_assert (amd->mem_mode != VOIDmode && amd->mem_mode != BLKmode);
       addr = simplify_replace_fn_rtx (addr, old_rtx, adjust_mems, data);
       tem = gen_rtx_PLUS (GET_MODE (loc), XEXP (loc, 0),
-			   GEN_INT ((GET_CODE (loc) == PRE_INC
-				     || GET_CODE (loc) == POST_INC)
-				    ? GET_MODE_SIZE (amd->mem_mode)
-				    : -GET_MODE_SIZE (amd->mem_mode)));
+			  gen_int_mode ((GET_CODE (loc) == PRE_INC
+					 || GET_CODE (loc) == POST_INC)
+					? GET_MODE_SIZE (amd->mem_mode)
+					: -GET_MODE_SIZE (amd->mem_mode),
+					GET_MODE (loc)));
+      store_save = amd->store;
+      amd->store = false;
+      tem = simplify_replace_fn_rtx (tem, old_rtx, adjust_mems, data);
+      amd->store = store_save;
       amd->side_effects = alloc_EXPR_LIST (0,
 					   gen_rtx_SET (VOIDmode,
-							XEXP (loc, 0),
-							tem),
+							XEXP (loc, 0), tem),
 					   amd->side_effects);
       return addr;
     case PRE_MODIFY:
@@ -1072,10 +1100,14 @@ adjust_mems (rtx loc, const_rtx old_rtx, void *data)
 	addr = XEXP (loc, 0);
       gcc_assert (amd->mem_mode != VOIDmode);
       addr = simplify_replace_fn_rtx (addr, old_rtx, adjust_mems, data);
+      store_save = amd->store;
+      amd->store = false;
+      tem = simplify_replace_fn_rtx (XEXP (loc, 1), old_rtx,
+				     adjust_mems, data);
+      amd->store = store_save;
       amd->side_effects = alloc_EXPR_LIST (0,
 					   gen_rtx_SET (VOIDmode,
-							XEXP (loc, 0),
-							XEXP (loc, 1)),
+							XEXP (loc, 0), tem),
 					   amd->side_effects);
       return addr;
     case SUBREG:
@@ -2875,7 +2907,7 @@ variable_union (variable src, dataflow_set *set)
 	      /* The most common case, much simpler, no qsort is needed.  */
 	      location_chain dstnode = dst->var_part[j].loc_chain;
 	      dst->var_part[k].loc_chain = dstnode;
-	      VAR_PART_OFFSET (dst, k) = VAR_PART_OFFSET(dst, j);
+	      VAR_PART_OFFSET (dst, k) = VAR_PART_OFFSET (dst, j);
 	      node2 = dstnode;
 	      for (node = src->var_part[i].loc_chain; node; node = node->next)
 		if (!((REG_P (dstnode->loc)
@@ -5063,6 +5095,11 @@ track_expr_p (tree expr, bool need_rtl)
 					   &maxsize);
 	      if (!DECL_P (innerdecl)
 		  || DECL_IGNORED_P (innerdecl)
+		  /* Do not track declarations for parts of tracked parameters
+		     since we want to track them as a whole instead.  */
+		  || (TREE_CODE (innerdecl) == PARM_DECL
+		      && DECL_MODE (innerdecl) != BLKmode
+		      && TREE_CODE (TREE_TYPE (innerdecl)) != UNION_TYPE)
 		  || TREE_STATIC (innerdecl)
 		  || bitsize <= 0
 		  || bitpos + bitsize > 256
@@ -5836,7 +5873,24 @@ add_stores (rtx loc, const_rtx expr, void *cuip)
 	    {
 	      rtx xexpr = gen_rtx_SET (VOIDmode, loc, src);
 	      if (same_variable_part_p (src, REG_EXPR (loc), REG_OFFSET (loc)))
-		mo.type = MO_COPY;
+		{
+		  /* If this is an instruction copying (part of) a parameter
+		     passed by invisible reference to its register location,
+		     pretend it's a SET so that the initial memory location
+		     is discarded, as the parameter register can be reused
+		     for other purposes and we do not track locations based
+		     on generic registers.  */
+		  if (MEM_P (src)
+		      && REG_EXPR (loc)
+		      && TREE_CODE (REG_EXPR (loc)) == PARM_DECL
+		      && DECL_MODE (REG_EXPR (loc)) != BLKmode
+		      && MEM_P (DECL_INCOMING_RTL (REG_EXPR (loc)))
+		      && XEXP (DECL_INCOMING_RTL (REG_EXPR (loc)), 0)
+			 != arg_pointer_rtx)
+		    mo.type = MO_SET;
+		  else
+		    mo.type = MO_COPY;
+		}
 	      else
 		mo.type = MO_SET;
 	      mo.u.loc = xexpr;
@@ -5906,6 +5960,29 @@ add_stores (rtx loc, const_rtx expr, void *cuip)
     goto log_and_return;
 
   resolve = preserve = !cselib_preserved_value_p (v);
+
+  /* We cannot track values for multiple-part variables, so we track only
+     locations for tracked parameters passed either by invisible reference
+     or directly in multiple locations.  */
+  if (track_p
+      && REG_P (loc)
+      && REG_EXPR (loc)
+      && TREE_CODE (REG_EXPR (loc)) == PARM_DECL
+      && DECL_MODE (REG_EXPR (loc)) != BLKmode
+      && TREE_CODE (TREE_TYPE (REG_EXPR (loc))) != UNION_TYPE
+      && ((MEM_P (DECL_INCOMING_RTL (REG_EXPR (loc)))
+	   && XEXP (DECL_INCOMING_RTL (REG_EXPR (loc)), 0) != arg_pointer_rtx)
+          || (GET_CODE (DECL_INCOMING_RTL (REG_EXPR (loc))) == PARALLEL
+	      && XVECLEN (DECL_INCOMING_RTL (REG_EXPR (loc)), 0) > 1)))
+    {
+      /* Although we don't use the value here, it could be used later by the
+	 mere virtue of its existence as the operand of the reverse operation
+	 that gave rise to it (typically extension/truncation).  Make sure it
+	 is preserved as required by vt_expand_var_loc_chain.  */
+      if (preserve)
+	preserve_value (v);
+      goto log_and_return;
+    }
 
   if (loc == stack_pointer_rtx
       && hard_frame_pointer_adjustment != -1
@@ -6269,9 +6346,9 @@ prepare_call_arguments (basic_block bb, rtx insn)
 			  && DECL_INITIAL (SYMBOL_REF_DECL (l->loc)))
 			{
 			  initial = DECL_INITIAL (SYMBOL_REF_DECL (l->loc));
-			  if (host_integerp (initial, 0))
+			  if (tree_fits_shwi_p (initial))
 			    {
-			      item = GEN_INT (tree_low_cst (initial, 0));
+			      item = GEN_INT (tree_to_shwi (initial));
 			      item = gen_rtx_CONCAT (indmode, mem, item);
 			      call_arguments
 				= gen_rtx_EXPR_LIST (VOIDmode, item,
@@ -6350,7 +6427,7 @@ prepare_call_arguments (basic_block bb, rtx insn)
 	= TYPE_MODE (TREE_TYPE (OBJ_TYPE_REF_EXPR (obj_type_ref)));
       rtx clobbered = gen_rtx_MEM (mode, this_arg);
       HOST_WIDE_INT token
-	= tree_low_cst (OBJ_TYPE_REF_TOKEN (obj_type_ref), 0);
+	= tree_to_shwi (OBJ_TYPE_REF_TOKEN (obj_type_ref));
       if (token)
 	clobbered = plus_constant (mode, clobbered,
 				   token * GET_MODE_SIZE (mode));
@@ -6883,21 +6960,21 @@ vt_find_locations (void)
   timevar_push (TV_VAR_TRACKING_DATAFLOW);
   /* Compute reverse completion order of depth first search of the CFG
      so that the data-flow runs faster.  */
-  rc_order = XNEWVEC (int, n_basic_blocks - NUM_FIXED_BLOCKS);
-  bb_order = XNEWVEC (int, last_basic_block);
+  rc_order = XNEWVEC (int, n_basic_blocks_for_fn (cfun) - NUM_FIXED_BLOCKS);
+  bb_order = XNEWVEC (int, last_basic_block_for_fn (cfun));
   pre_and_rev_post_order_compute (NULL, rc_order, false);
-  for (i = 0; i < n_basic_blocks - NUM_FIXED_BLOCKS; i++)
+  for (i = 0; i < n_basic_blocks_for_fn (cfun) - NUM_FIXED_BLOCKS; i++)
     bb_order[rc_order[i]] = i;
   free (rc_order);
 
   worklist = fibheap_new ();
   pending = fibheap_new ();
-  visited = sbitmap_alloc (last_basic_block);
-  in_worklist = sbitmap_alloc (last_basic_block);
-  in_pending = sbitmap_alloc (last_basic_block);
+  visited = sbitmap_alloc (last_basic_block_for_fn (cfun));
+  in_worklist = sbitmap_alloc (last_basic_block_for_fn (cfun));
+  in_pending = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (in_worklist);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     fibheap_insert (pending, bb_order[bb->index], bb);
   bitmap_ones (in_pending);
 
@@ -7011,7 +7088,7 @@ vt_find_locations (void)
 		{
 		  FOR_EACH_EDGE (e, ei, bb->succs)
 		    {
-		      if (e->dest == EXIT_BLOCK_PTR)
+		      if (e->dest == EXIT_BLOCK_PTR_FOR_FN (cfun))
 			continue;
 
 		      if (bitmap_bit_p (visited, e->dest->index))
@@ -7057,7 +7134,7 @@ vt_find_locations (void)
     }
 
   if (success && MAY_HAVE_DEBUG_INSNS)
-    FOR_EACH_BB (bb)
+    FOR_EACH_BB_FN (bb, cfun)
       gcc_assert (VTI (bb)->flooded);
 
   free (bb_order);
@@ -7185,7 +7262,7 @@ dump_dataflow_sets (void)
 {
   basic_block bb;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       fprintf (dump_file, "\nBasic block %d:\n", bb->index);
       fprintf (dump_file, "IN:\n");
@@ -7886,7 +7963,7 @@ struct expand_loc_callback_data
 
   /* Stack of values and debug_exprs under expansion, and their
      children.  */
-  vec<rtx, va_stack> expanding;
+  auto_vec<rtx, 4> expanding;
 
   /* Stack of values and debug_exprs whose expansion hit recursion
      cycles.  They will have VALUE_RECURSED_INTO marked when added to
@@ -7894,7 +7971,7 @@ struct expand_loc_callback_data
      resolves to a valid location.  So, if the flag remains set at the
      end of the search, we know no valid location for this one can
      possibly exist.  */
-  vec<rtx, va_stack> pending;
+  auto_vec<rtx, 4> pending;
 
   /* The maximum depth among the sub-expressions under expansion.
      Zero indicates no expansion so far.  */
@@ -8396,11 +8473,11 @@ vt_expand_loc_callback (rtx x, bitmap regs,
    This function performs this finalization of NULL locations.  */
 
 static void
-resolve_expansions_pending_recursion (vec<rtx, va_stack> pending)
+resolve_expansions_pending_recursion (vec<rtx, va_heap> *pending)
 {
-  while (!pending.is_empty ())
+  while (!pending->is_empty ())
     {
-      rtx x = pending.pop ();
+      rtx x = pending->pop ();
       decl_or_value dv;
 
       if (!VALUE_RECURSED_INTO (x))
@@ -8420,8 +8497,6 @@ resolve_expansions_pending_recursion (vec<rtx, va_stack> pending)
   do								\
     {								\
       (d).vars = (v);						\
-      vec_stack_alloc (rtx, (d).expanding, 4);			\
-      vec_stack_alloc (rtx, (d).pending, 4);			\
       (d).depth.complexity = (d).depth.entryvals = 0;		\
     }								\
   while (0)
@@ -8429,7 +8504,7 @@ resolve_expansions_pending_recursion (vec<rtx, va_stack> pending)
 #define FINI_ELCD(d, l)						\
   do								\
     {								\
-      resolve_expansions_pending_recursion ((d).pending);	\
+      resolve_expansions_pending_recursion (&(d).pending);	\
       (d).pending.release ();					\
       (d).expanding.release ();					\
 								\
@@ -8723,7 +8798,7 @@ emit_note_insn_var_location (variable_def **varp, emit_note_data *data)
 
 int
 var_track_values_to_stack (variable_def **slot,
-			   vec<rtx, va_stack> *changed_values_stack)
+			   vec<rtx, va_heap> *changed_values_stack)
 {
   variable var = *slot;
 
@@ -8758,7 +8833,7 @@ remove_value_from_changed_variables (rtx val)
 
 static void
 notify_dependents_of_changed_value (rtx val, variable_table_type htab,
-				    vec<rtx, va_stack> *changed_values_stack)
+				    vec<rtx, va_heap> *changed_values_stack)
 {
   variable_def **slot;
   variable var;
@@ -8843,13 +8918,11 @@ process_changed_values (variable_table_type htab)
 {
   int i, n;
   rtx val;
-  vec<rtx, va_stack> changed_values_stack;
-
-  vec_stack_alloc (rtx, changed_values_stack, 20);
+  auto_vec<rtx, 20> changed_values_stack;
 
   /* Move values from changed_variables to changed_values_stack.  */
   changed_variables
-    .traverse <vec<rtx, va_stack>*, var_track_values_to_stack>
+    .traverse <vec<rtx, va_heap>*, var_track_values_to_stack>
       (&changed_values_stack);
 
   /* Back-propagate change notifications in values while popping
@@ -8870,8 +8943,6 @@ process_changed_values (variable_table_type htab)
 	  n--;
 	}
     }
-
-  changed_values_stack.release ();
 }
 
 /* Emit NOTE_INSN_VAR_LOCATION note for each variable from a chain
@@ -9086,7 +9157,7 @@ emit_notes_in_bb (basic_block bb, dataflow_set *set)
 	      else
 		var_mem_set (set, loc, VAR_INIT_STATUS_UNINITIALIZED, NULL);
 
-	      emit_notes_for_changes (insn, EMIT_NOTE_AFTER_INSN, set->vars);
+	      emit_notes_for_changes (insn, EMIT_NOTE_BEFORE_INSN, set->vars);
 	    }
 	    break;
 
@@ -9364,7 +9435,7 @@ vt_emit_notes (void)
 
   /* Free memory occupied by the out hash tables, as they aren't used
      anymore.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     dataflow_set_clear (&VTI (bb)->out);
 
   /* Enable emitting notes by functions (mainly by set_variable_part and
@@ -9380,7 +9451,7 @@ vt_emit_notes (void)
 
   dataflow_set_init (&cur);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       /* Emit the notes for changes of variable locations between two
 	 subsequent basic blocks.  */
@@ -9425,6 +9496,32 @@ vt_get_decl_and_offset (rtx rtl, tree *declp, HOST_WIDE_INT *offsetp)
 	{
 	  *declp = REG_EXPR (rtl);
 	  *offsetp = REG_OFFSET (rtl);
+	  return true;
+	}
+    }
+  else if (GET_CODE (rtl) == PARALLEL)
+    {
+      tree decl = NULL_TREE;
+      HOST_WIDE_INT offset = MAX_VAR_PARTS;
+      int len = XVECLEN (rtl, 0), i;
+
+      for (i = 0; i < len; i++)
+	{
+	  rtx reg = XEXP (XVECEXP (rtl, 0, i), 0);
+	  if (!REG_P (reg) || !REG_ATTRS (reg))
+	    break;
+	  if (!decl)
+	    decl = REG_EXPR (reg);
+	  if (REG_EXPR (reg) != decl)
+	    break;
+	  if (REG_OFFSET (reg) < offset)
+	    offset = REG_OFFSET (reg);
+	}
+
+      if (i == len)
+	{
+	  *declp = decl;
+	  *offsetp = offset;
 	  return true;
 	}
     }
@@ -9513,6 +9610,28 @@ vt_add_function_parameter (tree parm)
 	  p.outgoing = incoming;
 	  vec_safe_push (windowed_parm_regs, p);
 	}
+      else if (GET_CODE (incoming) == PARALLEL)
+	{
+	  rtx outgoing
+	    = gen_rtx_PARALLEL (VOIDmode, rtvec_alloc (XVECLEN (incoming, 0)));
+	  int i;
+
+	  for (i = 0; i < XVECLEN (incoming, 0); i++)
+	    {
+	      rtx reg = XEXP (XVECEXP (incoming, 0, i), 0);
+	      parm_reg_t p;
+	      p.incoming = reg;
+	      reg = gen_rtx_REG_offset (reg, GET_MODE (reg),
+					OUTGOING_REGNO (REGNO (reg)), 0);
+	      p.outgoing = reg;
+	      XVECEXP (outgoing, 0, i)
+		= gen_rtx_EXPR_LIST (VOIDmode, reg,
+				     XEXP (XVECEXP (incoming, 0, i), 1));
+	      vec_safe_push (windowed_parm_regs, p);
+	    }
+
+	  incoming = outgoing;
+	}
       else if (MEM_P (incoming)
 	       && REG_P (XEXP (incoming, 0))
 	       && HARD_REGISTER_P (XEXP (incoming, 0)))
@@ -9533,12 +9652,11 @@ vt_add_function_parameter (tree parm)
 
   if (!vt_get_decl_and_offset (incoming, &decl, &offset))
     {
-      if (REG_P (incoming) || MEM_P (incoming))
+      if (MEM_P (incoming))
 	{
 	  /* This means argument is passed by invisible reference.  */
 	  offset = 0;
 	  decl = parm;
-	  incoming = gen_rtx_MEM (GET_MODE (decl_rtl), incoming);
 	}
       else
 	{
@@ -9567,7 +9685,7 @@ vt_add_function_parameter (tree parm)
   if (!track_loc_p (incoming, parm, offset, false, &mode, &offset))
     return;
 
-  out = &VTI (ENTRY_BLOCK_PTR)->out;
+  out = &VTI (ENTRY_BLOCK_PTR_FOR_FN (cfun))->out;
 
   dv = dv_from_decl (parm);
 
@@ -9645,6 +9763,20 @@ vt_add_function_parameter (tree parm)
 				     VAR_INIT_STATUS_INITIALIZED, NULL, INSERT);
 		}
 	    }
+	}
+    }
+  else if (GET_CODE (incoming) == PARALLEL && !dv_onepart_p (dv))
+    {
+      int i;
+
+      for (i = 0; i < XVECLEN (incoming, 0); i++)
+	{
+	  rtx reg = XEXP (XVECEXP (incoming, 0, i), 0);
+	  offset = REG_OFFSET (reg);
+	  gcc_assert (REGNO (reg) < FIRST_PSEUDO_REGISTER);
+	  attrs_list_insert (&out->regs[REGNO (reg)], dv, offset, reg);
+	  set_variable_part (out, reg, dv, offset,
+			     VAR_INIT_STATUS_INITIALIZED, NULL, INSERT);
 	}
     }
   else if (MEM_P (incoming))
@@ -9748,7 +9880,7 @@ vt_initialize (void)
   changed_variables.create (10);
 
   /* Init the IN and OUT sets.  */
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
     {
       VTI (bb)->visited = false;
       VTI (bb)->flooded = false;
@@ -9896,7 +10028,7 @@ vt_initialize (void)
 
   vt_add_function_parameters ();
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       rtx insn;
       HOST_WIDE_INT pre, post = 0;
@@ -9914,7 +10046,7 @@ vt_initialize (void)
       for (;;)
 	{
 	  edge e;
-	  if (bb->next_bb == EXIT_BLOCK_PTR
+	  if (bb->next_bb == EXIT_BLOCK_PTR_FOR_FN (cfun)
 	      || ! single_pred_p (bb->next_bb))
 	    break;
 	  e = find_edge (bb, bb->next_bb);
@@ -10017,7 +10149,7 @@ vt_initialize (void)
     }
 
   hard_frame_pointer_adjustment = -1;
-  VTI (ENTRY_BLOCK_PTR)->flooded = true;
+  VTI (ENTRY_BLOCK_PTR_FOR_FN (cfun))->flooded = true;
   cfa_base_rtx = NULL_RTX;
   return true;
 }
@@ -10039,7 +10171,7 @@ delete_debug_insns (void)
   if (!MAY_HAVE_DEBUG_INSNS)
     return;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       FOR_BB_INSNS_SAFE (bb, insn, next)
 	if (DEBUG_INSN_P (insn))
@@ -10082,12 +10214,12 @@ vt_finalize (void)
 {
   basic_block bb;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       VTI (bb)->mos.release ();
     }
 
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
     {
       dataflow_set_destroy (&VTI (bb)->in);
       dataflow_set_destroy (&VTI (bb)->out);
@@ -10143,7 +10275,8 @@ variable_tracking_main_1 (void)
       return 0;
     }
 
-  if (n_basic_blocks > 500 && n_edges / n_basic_blocks >= 20)
+  if (n_basic_blocks_for_fn (cfun) > 500 &&
+      n_edges_for_fn (cfun) / n_basic_blocks_for_fn (cfun) >= 20)
     {
       vt_debug_insns_local (true);
       return 0;
@@ -10218,23 +10351,40 @@ gate_handle_var_tracking (void)
 
 
 
-struct rtl_opt_pass pass_variable_tracking =
+namespace {
+
+const pass_data pass_data_variable_tracking =
 {
- {
-  RTL_PASS,
-  "vartrack",                           /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_var_tracking,             /* gate */
-  variable_tracking_main,               /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_VAR_TRACKING,                      /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_verify_rtl_sharing
-   | TODO_verify_flow                   /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "vartrack", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_VAR_TRACKING, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_verify_rtl_sharing | TODO_verify_flow ), /* todo_flags_finish */
 };
+
+class pass_variable_tracking : public rtl_opt_pass
+{
+public:
+  pass_variable_tracking (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_variable_tracking, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_var_tracking (); }
+  unsigned int execute () { return variable_tracking_main (); }
+
+}; // class pass_variable_tracking
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_variable_tracking (gcc::context *ctxt)
+{
+  return new pass_variable_tracking (ctxt);
+}

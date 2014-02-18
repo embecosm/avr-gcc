@@ -1,6 +1,6 @@
 /* Operating system specific defines to be used when targeting GCC for any
    Solaris 2 system.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -163,6 +163,9 @@ along with GCC; see the file COPYING3.  If not see
 #undef LINK_ARCH_SPEC
 #define LINK_ARCH_SPEC LINK_ARCH32_SPEC
 
+/* C++11 programs need -lrt for nanosleep.  */
+#define TIME_LIBRARY "rt"
+
 #ifndef USE_GLD
 /* With Sun ld, -rdynamic is a no-op.  */
 #define RDYNAMIC_SPEC ""
@@ -171,12 +174,21 @@ along with GCC; see the file COPYING3.  If not see
 #define RDYNAMIC_SPEC "--export-dynamic"
 #endif
 
+#ifndef USE_GLD
+/* With Sun ld, use mapfile to enforce direct binding to libgcc_s unwinder.  */
+#define LINK_LIBGCC_MAPFILE_SPEC \
+  "%{shared|shared-libgcc:-M %slibgcc-unwind.map}"
+#else
+/* GNU ld doesn't support direct binding.  */
+#define LINK_LIBGCC_MAPFILE_SPEC ""
+#endif
+
 #undef  LINK_SPEC
 #define LINK_SPEC \
   "%{h*} %{v:-V} \
    %{!shared:%{!static:%{rdynamic: " RDYNAMIC_SPEC "}}} \
    %{static:-dn -Bstatic} \
-   %{shared:-G -dy %{!mimpure-text:-z text}} \
+   %{shared:-G -dy %{!mimpure-text:-z text}} " LINK_LIBGCC_MAPFILE_SPEC " \
    %{symbolic:-Bsymbolic -G -dy -z text} \
    %(link_arch) \
    %{Qy:} %{!Qn:-Qy}"
@@ -192,11 +204,6 @@ along with GCC; see the file COPYING3.  If not see
 #if defined(HAVE_LD_EH_FRAME_HDR) && defined(TARGET_DL_ITERATE_PHDR)
 #define LINK_EH_SPEC "%{!static:--eh-frame-hdr} "
 #endif /* HAVE_LD_EH_FRAME && TARGET_DL_ITERATE_PHDR */
-#endif
-
-#ifndef USE_GLD
-/* The default MFLIB_SPEC is GNU ld specific.  */
-#define MFLIB_SPEC ""
 #endif
 
 /* collect2.c can only parse GNU nm -n output.  Solaris nm needs -png to
@@ -284,6 +291,9 @@ along with GCC; see the file COPYING3.  If not see
 #define STACK_CHECK_STATIC_BUILTIN 1
 
 #define TARGET_POSIX_IO
+
+#undef TARGET_LIBC_HAS_FUNCTION
+#define TARGET_LIBC_HAS_FUNCTION no_c99_libc_has_function
 
 extern GTY(()) tree solaris_pending_aligns;
 extern GTY(()) tree solaris_pending_inits;

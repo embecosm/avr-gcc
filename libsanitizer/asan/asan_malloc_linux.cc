@@ -11,15 +11,16 @@
 // We simply define functions like malloc, free, realloc, etc.
 // They will replace the corresponding libc functions automagically.
 //===----------------------------------------------------------------------===//
-#ifdef __linux__
+
+#include "sanitizer_common/sanitizer_platform.h"
+#if SANITIZER_LINUX
 
 #include "asan_allocator.h"
 #include "asan_interceptors.h"
 #include "asan_internal.h"
 #include "asan_stack.h"
-#include "asan_thread_registry.h"
 
-#if ASAN_ANDROID
+#if SANITIZER_ANDROID
 DECLARE_REAL_AND_INTERCEPTOR(void*, malloc, uptr size)
 DECLARE_REAL_AND_INTERCEPTOR(void, free, void *ptr)
 DECLARE_REAL_AND_INTERCEPTOR(void*, calloc, uptr nmemb, uptr size)
@@ -102,8 +103,9 @@ INTERCEPTOR(void*, __libc_memalign, uptr align, uptr s)
   ALIAS("memalign");
 
 INTERCEPTOR(uptr, malloc_usable_size, void *ptr) {
-  GET_STACK_TRACE_MALLOC;
-  return asan_malloc_usable_size(ptr, &stack);
+  GET_CURRENT_PC_BP_SP;
+  (void)sp;
+  return asan_malloc_usable_size(ptr, pc, bp);
 }
 
 // We avoid including malloc.h for portability reasons.
@@ -144,4 +146,4 @@ INTERCEPTOR(void, malloc_stats, void) {
   __asan_print_accumulated_stats();
 }
 
-#endif  // __linux__
+#endif  // SANITIZER_LINUX

@@ -1,5 +1,5 @@
 /* A type-safe hash table template.
-   Copyright (C) 2012-2013 Free Software Foundation, Inc.
+   Copyright (C) 2012-2014 Free Software Foundation, Inc.
    Contributed by Lawrence Crowl <crowl@google.com>
 
 This file is part of GCC.
@@ -111,7 +111,7 @@ unsigned int
 hash_table_higher_prime_index (unsigned long n)
 {
   unsigned int low = 0;
-  unsigned int high = sizeof(prime_tab) / sizeof(prime_tab[0]);
+  unsigned int high = sizeof (prime_tab) / sizeof (prime_tab[0]);
 
   while (low != high)
     {

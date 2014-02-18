@@ -1,5 +1,5 @@
 /* Loop manipulation code for GNU compiler.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -24,7 +24,15 @@ along with GCC; see the file COPYING3.  If not see
 #include "rtl.h"
 #include "basic-block.h"
 #include "cfgloop.h"
-#include "tree-flow.h"
+#include "tree.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimplify-me.h"
+#include "tree-ssa-loop-manip.h"
 #include "dumpfile.h"
 
 static void copy_loops_to (struct loop **, int,
@@ -67,9 +75,9 @@ find_path (edge e, basic_block **bbs)
   gcc_assert (EDGE_COUNT (e->dest->preds) <= 1);
 
   /* Find bbs in the path.  */
-  *bbs = XNEWVEC (basic_block, n_basic_blocks);
+  *bbs = XNEWVEC (basic_block, n_basic_blocks_for_fn (cfun));
   return dfs_enumerate_from (e->dest, 0, rpe_enum_p, *bbs,
-			     n_basic_blocks, e->dest);
+			     n_basic_blocks_for_fn (cfun), e->dest);
 }
 
 /* Fix placement of basic block BB inside loop hierarchy --
@@ -88,7 +96,7 @@ fix_bb_placement (basic_block bb)
 
   FOR_EACH_EDGE (e, ei, bb->succs)
     {
-      if (e->dest == EXIT_BLOCK_PTR)
+      if (e->dest == EXIT_BLOCK_PTR_FOR_FN (cfun))
 	continue;
 
       act = e->dest->loop_father;
@@ -196,7 +204,7 @@ fix_bb_placements (basic_block from,
       || from == base_loop->header)
     return;
 
-  in_queue = sbitmap_alloc (last_basic_block);
+  in_queue = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (in_queue);
   bitmap_set_bit (in_queue, from->index);
   /* Prevent us from going out of the base_loop.  */
@@ -223,15 +231,22 @@ fix_bb_placements (basic_block from,
 	  if (!fix_loop_placement (from->loop_father, irred_invalidated))
 	    continue;
 	  target_loop = loop_outer (from->loop_father);
+	  if (loop_closed_ssa_invalidated)
+	    {
+	      basic_block *bbs = get_loop_body (from->loop_father);
+	      for (unsigned i = 0; i < from->loop_father->num_nodes; ++i)
+		bitmap_set_bit (loop_closed_ssa_invalidated, bbs[i]->index);
+	      free (bbs);
+	    }
 	}
       else
 	{
 	  /* Ordinary basic block.  */
 	  if (!fix_bb_placement (from))
 	    continue;
+	  target_loop = from->loop_father;
 	  if (loop_closed_ssa_invalidated)
 	    bitmap_set_bit (loop_closed_ssa_invalidated, from->index);
-	  target_loop = from->loop_father;
 	}
 
       FOR_EACH_EDGE (e, ei, from->succs)
@@ -332,8 +347,8 @@ remove_path (edge e)
   nrem = find_path (e, &rem_bbs);
 
   n_bord_bbs = 0;
-  bord_bbs = XNEWVEC (basic_block, n_basic_blocks);
-  seen = sbitmap_alloc (last_basic_block);
+  bord_bbs = XNEWVEC (basic_block, n_basic_blocks_for_fn (cfun));
+  seen = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (seen);
 
   /* Find "border" hexes -- i.e. those with predecessor in removed path.  */
@@ -341,14 +356,20 @@ remove_path (edge e)
     bitmap_set_bit (seen, rem_bbs[i]->index);
   if (!irred_invalidated)
     FOR_EACH_EDGE (ae, ei, e->src->succs)
-      if (ae != e && ae->dest != EXIT_BLOCK_PTR && !bitmap_bit_p (seen, ae->dest->index)
+      if (ae != e && ae->dest != EXIT_BLOCK_PTR_FOR_FN (cfun)
+	  && !bitmap_bit_p (seen, ae->dest->index)
 	  && ae->flags & EDGE_IRREDUCIBLE_LOOP)
-	irred_invalidated = true;
+	{
+	  irred_invalidated = true;
+	  break;
+	}
+
   for (i = 0; i < nrem; i++)
     {
       bb = rem_bbs[i];
       FOR_EACH_EDGE (ae, ei, rem_bbs[i]->succs)
-	if (ae->dest != EXIT_BLOCK_PTR && !bitmap_bit_p (seen, ae->dest->index))
+	if (ae->dest != EXIT_BLOCK_PTR_FOR_FN (cfun)
+	    && !bitmap_bit_p (seen, ae->dest->index))
 	  {
 	    bitmap_set_bit (seen, ae->dest->index);
 	    bord_bbs[n_bord_bbs++] = ae->dest;
@@ -435,8 +456,8 @@ add_loop (struct loop *loop, struct loop *outer)
   flow_loop_tree_node_add (outer, loop);
 
   /* Find its nodes.  */
-  bbs = XNEWVEC (basic_block, n_basic_blocks);
-  n = get_loop_body_with_size (loop, bbs, n_basic_blocks);
+  bbs = XNEWVEC (basic_block, n_basic_blocks_for_fn (cfun));
+  n = get_loop_body_with_size (loop, bbs, n_basic_blocks_for_fn (cfun));
 
   for (i = 0; i < n; i++)
     {
@@ -602,7 +623,7 @@ update_dominators_in_loop (struct loop *loop)
   basic_block *body;
   unsigned i;
 
-  seen = sbitmap_alloc (last_basic_block);
+  seen = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (seen);
   body = get_loop_body (loop);
 
@@ -939,7 +960,7 @@ unloop (struct loop *loop, bool *irred_invalidated,
 	remove_bb_from_loops (body[i]);
 	add_bb_to_loop (body[i], loop_outer (loop));
       }
-  free(body);
+  free (body);
 
   while (loop->inner)
     {
@@ -1001,6 +1022,8 @@ copy_loop_info (struct loop *loop, struct loop *target)
   target->any_estimate = loop->any_estimate;
   target->nb_iterations_estimate = loop->nb_iterations_estimate;
   target->estimate_state = loop->estimate_state;
+  target->warned_aggressive_loop_optimizations
+    |= loop->warned_aggressive_loop_optimizations;
 }
 
 /* Copies copy of LOOP as subloop of TARGET loop, placing newly
@@ -1300,7 +1323,7 @@ duplicate_loop_to_header_edge (struct loop *loop, edge e,
 
       /* Copy bbs.  */
       copy_bbs (bbs, n, new_bbs, spec_edges, 2, new_spec_edges, loop,
-		place_after);
+		place_after, true);
       place_after = new_spec_edges[SE_LATCH]->src;
 
       if (flags & DLTHE_RECORD_COPY_NUMBER)
@@ -1504,7 +1527,7 @@ create_preheader (struct loop *loop, int flags)
 
       /* We do not allow entry block to be the loop preheader, since we
 	     cannot emit code there.  */
-      if (single_entry->src == ENTRY_BLOCK_PTR)
+      if (single_entry->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
         need_forwarder_block = true;
       else
         {
@@ -1570,13 +1593,12 @@ create_preheader (struct loop *loop, int flags)
 void
 create_preheaders (int flags)
 {
-  loop_iterator li;
   struct loop *loop;
 
   if (!current_loops)
     return;
 
-  FOR_EACH_LOOP (li, loop, 0)
+  FOR_EACH_LOOP (loop, 0)
     create_preheader (loop, flags);
   loops_state_set (LOOPS_HAVE_PREHEADERS);
 }
@@ -1586,11 +1608,10 @@ create_preheaders (int flags)
 void
 force_single_succ_latches (void)
 {
-  loop_iterator li;
   struct loop *loop;
   edge e;
 
-  FOR_EACH_LOOP (li, loop, 0)
+  FOR_EACH_LOOP (loop, 0)
     {
       if (loop->latch != loop->header && single_succ_p (loop->latch))
 	continue;

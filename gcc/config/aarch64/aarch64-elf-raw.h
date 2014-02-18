@@ -1,5 +1,5 @@
 /* Machine description for AArch64 architecture.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of GCC.
@@ -26,7 +26,8 @@
 #define ENDFILE_SPEC " crtend%O%s crtn%O%s"
 
 #ifndef LINK_SPEC
-#define LINK_SPEC "%{mbig-endian:-EB} %{mlittle-endian:-EL} -X"
+#define LINK_SPEC "%{mbig-endian:-EB} %{mlittle-endian:-EL} -X \
+  -maarch64elf%{mabi=ilp32*:32}%{mbig-endian:b}"
 #endif
 
 #endif /* GCC_AARCH64_ELF_RAW_H */

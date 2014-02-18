@@ -1,5 +1,5 @@
 /* Coalesce SSA_NAMES together for the out-of-ssa pass.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
 
 This file is part of GCC.
@@ -27,9 +27,21 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-pretty-print.h"
 #include "bitmap.h"
 #include "dumpfile.h"
-#include "tree-flow.h"
 #include "hash-table.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
 #include "tree-ssa-live.h"
+#include "tree-ssa-coalesce.h"
 #include "diagnostic-core.h"
 
 
@@ -635,7 +647,7 @@ new_live_track (var_map map)
   ptr->map = map;
   lim = num_basevars (map);
   bitmap_obstack_initialize (&ptr->obstack);
-  ptr->live_base_partitions = (bitmap *) xmalloc(sizeof (bitmap *) * lim);
+  ptr->live_base_partitions = (bitmap *) xmalloc (sizeof (bitmap *) * lim);
   ptr->live_base_var = BITMAP_ALLOC (&ptr->obstack);
   for (x = 0; x < lim; x++)
     ptr->live_base_partitions[x] = BITMAP_ALLOC (&ptr->obstack);
@@ -809,7 +821,7 @@ build_ssa_conflict_graph (tree_live_info_p liveinfo)
 
   live = new_live_track (map);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator gsi;
 
@@ -917,7 +929,7 @@ create_outofssa_var_map (coalesce_list_p cl, bitmap used_in_copy)
 
   map = init_var_map (num_ssa_names);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       tree arg;
 
@@ -943,8 +955,7 @@ create_outofssa_var_map (coalesce_list_p cl, bitmap used_in_copy)
 		continue;
 
 	      register_ssa_partition (map, arg);
-	      if ((SSA_NAME_VAR (arg) == SSA_NAME_VAR (res)
-		   && TREE_TYPE (arg) == TREE_TYPE (res))
+	      if (gimple_can_coalesce_p (arg, res)
 		  || (e->flags & EDGE_ABNORMAL))
 		{
 		  saw_copy = true;
@@ -981,12 +992,8 @@ create_outofssa_var_map (coalesce_list_p cl, bitmap used_in_copy)
 	      {
 		tree lhs = gimple_assign_lhs (stmt);
 		tree rhs1 = gimple_assign_rhs1 (stmt);
-
-		if (gimple_assign_copy_p (stmt)
-                    && TREE_CODE (lhs) == SSA_NAME
-		    && TREE_CODE (rhs1) == SSA_NAME
-		    && SSA_NAME_VAR (lhs) == SSA_NAME_VAR (rhs1)
-		    && TREE_TYPE (lhs) == TREE_TYPE (rhs1))
+		if (gimple_assign_ssa_name_copy_p (stmt)
+		    && gimple_can_coalesce_p (lhs, rhs1))
 		  {
 		    v1 = SSA_NAME_VERSION (lhs);
 		    v2 = SSA_NAME_VERSION (rhs1);
@@ -1037,8 +1044,7 @@ create_outofssa_var_map (coalesce_list_p cl, bitmap used_in_copy)
 		    v1 = SSA_NAME_VERSION (outputs[match]);
 		    v2 = SSA_NAME_VERSION (input);
 
-		    if (SSA_NAME_VAR (outputs[match]) == SSA_NAME_VAR (input)
-			&& TREE_TYPE (outputs[match]) == TREE_TYPE (input))
+		    if (gimple_can_coalesce_p (outputs[match], input))
 		      {
 			cost = coalesce_cost (REG_BR_PROB_BASE,
 					      optimize_bb_for_size_p (bb));
@@ -1072,13 +1078,12 @@ create_outofssa_var_map (coalesce_list_p cl, bitmap used_in_copy)
 		first = var;
 	      else
 		{
-		  gcc_assert (SSA_NAME_VAR (var) == SSA_NAME_VAR (first)
-			      && TREE_TYPE (var) == TREE_TYPE (first));
+		  gcc_assert (gimple_can_coalesce_p (var, first));
 		  v1 = SSA_NAME_VERSION (first);
 		  v2 = SSA_NAME_VERSION (var);
 		  bitmap_set_bit (used_in_copy, v1);
 		  bitmap_set_bit (used_in_copy, v2);
-		  cost = coalesce_cost_bb (EXIT_BLOCK_PTR);
+		  cost = coalesce_cost_bb (EXIT_BLOCK_PTR_FOR_FN (cfun));
 		  add_coalesce (cl, v1, v2, cost);
 		}
 	    }
@@ -1178,7 +1183,7 @@ coalesce_partitions (var_map map, ssa_conflicts_p graph, coalesce_list_p cl,
      in the coalesce list because they do not need to be sorted, and simply
      consume extra memory/compilation time in large programs.  */
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       FOR_EACH_EDGE (e, ei, bb->preds)
 	if (e->flags & EDGE_ABNORMAL)
@@ -1210,8 +1215,7 @@ coalesce_partitions (var_map map, ssa_conflicts_p graph, coalesce_list_p cl,
       var2 = ssa_name (y);
 
       /* Assert the coalesces have the same base variable.  */
-      gcc_assert (SSA_NAME_VAR (var1) == SSA_NAME_VAR (var2)
-		  && TREE_TYPE (var1) == TREE_TYPE (var2));
+      gcc_assert (gimple_can_coalesce_p (var1, var2));
 
       if (debug)
 	fprintf (debug, "Coalesce list: ");
@@ -1259,8 +1263,8 @@ coalesce_ssa_name (void)
   cl = create_coalesce_list ();
   map = create_outofssa_var_map (cl, used_in_copies);
 
-  /* We need to coalesce all names originating same SSA_NAME_VAR
-     so debug info remains undisturbed.  */
+  /* If optimization is disabled, we need to coalesce all the names originating
+     from the same SSA_NAME_VAR so debug info remains undisturbed.  */
   if (!optimize)
     {
       hash_table <ssa_name_var_hash> ssa_name_hash;
@@ -1281,8 +1285,16 @@ coalesce_ssa_name (void)
 		*slot = a;
 	      else
 		{
-		  add_coalesce (cl, SSA_NAME_VERSION (a), SSA_NAME_VERSION (*slot),
-				MUST_COALESCE_COST - 1);
+		  /* If the variable is a PARM_DECL or a RESULT_DECL, we
+		     _require_ that all the names originating from it be
+		     coalesced, because there must be a single partition
+		     containing all the names so that it can be assigned
+		     the canonical RTL location of the DECL safely.  */
+		  const int cost
+		    = TREE_CODE (SSA_NAME_VAR (a)) == VAR_DECL
+		      ? MUST_COALESCE_COST - 1 : MUST_COALESCE_COST;
+		  add_coalesce (cl, SSA_NAME_VERSION (a),
+				SSA_NAME_VERSION (*slot), cost);
 		  bitmap_set_bit (used_in_copies, SSA_NAME_VERSION (a));
 		  bitmap_set_bit (used_in_copies, SSA_NAME_VERSION (*slot));
 		}

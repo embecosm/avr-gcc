@@ -81,7 +81,7 @@ package body Exp_Aggr is
 
    function Is_Static_Dispatch_Table_Aggregate (N : Node_Id) return Boolean;
    --  Returns true if N is an aggregate used to initialize the components
-   --  of an statically allocated dispatch table.
+   --  of a statically allocated dispatch table.
 
    function Must_Slide
      (Obj_Type : Entity_Id;
@@ -150,7 +150,7 @@ package body Exp_Aggr is
    --      aggregate
 
    function Has_Mutable_Components (Typ : Entity_Id) return Boolean;
-   --  Return true if one of the component is of a discriminated type with
+   --  Return true if one of the components is of a discriminated type with
    --  defaults. An aggregate for a type with mutable components must be
    --  expanded into individual assignments.
 
@@ -183,7 +183,7 @@ package body Exp_Aggr is
 
    function Backend_Processing_Possible (N : Node_Id) return Boolean;
    --  This function checks if array aggregate N can be processed directly
-   --  by the backend. If this is the case True is returned.
+   --  by the backend. If this is the case, True is returned.
 
    function Build_Array_Aggr_Code
      (N           : Node_Id;
@@ -376,7 +376,7 @@ package body Exp_Aggr is
    --  Start of processing for Aggr_Size_OK
 
    begin
-      --  The normal aggregate limit is 5000, but we increase this limit to
+      --  The normal aggregate limit is 50000, but we increase this limit to
       --  2**24 (about 16 million) if Restrictions (No_Elaboration_Code) or
       --  Restrictions (No_Implicit_Loops) is specified, since in either case
       --  we are at risk of declaring the program illegal because of this
@@ -389,10 +389,14 @@ package body Exp_Aggr is
       --  efficient to construct a one-dimensional equivalent array with static
       --  components.
 
+      --  Conversely, we decrease the maximum size if none of the above
+      --  requirements apply, and if the aggregate has a single component
+      --  association, which will be more efficient if implemented with a loop.
+
       --  Finally, we use a small limit in CodePeer mode where we favor loops
       --  instead of thousands of single assignments (from large aggregates).
 
-      Max_Aggr_Size := 5000;
+      Max_Aggr_Size := 50000;
 
       if CodePeer_Mode then
          Max_Aggr_Size := 100;
@@ -404,6 +408,11 @@ package body Exp_Aggr is
                  and then Static_Elaboration_Desired (Current_Scope)))
       then
          Max_Aggr_Size := 2 ** 24;
+
+      elsif No (Expressions (N))
+        and then No (Next (First (Component_Associations (N))))
+      then
+         Max_Aggr_Size := 5000;
       end if;
 
       Siz  := Component_Count (Component_Type (Typ));
@@ -619,7 +628,7 @@ package body Exp_Aggr is
       --  If component is limited, aggregate must be expanded because each
       --  component assignment must be built in place.
 
-      if Is_Immutably_Limited_Type (Component_Type (Typ)) then
+      if Is_Limited_View (Component_Type (Typ)) then
          return False;
       end if;
 
@@ -1155,8 +1164,8 @@ package body Exp_Aggr is
             elsif Is_Access_Type (Ctype) then
                Append_To (L,
                   Make_Assignment_Statement (Loc,
-                     Name => Indexed_Comp,
-                     Expression => Make_Null (Loc)));
+                    Name       => Indexed_Comp,
+                    Expression => Make_Null (Loc)));
             end if;
 
             if Needs_Finalization (Ctype) then
@@ -1167,47 +1176,51 @@ package body Exp_Aggr is
             end if;
 
          else
-            --  Now generate the assignment with no associated controlled
-            --  actions since the target of the assignment may not have been
-            --  initialized, it is not possible to Finalize it as expected by
-            --  normal controlled assignment. The rest of the controlled
-            --  actions are done manually with the proper finalization list
-            --  coming from the context.
-
             A :=
               Make_OK_Assignment_Statement (Loc,
                 Name       => Indexed_Comp,
                 Expression => New_Copy_Tree (Expr));
 
-            if Present (Comp_Type) and then Needs_Finalization (Comp_Type) then
-               Set_No_Ctrl_Actions (A);
+            --  The target of the assignment may not have been initialized,
+            --  so it is not possible to call Finalize as expected in normal
+            --  controlled assignments. We must also avoid using the primitive
+            --  _assign (which depends on a valid target, and may for example
+            --  perform discriminant checks on it).
 
-               --  If this is an aggregate for an array of arrays, each
-               --  sub-aggregate will be expanded as well, and even with
-               --  No_Ctrl_Actions the assignments of inner components will
-               --  require attachment in their assignments to temporaries.
-               --  These temporaries must be finalized for each subaggregate,
-               --  to prevent multiple attachments of the same temporary
-               --  location to same finalization chain (and consequently
-               --  circular lists). To ensure that finalization takes place
-               --  for each subaggregate we wrap the assignment in a block.
+            --  Both Finalize and usage of _assign are disabled by setting
+            --  No_Ctrl_Actions on the assignment. The rest of the controlled
+            --  actions are done manually with the proper finalization list
+            --  coming from the context.
 
-               if Is_Array_Type (Comp_Type)
-                 and then Nkind (Expr) = N_Aggregate
-               then
-                  A :=
-                    Make_Block_Statement (Loc,
-                      Handled_Statement_Sequence =>
-                        Make_Handled_Sequence_Of_Statements (Loc,
-                           Statements => New_List (A)));
-               end if;
+            Set_No_Ctrl_Actions (A);
+
+            --  If this is an aggregate for an array of arrays, each
+            --  sub-aggregate will be expanded as well, and even with
+            --  No_Ctrl_Actions the assignments of inner components will
+            --  require attachment in their assignments to temporaries. These
+            --  temporaries must be finalized for each subaggregate, to prevent
+            --  multiple attachments of the same temporary location to same
+            --  finalization chain (and consequently circular lists). To ensure
+            --  that finalization takes place for each subaggregate we wrap the
+            --  assignment in a block.
+
+            if Present (Comp_Type)
+              and then Needs_Finalization (Comp_Type)
+              and then Is_Array_Type (Comp_Type)
+              and then Present (Expr)
+            then
+               A :=
+                 Make_Block_Statement (Loc,
+                   Handled_Statement_Sequence =>
+                     Make_Handled_Sequence_Of_Statements (Loc,
+                       Statements => New_List (A)));
             end if;
 
             Append_To (L, A);
 
             --  Adjust the tag if tagged (because of possible view
-            --  conversions), unless compiling for a VM where
-            --  tags are implicit.
+            --  conversions), unless compiling for a VM where tags
+            --  are implicit.
 
             if Present (Comp_Type)
               and then Is_Tagged_Type (Comp_Type)
@@ -1219,9 +1232,9 @@ package body Exp_Aggr is
                begin
                   A :=
                     Make_OK_Assignment_Statement (Loc,
-                      Name =>
+                      Name       =>
                         Make_Selected_Component (Loc,
-                          Prefix =>  New_Copy_Tree (Indexed_Comp),
+                          Prefix        =>  New_Copy_Tree (Indexed_Comp),
                           Selector_Name =>
                             New_Reference_To
                               (First_Tag_Component (Full_Typ), Loc)),
@@ -2456,9 +2469,9 @@ package body Exp_Aggr is
                Ref := Convert_To (Init_Typ, New_Copy_Tree (Target));
                Set_Assignment_OK (Ref);
 
-               --  Make the assignment without usual controlled actions since
-               --  we only want the post adjust but not the pre finalize here
-               --  Add manual adjust when necessary.
+               --  Make the assignment without usual controlled actions, since
+               --  we only want to Adjust afterwards, but not to Finalize
+               --  beforehand. Add manual Adjust when necessary.
 
                Assign := New_List (
                  Make_OK_Assignment_Statement (Loc,
@@ -2521,10 +2534,10 @@ package body Exp_Aggr is
             end if;
          end;
 
-         --  Generate assignments of hidden assignments. If the base type is an
-         --  unchecked union, the discriminants are unknown to the back-end and
-         --  absent from a value of the type, so assignments for them are not
-         --  emitted.
+         --  Generate assignments of hidden discriminants. If the base type is
+         --  an unchecked union, the discriminants are unknown to the back-end
+         --  and absent from a value of the type, so assignments for them are
+         --  not emitted.
 
          if Has_Discriminants (Typ)
            and then not Is_Unchecked_Union (Base_Type (Typ))
@@ -3177,7 +3190,7 @@ package body Exp_Aggr is
             Insert_Action (N,
               Make_Raise_Constraint_Error (Loc,
                 Condition => Cond,
-                Reason => CE_Discriminant_Check_Failed));
+                Reason    => CE_Discriminant_Check_Failed));
          end if;
 
          return True;
@@ -3267,6 +3280,7 @@ package body Exp_Aggr is
       T    : Entity_Id;
       Temp : Entity_Id;
 
+      Aggr_Code   : List_Id;
       Instr       : Node_Id;
       Target_Expr : Node_Id;
       Parent_Kind : Node_Kind;
@@ -3338,7 +3352,7 @@ package body Exp_Aggr is
          --  in place within the caller's scope).
 
          or else
-           (Is_Immutably_Limited_Type (Typ)
+           (Is_Limited_View (Typ)
              and then
                (Nkind (Parent (Parent_Node)) = N_Extended_Return_Statement
                  or else Nkind (Parent_Node) = N_Simple_Return_Statement))
@@ -3348,9 +3362,7 @@ package body Exp_Aggr is
       end if;
 
       if Requires_Transient_Scope (Typ) then
-         Establish_Transient_Scope
-           (N, Sec_Stack =>
-                 Is_Controlled (Typ) or else Has_Controlled_Component (Typ));
+         Establish_Transient_Scope (N, Sec_Stack => Needs_Finalization (Typ));
       end if;
 
       --  If the aggregate is non-limited, create a temporary. If it is limited
@@ -3388,8 +3400,20 @@ package body Exp_Aggr is
          Set_No_Initialization (Instr);
          Insert_Action (N, Instr);
          Initialize_Discriminants (Instr, T);
+
          Target_Expr := New_Occurrence_Of (Temp, Loc);
-         Insert_Actions (N, Build_Record_Aggr_Code (N, T, Target_Expr));
+         Aggr_Code   := Build_Record_Aggr_Code (N, T, Target_Expr);
+
+         --  Save the last assignment statement associated with the aggregate
+         --  when building a controlled object. This reference is utilized by
+         --  the finalization machinery when marking an object as successfully
+         --  initialized.
+
+         if Needs_Finalization (T) then
+            Set_Last_Aggregate_Assignment (Temp, Last (Aggr_Code));
+         end if;
+
+         Insert_Actions (N, Aggr_Code);
          Rewrite (N, New_Occurrence_Of (Temp, Loc));
          Analyze_And_Resolve (N, T);
       end if;
@@ -3909,7 +3933,7 @@ package body Exp_Aggr is
    --             corresponding to the same dimension have the same bounds.
 
    --  2. Check for packed array aggregate which can be converted to a
-   --     constant so that the aggregate disappeares completely.
+   --     constant so that the aggregate disappears completely.
 
    --  3. Check case of nested aggregate. Generally nested aggregates are
    --     handled during the processing of the parent aggregate.
@@ -4128,7 +4152,7 @@ package body Exp_Aggr is
             Insert_Action (N,
               Make_Raise_Constraint_Error (Loc,
                 Condition => Cond,
-                Reason    => CE_Length_Check_Failed));
+                Reason    => CE_Range_Check_Failed));
          end if;
       end Check_Bounds;
 
@@ -4878,12 +4902,49 @@ package body Exp_Aggr is
          Check_Same_Aggr_Bounds (N, 1);
       end if;
 
+      --  STEP 1d
+
+      --  If we have a default component value, or simple initialization is
+      --  required for the component type, then we replace <> in component
+      --  associations by the required default value.
+
+      declare
+         Default_Val : Node_Id;
+         Assoc       : Node_Id;
+
+      begin
+         if (Present (Default_Aspect_Component_Value (Typ))
+              or else Needs_Simple_Initialization (Ctyp))
+           and then Present (Component_Associations (N))
+         then
+            Assoc := First (Component_Associations (N));
+            while Present (Assoc) loop
+               if Nkind (Assoc) = N_Component_Association
+                 and then Box_Present (Assoc)
+               then
+                  Set_Box_Present (Assoc, False);
+
+                  if Present (Default_Aspect_Component_Value (Typ)) then
+                     Default_Val := Default_Aspect_Component_Value (Typ);
+                  else
+                     Default_Val := Get_Simple_Init_Val (Ctyp, N);
+                  end if;
+
+                  Set_Expression (Assoc, New_Copy_Tree (Default_Val));
+                  Analyze_And_Resolve (Expression (Assoc), Ctyp);
+               end if;
+
+               Next (Assoc);
+            end loop;
+         end if;
+      end;
+
       --  STEP 2
 
       --  Here we test for is packed array aggregate that we can handle at
       --  compile time. If so, return with transformation done. Note that we do
       --  this even if the aggregate is nested, because once we have done this
-      --  processing, there is no more nested aggregate!
+      --  processing, there is no more nested aggregate.
 
       if Packed_Array_Aggregate_Handled (N) then
          return;
@@ -4918,7 +4979,7 @@ package body Exp_Aggr is
 
       --  If all aggregate components are compile-time known and the aggregate
       --  has been flattened, nothing left to do. The same occurs if the
-      --  aggregate is used to initialize the components of an statically
+      --  aggregate is used to initialize the components of a statically
       --  allocated dispatch table.
 
       if Compile_Time_Known_Aggregate (N)
@@ -5229,14 +5290,14 @@ package body Exp_Aggr is
          --  form (others => 'x'), with a single choice and no expressions,
          --  and N is less than 80 (an arbitrary limit for now), then replace
          --  the aggregate by the equivalent string literal (but do not mark
-         --  it as static since it is not!)
+         --  it as static since it is not).
 
          --  Note: this entire circuit is redundant with respect to code in
          --  Expand_Array_Aggregate that collapses others choices to positional
          --  form, but there are two problems with that circuit:
 
          --    a) It is limited to very small cases due to ill-understood
-         --       interations with bootstrapping. That limit is removed by
+         --       interactions with bootstrapping. That limit is removed by
          --       use of the No_Implicit_Loops restriction.
 
          --    b) It erroneously ends up with the resulting expressions being
@@ -5253,7 +5314,7 @@ package body Exp_Aggr is
 
          --       But it succeeds (DH looks static to pragma Export)
 
-         --    To be sorted out! ???
+         --    To be sorted out ???
 
          if Present (Component_Associations (N)) then
             declare
@@ -5399,7 +5460,7 @@ package body Exp_Aggr is
       --  set and constants whose expression is such an aggregate, recursively.
 
       function Component_Not_OK_For_Backend return Boolean;
-      --  Check for presence of component which makes it impossible for the
+      --  Check for presence of a component which makes it impossible for the
       --  backend to process the aggregate, thus requiring the use of a series
       --  of assignment statements. Cases checked for are a nested aggregate
       --  needing Late_Expansion, the presence of a tagged component which may
@@ -5420,7 +5481,7 @@ package body Exp_Aggr is
 
       function Has_Visible_Private_Ancestor (Id : E) return Boolean;
       --  If any ancestor of the current type is private, the aggregate
-      --  cannot be built in place. We canot rely on Has_Private_Ancestor,
+      --  cannot be built in place. We cannot rely on Has_Private_Ancestor,
       --  because it will not be set when type and its parent are in the
       --  same scope, and the parent component needs expansion.
 
@@ -5622,7 +5683,7 @@ package body Exp_Aggr is
       --  Extension aggregates, aggregates in extended return statements, and
       --  aggregates for C++ imported types must be expanded.
 
-      if Ada_Version >= Ada_2005 and then Is_Immutably_Limited_Type (Typ) then
+      if Ada_Version >= Ada_2005 and then Is_Limited_View (Typ) then
          if not Nkind_In (Parent (N), N_Object_Declaration,
                                       N_Component_Association)
          then
@@ -5652,17 +5713,15 @@ package body Exp_Aggr is
       then
          Convert_To_Assignments (N, Typ);
 
-      --  Temporaries for controlled aggregates need to be attached to a final
-      --  chain in order to be properly finalized, so it has to be created in
-      --  the front-end
+      --  An aggregate used to initialize a controlled object must be turned
+      --  into component assignments as the components themselves may require
+      --  finalization actions such as adjustment.
 
-      elsif Is_Controlled (Typ)
-        or else Has_Controlled_Component (Base_Type (Typ))
-      then
+      elsif Needs_Finalization (Typ) then
          Convert_To_Assignments (N, Typ);
 
-         --  Ada 2005 (AI-287): In case of default initialized components we
-         --  convert the aggregate into assignments.
+      --  Ada 2005 (AI-287): In case of default initialized components we
+      --  convert the aggregate into assignments.
 
       elsif Has_Default_Init_Comps (N) then
          Convert_To_Assignments (N, Typ);
@@ -5705,13 +5764,13 @@ package body Exp_Aggr is
       then
          Convert_To_Assignments (N, Typ);
 
-      --  If the type involved has any non-bit aligned components, then we are
-      --  not sure that the back end can handle this case correctly.
+      --  If the type involved has bit aligned components, then we are not sure
+      --  that the back end can handle this case correctly.
 
       elsif Type_May_Have_Bit_Aligned_Components (Typ) then
          Convert_To_Assignments (N, Typ);
 
-      --  In all other cases, build a proper aggregate handlable by gigi
+      --  In all other cases, build a proper aggregate to be handled by gigi
 
       else
          if Nkind (N) = N_Aggregate then
@@ -6138,9 +6197,26 @@ package body Exp_Aggr is
       Typ    : Entity_Id;
       Target : Node_Id) return List_Id
    is
+      Aggr_Code : List_Id;
+
    begin
       if Is_Record_Type (Etype (N)) then
-         return Build_Record_Aggr_Code (N, Typ, Target);
+         Aggr_Code := Build_Record_Aggr_Code (N, Typ, Target);
+
+         --  Save the last assignment statement associated with the aggregate
+         --  when building a controlled object. This reference is utilized by
+         --  the finalization machinery when marking an object as successfully
+         --  initialized.
+
+         if Needs_Finalization (Typ)
+           and then Is_Entity_Name (Target)
+           and then Present (Entity (Target))
+           and then Ekind (Entity (Target)) = E_Variable
+         then
+            Set_Last_Aggregate_Assignment (Entity (Target), Last (Aggr_Code));
+         end if;
+
+         return Aggr_Code;
 
       else pragma Assert (Is_Array_Type (Etype (N)));
          return
@@ -6332,7 +6408,7 @@ package body Exp_Aggr is
          --  At this stage we have a suitable aggregate for handling at compile
          --  time. The only remaining checks are that the values of expressions
          --  in the aggregate are compile-time known (checks are performed by
-         --  Get_Component_Val, and that any subtypes or ranges are statically
+         --  Get_Component_Val), and that any subtypes or ranges are statically
          --  known.
 
          --  If the aggregate is not fully positional at this stage, then

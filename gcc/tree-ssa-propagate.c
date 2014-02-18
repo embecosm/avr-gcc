@@ -1,5 +1,5 @@
 /* Generic SSA value propagation engine.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>
 
    This file is part of GCC.
@@ -29,12 +29,26 @@
 #include "function.h"
 #include "gimple-pretty-print.h"
 #include "dumpfile.h"
-#include "tree-flow.h"
+#include "sbitmap.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-fold.h"
+#include "tree-eh.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimplify.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "tree-ssa.h"
 #include "tree-ssa-propagate.h"
 #include "langhooks.h"
-#include "vec.h"
 #include "value-prof.h"
-#include "gimple.h"
 
 /* This file implements a generic value propagation engine based on
    the same propagation used by the SSA-CCP algorithm [1].
@@ -175,7 +189,8 @@ cfg_blocks_add (basic_block bb)
 {
   bool head = false;
 
-  gcc_assert (bb != ENTRY_BLOCK_PTR && bb != EXIT_BLOCK_PTR);
+  gcc_assert (bb != ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	      && bb != EXIT_BLOCK_PTR_FOR_FN (cfun));
   gcc_assert (!bitmap_bit_p (bb_in_list, bb->index));
 
   if (cfg_blocks_empty_p ())
@@ -270,7 +285,7 @@ static void
 add_control_edge (edge e)
 {
   basic_block bb = e->dest;
-  if (bb == EXIT_BLOCK_PTR)
+  if (bb == EXIT_BLOCK_PTR_FOR_FN (cfun))
     return;
 
   /* If the edge had already been executed, skip it.  */
@@ -399,7 +414,7 @@ simulate_block (basic_block block)
   gimple_stmt_iterator gsi;
 
   /* There is nothing to do for the exit block.  */
-  if (block == EXIT_BLOCK_PTR)
+  if (block == EXIT_BLOCK_PTR_FOR_FN (cfun))
     return;
 
   if (dump_file && (dump_flags & TDF_DETAILS))
@@ -480,10 +495,10 @@ ssa_prop_init (void)
   vec_alloc (interesting_ssa_edges, 20);
   vec_alloc (varying_ssa_edges, 20);
 
-  executable_blocks = sbitmap_alloc (last_basic_block);
+  executable_blocks = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (executable_blocks);
 
-  bb_in_list = sbitmap_alloc (last_basic_block);
+  bb_in_list = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (bb_in_list);
 
   if (dump_file && (dump_flags & TDF_DETAILS))
@@ -493,8 +508,8 @@ ssa_prop_init (void)
   cfg_blocks.safe_grow_cleared (20);
 
   /* Initially assume that every edge in the CFG is not executable.
-     (including the edges coming out of ENTRY_BLOCK_PTR).  */
-  FOR_ALL_BB (bb)
+     (including the edges coming out of the entry block).  */
+  FOR_ALL_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator si;
 
@@ -510,7 +525,7 @@ ssa_prop_init (void)
 
   /* Seed the algorithm by adding the successors of the entry block to the
      edge worklist.  */
-  FOR_EACH_EDGE (e, ei, ENTRY_BLOCK_PTR->succs)
+  FOR_EACH_EDGE (e, ei, ENTRY_BLOCK_PTR_FOR_FN (cfun)->succs)
     add_control_edge (e);
 }
 
@@ -652,7 +667,7 @@ valid_gimple_call_p (tree expr)
   for (i = 0; i < nargs; i++)
     {
       tree arg = CALL_EXPR_ARG (expr, i);
-      if (is_gimple_reg_type (arg))
+      if (is_gimple_reg_type (TREE_TYPE (arg)))
 	{
 	  if (!is_gimple_val (arg))
 	    return false;
@@ -1073,7 +1088,6 @@ substitute_and_fold (ssa_prop_get_value_fn get_value_fn,
 	  {
 	    gimple new_stmt = gimple_build_assign (name, val);
 	    gimple_stmt_iterator gsi2;
-	    SSA_NAME_DEF_STMT (name) = new_stmt;
 	    gsi2 = gsi_after_labels (gimple_bb (def_stmt));
 	    gsi_insert_before (&gsi2, new_stmt, GSI_SAME_STMT);
 	    remove_phi_node (&gsi, false);
@@ -1083,7 +1097,7 @@ substitute_and_fold (ssa_prop_get_value_fn get_value_fn,
       }
 
   /* Propagate into all uses and fold.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator i;
 
@@ -1224,6 +1238,221 @@ substitute_and_fold (ssa_prop_get_value_fn get_value_fn,
   statistics_counter_event (cfun, "Statements deleted",
 			    prop_stats.num_dce);
   return something_changed;
+}
+
+
+/* Return true if we may propagate ORIG into DEST, false otherwise.  */
+
+bool
+may_propagate_copy (tree dest, tree orig)
+{
+  tree type_d = TREE_TYPE (dest);
+  tree type_o = TREE_TYPE (orig);
+
+  /* If ORIG flows in from an abnormal edge, it cannot be propagated.  */
+  if (TREE_CODE (orig) == SSA_NAME
+      && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (orig)
+      /* If it is the default definition and an automatic variable then
+         we can though and it is important that we do to avoid
+	 uninitialized regular copies.  */
+      && !(SSA_NAME_IS_DEFAULT_DEF (orig)
+	   && (SSA_NAME_VAR (orig) == NULL_TREE
+	       || TREE_CODE (SSA_NAME_VAR (orig)) == VAR_DECL)))
+    return false;
+
+  /* If DEST is an SSA_NAME that flows from an abnormal edge, then it
+     cannot be replaced.  */
+  if (TREE_CODE (dest) == SSA_NAME
+      && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (dest))
+    return false;
+
+  /* Do not copy between types for which we *do* need a conversion.  */
+  if (!useless_type_conversion_p (type_d, type_o))
+    return false;
+
+  /* Generally propagating virtual operands is not ok as that may
+     create overlapping life-ranges.  */
+  if (TREE_CODE (dest) == SSA_NAME && virtual_operand_p (dest))
+    return false;
+
+  /* Anything else is OK.  */
+  return true;
+}
+
+/* Like may_propagate_copy, but use as the destination expression
+   the principal expression (typically, the RHS) contained in
+   statement DEST.  This is more efficient when working with the
+   gimple tuples representation.  */
+
+bool
+may_propagate_copy_into_stmt (gimple dest, tree orig)
+{
+  tree type_d;
+  tree type_o;
+
+  /* If the statement is a switch or a single-rhs assignment,
+     then the expression to be replaced by the propagation may
+     be an SSA_NAME.  Fortunately, there is an explicit tree
+     for the expression, so we delegate to may_propagate_copy.  */
+
+  if (gimple_assign_single_p (dest))
+    return may_propagate_copy (gimple_assign_rhs1 (dest), orig);
+  else if (gimple_code (dest) == GIMPLE_SWITCH)
+    return may_propagate_copy (gimple_switch_index (dest), orig);
+
+  /* In other cases, the expression is not materialized, so there
+     is no destination to pass to may_propagate_copy.  On the other
+     hand, the expression cannot be an SSA_NAME, so the analysis
+     is much simpler.  */
+
+  if (TREE_CODE (orig) == SSA_NAME
+      && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (orig))
+    return false;
+
+  if (is_gimple_assign (dest))
+    type_d = TREE_TYPE (gimple_assign_lhs (dest));
+  else if (gimple_code (dest) == GIMPLE_COND)
+    type_d = boolean_type_node;
+  else if (is_gimple_call (dest)
+           && gimple_call_lhs (dest) != NULL_TREE)
+    type_d = TREE_TYPE (gimple_call_lhs (dest));
+  else
+    gcc_unreachable ();
+
+  type_o = TREE_TYPE (orig);
+
+  if (!useless_type_conversion_p (type_d, type_o))
+    return false;
+
+  return true;
+}
+
+/* Similarly, but we know that we're propagating into an ASM_EXPR.  */
+
+bool
+may_propagate_copy_into_asm (tree dest ATTRIBUTE_UNUSED)
+{
+  return true;
+}
+
+
+/* Common code for propagate_value and replace_exp.
+
+   Replace use operand OP_P with VAL.  FOR_PROPAGATION indicates if the
+   replacement is done to propagate a value or not.  */
+
+static void
+replace_exp_1 (use_operand_p op_p, tree val,
+    	       bool for_propagation ATTRIBUTE_UNUSED)
+{
+#if defined ENABLE_CHECKING
+  tree op = USE_FROM_PTR (op_p);
+
+  gcc_assert (!(for_propagation
+		&& TREE_CODE (op) == SSA_NAME
+		&& TREE_CODE (val) == SSA_NAME
+		&& !may_propagate_copy (op, val)));
+#endif
+
+  if (TREE_CODE (val) == SSA_NAME)
+    SET_USE (op_p, val);
+  else
+    SET_USE (op_p, unshare_expr (val));
+}
+
+
+/* Propagate the value VAL (assumed to be a constant or another SSA_NAME)
+   into the operand pointed to by OP_P.
+
+   Use this version for const/copy propagation as it will perform additional
+   checks to ensure validity of the const/copy propagation.  */
+
+void
+propagate_value (use_operand_p op_p, tree val)
+{
+  replace_exp_1 (op_p, val, true);
+}
+
+/* Replace *OP_P with value VAL (assumed to be a constant or another SSA_NAME).
+
+   Use this version when not const/copy propagating values.  For example,
+   PRE uses this version when building expressions as they would appear
+   in specific blocks taking into account actions of PHI nodes.
+
+   The statement in which an expression has been replaced should be
+   folded using fold_stmt_inplace.  */
+
+void
+replace_exp (use_operand_p op_p, tree val)
+{
+  replace_exp_1 (op_p, val, false);
+}
+
+
+/* Propagate the value VAL (assumed to be a constant or another SSA_NAME)
+   into the tree pointed to by OP_P.
+
+   Use this version for const/copy propagation when SSA operands are not
+   available.  It will perform the additional checks to ensure validity of
+   the const/copy propagation, but will not update any operand information.
+   Be sure to mark the stmt as modified.  */
+
+void
+propagate_tree_value (tree *op_p, tree val)
+{
+  gcc_checking_assert (!(TREE_CODE (val) == SSA_NAME
+			 && *op_p
+			 && TREE_CODE (*op_p) == SSA_NAME
+			 && !may_propagate_copy (*op_p, val)));
+
+  if (TREE_CODE (val) == SSA_NAME)
+    *op_p = val;
+  else
+    *op_p = unshare_expr (val);
+}
+
+
+/* Like propagate_tree_value, but use as the operand to replace
+   the principal expression (typically, the RHS) contained in the
+   statement referenced by iterator GSI.  Note that it is not
+   always possible to update the statement in-place, so a new
+   statement may be created to replace the original.  */
+
+void
+propagate_tree_value_into_stmt (gimple_stmt_iterator *gsi, tree val)
+{
+  gimple stmt = gsi_stmt (*gsi);
+
+  if (is_gimple_assign (stmt))
+    {
+      tree expr = NULL_TREE;
+      if (gimple_assign_single_p (stmt))
+        expr = gimple_assign_rhs1 (stmt);
+      propagate_tree_value (&expr, val);
+      gimple_assign_set_rhs_from_tree (gsi, expr);
+    }
+  else if (gimple_code (stmt) == GIMPLE_COND)
+    {
+      tree lhs = NULL_TREE;
+      tree rhs = build_zero_cst (TREE_TYPE (val));
+      propagate_tree_value (&lhs, val);
+      gimple_cond_set_code (stmt, NE_EXPR);
+      gimple_cond_set_lhs (stmt, lhs);
+      gimple_cond_set_rhs (stmt, rhs);
+    }
+  else if (is_gimple_call (stmt)
+           && gimple_call_lhs (stmt) != NULL_TREE)
+    {
+      tree expr = NULL_TREE;
+      bool res;
+      propagate_tree_value (&expr, val);
+      res = update_call_from_tree (gsi, expr);
+      gcc_assert (res);
+    }
+  else if (gimple_code (stmt) == GIMPLE_SWITCH)
+    propagate_tree_value (gimple_switch_index_ptr (stmt), val);
+  else
+    gcc_unreachable ();
 }
 
 #include "gt-tree-ssa-propagate.h"

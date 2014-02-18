@@ -1,5 +1,5 @@
 /* Expand builtin functions.
-   Copyright (C) 1988-2013 Free Software Foundation, Inc.
+   Copyright (C) 1988-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -43,5 +43,7 @@ extern struct target_builtins *this_target_builtins;
 #else
 #define this_target_builtins (&default_target_builtins)
 #endif
+
+extern bool validate_gimple_arglist (const_gimple, ...);
 
 #endif

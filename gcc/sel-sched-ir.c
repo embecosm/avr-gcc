@@ -1,5 +1,5 @@
 /* Instruction scheduling pass.  Selective scheduler and pipeliner.
-   Copyright (C) 2006-2013 Free Software Foundation, Inc.
+   Copyright (C) 2006-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -1398,6 +1398,11 @@ sel_gen_insn_from_expr_after (expr_t expr, vinsn_t vinsn, int seqno,
   emit_expr = set_insn_init (expr, vinsn ? vinsn : EXPR_VINSN (expr),
                              seqno);
   insn = EXPR_INSN_RTX (emit_expr);
+
+  /* The insn may come from the transformation cache, which may hold already
+     deleted insns, so mark it as not deleted.  */
+  INSN_DELETED_P (insn) = 0;
+
   add_insn_after (insn, after, BLOCK_FOR_INSN (insn));
 
   flags = INSN_INIT_TODO_SSID;
@@ -3075,7 +3080,7 @@ sel_finish_global_and_expr (void)
     bbs.create (current_nr_blocks);
 
     for (i = 0; i < current_nr_blocks; i++)
-      bbs.quick_push (BASIC_BLOCK (BB_TO_BLOCK (i)));
+      bbs.quick_push (BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (i)));
 
     /* Clear AV_SETs and INSN_EXPRs.  */
     {
@@ -3627,7 +3632,7 @@ verify_backedges (void)
       edge_iterator ei;
 
       for (i = 0; i < current_nr_blocks; i++)
-        FOR_EACH_EDGE (e, ei, BASIC_BLOCK (BB_TO_BLOCK (i))->succs)
+        FOR_EACH_EDGE (e, ei, BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (i))->succs)
           if (in_current_region_p (e->dest)
               && BLOCK_TO_BB (e->dest->index) < i)
             n++;
@@ -3649,7 +3654,7 @@ sel_recompute_toporder (void)
   int i, n, rgn;
   int *postorder, n_blocks;
 
-  postorder = XALLOCAVEC (int, n_basic_blocks);
+  postorder = XALLOCAVEC (int, n_basic_blocks_for_fn (cfun));
   n_blocks = post_order_compute (postorder, false, false);
 
   rgn = CONTAINING_RGN (BB_TO_BLOCK (0));
@@ -3682,7 +3687,7 @@ maybe_tidy_empty_bb (basic_block bb)
      successors.  Otherwise remove it.  */
   if (!sel_bb_empty_p (bb)
       || (single_succ_p (bb)
-          && single_succ (bb) == EXIT_BLOCK_PTR
+	  && single_succ (bb) == EXIT_BLOCK_PTR_FOR_FN (cfun)
           && (!single_pred_p (bb)
               || !(single_pred_edge (bb)->flags & EDGE_FALLTHRU)))
       || EDGE_COUNT (bb->preds) == 0
@@ -3853,7 +3858,7 @@ tidy_control_flow (basic_block xbb, bool full_tidying)
       && EDGE_COUNT (xbb->succs) == 1
       && (EDGE_SUCC (xbb, 0)->flags & EDGE_FALLTHRU)
       /* When successor is an EXIT block, it may not be the next block.  */
-      && single_succ (xbb) != EXIT_BLOCK_PTR
+      && single_succ (xbb) != EXIT_BLOCK_PTR_FOR_FN (cfun)
       /* And unconditional jump in previous basic block leads to
          next basic block of XBB and this jump can be safely removed.  */
       && in_current_region_p (xbb->prev_bb)
@@ -3897,7 +3902,7 @@ purge_empty_blocks (void)
   /* Do not attempt to delete the first basic block in the region.  */
   for (i = 1; i < current_nr_blocks; )
     {
-      basic_block b = BASIC_BLOCK (BB_TO_BLOCK (i));
+      basic_block b = BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (i));
 
       if (maybe_tidy_empty_bb (b))
 	continue;
@@ -4095,14 +4100,14 @@ get_seqno_by_preds (rtx insn)
 void
 sel_extend_global_bb_info (void)
 {
-  sel_global_bb_info.safe_grow_cleared (last_basic_block);
+  sel_global_bb_info.safe_grow_cleared (last_basic_block_for_fn (cfun));
 }
 
 /* Extend region-scope data structures for basic blocks.  */
 static void
 extend_region_bb_info (void)
 {
-  sel_region_bb_info.safe_grow_cleared (last_basic_block);
+  sel_region_bb_info.safe_grow_cleared (last_basic_block_for_fn (cfun));
 }
 
 /* Extend all data structures to fit for all basic blocks.  */
@@ -4321,11 +4326,11 @@ init_lv_sets (void)
   basic_block bb;
 
   /* Initialize of LV sets.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     init_lv_set (bb);
 
   /* Don't forget EXIT_BLOCK.  */
-  init_lv_set (EXIT_BLOCK_PTR);
+  init_lv_set (EXIT_BLOCK_PTR_FOR_FN (cfun));
 }
 
 /* Release lv set of HEAD.  */
@@ -4346,10 +4351,10 @@ free_lv_sets (void)
   basic_block bb;
 
   /* Don't forget EXIT_BLOCK.  */
-  free_lv_set (EXIT_BLOCK_PTR);
+  free_lv_set (EXIT_BLOCK_PTR_FOR_FN (cfun));
 
   /* Free LV sets.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     if (BB_LV_SET (bb))
       free_lv_set (bb);
 }
@@ -4524,7 +4529,7 @@ sel_bb_head (basic_block bb)
 {
   insn_t head;
 
-  if (bb == EXIT_BLOCK_PTR)
+  if (bb == EXIT_BLOCK_PTR_FOR_FN (cfun))
     {
       gcc_assert (exit_insn != NULL_RTX);
       head = exit_insn;
@@ -4557,7 +4562,7 @@ sel_bb_end (basic_block bb)
   if (sel_bb_empty_p (bb))
     return NULL_RTX;
 
-  gcc_assert (bb != EXIT_BLOCK_PTR);
+  gcc_assert (bb != EXIT_BLOCK_PTR_FOR_FN (cfun));
 
   return BB_END (bb);
 }
@@ -4852,7 +4857,7 @@ bb_ends_ebb_p (basic_block bb)
   basic_block next_bb = bb_next_bb (bb);
   edge e;
 
-  if (next_bb == EXIT_BLOCK_PTR
+  if (next_bb == EXIT_BLOCK_PTR_FOR_FN (cfun)
       || bitmap_bit_p (forced_ebb_heads, next_bb->index)
       || (LABEL_P (BB_HEAD (next_bb))
 	  /* NB: LABEL_NUSES () is not maintained outside of jump.c.
@@ -4881,7 +4886,7 @@ in_same_ebb_p (insn_t insn, insn_t succ)
 {
   basic_block ptr = BLOCK_FOR_INSN (insn);
 
-  for(;;)
+  for (;;)
     {
       if (ptr == BLOCK_FOR_INSN (succ))
         return true;
@@ -4905,17 +4910,18 @@ recompute_rev_top_order (void)
   int *postorder;
   int n_blocks, i;
 
-  if (!rev_top_order_index || rev_top_order_index_len < last_basic_block)
+  if (!rev_top_order_index
+      || rev_top_order_index_len < last_basic_block_for_fn (cfun))
     {
-      rev_top_order_index_len = last_basic_block;
+      rev_top_order_index_len = last_basic_block_for_fn (cfun);
       rev_top_order_index = XRESIZEVEC (int, rev_top_order_index,
                                         rev_top_order_index_len);
     }
 
-  postorder = XNEWVEC (int, n_basic_blocks);
+  postorder = XNEWVEC (int, n_basic_blocks_for_fn (cfun));
 
   n_blocks = post_order_compute (postorder, true, false);
-  gcc_assert (n_basic_blocks == n_blocks);
+  gcc_assert (n_basic_blocks_for_fn (cfun) == n_blocks);
 
   /* Build reverse function: for each basic block with BB->INDEX == K
      rev_top_order_index[K] is it's reverse topological sort number.  */
@@ -5538,7 +5544,7 @@ sel_create_recovery_block (insn_t orig_insn)
 
   recovery_block = sched_create_recovery_block (&before_recovery);
   if (before_recovery)
-    copy_lv_set_from (before_recovery, EXIT_BLOCK_PTR);
+    copy_lv_set_from (before_recovery, EXIT_BLOCK_PTR_FOR_FN (cfun));
 
   gcc_assert (sel_bb_empty_p (recovery_block));
   sched_create_recovery_edges (first_bb, recovery_block, second_bb);
@@ -5821,7 +5827,7 @@ setup_nop_and_exit_insns (void)
   emit_insn (nop_pattern);
   exit_insn = get_insns ();
   end_sequence ();
-  set_block_for_insn (exit_insn, EXIT_BLOCK_PTR);
+  set_block_for_insn (exit_insn, EXIT_BLOCK_PTR_FOR_FN (cfun));
 }
 
 /* Free special insns used in the scheduler.  */
@@ -6079,7 +6085,7 @@ sel_init_pipelining (void)
 		       | LOOPS_HAVE_MARKED_IRREDUCIBLE_REGIONS);
   current_loop_nest = NULL;
 
-  bbs_in_loop_rgns = sbitmap_alloc (last_basic_block);
+  bbs_in_loop_rgns = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (bbs_in_loop_rgns);
 
   recompute_rev_top_order ();
@@ -6145,16 +6151,16 @@ make_regions_from_the_rest (void)
   /* LOOP_HDR[I] == -1 if I-th bb doesn't belong to any loop,
      LOOP_HDR[I] == LOOP_HDR[J] iff basic blocks I and J reside within the same
      loop.  */
-  loop_hdr = XNEWVEC (int, last_basic_block);
-  degree = XCNEWVEC (int, last_basic_block);
+  loop_hdr = XNEWVEC (int, last_basic_block_for_fn (cfun));
+  degree = XCNEWVEC (int, last_basic_block_for_fn (cfun));
 
 
   /* For each basic block that belongs to some loop assign the number
      of innermost loop it belongs to.  */
-  for (i = 0; i < last_basic_block; i++)
+  for (i = 0; i < last_basic_block_for_fn (cfun); i++)
     loop_hdr[i] = -1;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       if (bb->loop_father && !bb->loop_father->num == 0
 	  && !(bb->flags & BB_IRREDUCIBLE_LOOP))
@@ -6164,7 +6170,7 @@ make_regions_from_the_rest (void)
   /* For each basic block degree is calculated as the number of incoming
      edges, that are going out of bbs that are not yet scheduled.
      The basic blocks that are scheduled have degree value of zero.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       degree[bb->index] = 0;
 
@@ -6182,7 +6188,7 @@ make_regions_from_the_rest (void)
 
   /* Any block that did not end up in a region is placed into a region
      by itself.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     if (degree[bb->index] >= 0)
       {
 	rgn_bb_table[cur_rgn_blocks] = bb->index;
@@ -6201,11 +6207,10 @@ make_regions_from_the_rest (void)
 /* Free data structures used in pipelining of loops.  */
 void sel_finish_pipelining (void)
 {
-  loop_iterator li;
   struct loop *loop;
 
   /* Release aux fields so we don't free them later by mistake.  */
-  FOR_EACH_LOOP (li, loop, 0)
+  FOR_EACH_LOOP (loop, 0)
     loop->aux = NULL;
 
   loop_optimizer_finalize ();
@@ -6227,11 +6232,10 @@ sel_find_rgns (void)
   if (current_loops)
     {
       loop_p loop;
-      loop_iterator li;
 
-      FOR_EACH_LOOP (li, loop, (flag_sel_sched_pipelining_outer_loops
-				? LI_FROM_INNERMOST
-				: LI_ONLY_INNERMOST))
+      FOR_EACH_LOOP (loop, (flag_sel_sched_pipelining_outer_loops
+			    ? LI_FROM_INNERMOST
+			    : LI_ONLY_INNERMOST))
 	make_regions_from_loop_nest (loop);
     }
 
@@ -6348,7 +6352,7 @@ sel_remove_loop_preheader (void)
   /* Add blocks that aren't within the current loop to PREHEADER_BLOCKS.  */
   for (i = 0; i < RGN_NR_BLOCKS (cur_rgn); i++)
     {
-      bb = BASIC_BLOCK (BB_TO_BLOCK (i));
+      bb = BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (i));
 
       /* If the basic block belongs to region, but doesn't belong to
 	 corresponding loop, then it should be a preheader.  */
@@ -6398,7 +6402,7 @@ sel_remove_loop_preheader (void)
                  If it is so - delete this jump and clear data sets of its
                  basic block if it becomes empty.  */
 	      if (next_bb->prev_bb == prev_bb
-                  && prev_bb != ENTRY_BLOCK_PTR
+		  && prev_bb != ENTRY_BLOCK_PTR_FOR_FN (cfun)
                   && bb_has_removable_jump_to_p (prev_bb, next_bb))
                 {
                   redirect_edge_and_branch (EDGE_SUCC (prev_bb, 0), next_bb);

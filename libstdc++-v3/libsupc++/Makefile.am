@@ -1,6 +1,6 @@
 ## Makefile for the GNU C++ Support library.
 ##
-## Copyright (C) 2000-2013 Free Software Foundation, Inc.
+## Copyright (C) 2000-2014 Free Software Foundation, Inc.
 ##
 ## Process this file with automake to produce Makefile.in.
 ##
@@ -26,6 +26,7 @@ include $(top_srcdir)/fragment.am
 # separately too.
 # 1) separate libsupc++.la
 toolexeclib_LTLIBRARIES = libsupc++.la
+
 # 2) integrated libsupc++convenience.la that is to be a part of libstdc++.a
 noinst_LTLIBRARIES = libsupc++convenience.la
 
@@ -48,6 +49,8 @@ sources = \
 	atexit_arm.cc \
 	atexit_thread.cc \
 	bad_alloc.cc \
+	bad_array_length.cc \
+	bad_array_new.cc \
 	bad_cast.cc \
 	bad_typeid.cc \
 	class_type_info.cc \
@@ -94,8 +97,13 @@ sources = \
 	vmi_class_type_info.cc \
 	vterminate.cc
 
-libsupc___la_SOURCES = $(sources) $(c_sources)
-libsupc__convenience_la_SOURCES = $(sources) $(c_sources)
+if ENABLE_VTABLE_VERIFY
+  vtv_sources = \
+	vtv_stubs.cc
+endif
+
+libsupc___la_SOURCES = $(sources) $(c_sources) $(vtv_sources)
+libsupc__convenience_la_SOURCES = $(sources) $(c_sources) $(vtv_sources)
 
 cp-demangle.c:
 	rm -f $@
@@ -107,6 +115,21 @@ cp-demangle.o: cp-demangle.c
 
 
 # Use special rules for the C++11 sources so that the proper flags are passed.
+bad_array_length.lo: bad_array_length.cc
+	$(LTCXXCOMPILE) -std=gnu++11 -c $<
+bad_array_length.o: bad_array_length.cc
+	$(CXXCOMPILE) -std=gnu++11 -c $<
+
+bad_array_new.lo: bad_array_new.cc
+	$(LTCXXCOMPILE) -std=gnu++11 -c $<
+bad_array_new.o: bad_array_new.cc
+	$(CXXCOMPILE) -std=gnu++11 -c $<
+
+eh_aux_runtime.lo: eh_aux_runtime.cc
+	$(LTCXXCOMPILE) -std=gnu++11 -c $<
+eh_aux_runtime.o: eh_aux_runtime.cc
+	$(CXXCOMPILE) -std=gnu++11 -c $<
+
 eh_ptr.lo: eh_ptr.cc
 	$(LTCXXCOMPILE) -std=gnu++11 -c $<
 eh_ptr.o: eh_ptr.cc
@@ -265,3 +288,8 @@ uninstall-bitsHEADERS:
 	  q=`echo $$p | sed -e 's,.*/,,'`; \
 	  rm -f $(DESTDIR)$(bitsdir)/$$q; \
 	done
+
+
+# By adding these files here, automake will remove them for 'make clean'
+CLEANFILES = stamp-*
+

@@ -20,7 +20,7 @@ class MutexSet {
  public:
   // Holds limited number of mutexes.
   // The oldest mutexes are discarded on overflow.
-  static const uptr kMaxSize = 64;
+  static const uptr kMaxSize = 16;
   struct Desc {
     u64 id;
     u64 epoch;
@@ -60,4 +60,4 @@ MutexSet::Desc MutexSet::Get(uptr i) const { return Desc(); }
 
 }  // namespace __tsan
 
-#endif  // TSAN_REPORT_H
+#endif  // TSAN_MUTEXSET_H

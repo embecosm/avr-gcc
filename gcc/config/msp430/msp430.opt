@@ -1,0 +1,34 @@
+msim
+Target
+Use simulator runtime
+
+masm-hex
+Target Mask(ASM_HEX)
+Force assembly output to always use hex constants
+
+mmcu=
+Target Joined RejectNegative Var(target_mcu)
+Specify the MCU to build for.
+
+mcpu=
+Target Joined RejectNegative Var(target_cpu)
+Specify the ISA to build for: msp430, mdsp430x, msp430xv2
+
+mlarge
+Target Mask(LARGE) RejectNegative
+Select large model - 20-bit addresses/pointers
+
+msmall
+Target InverseMask(LARGE) RejectNegative
+Select small model - 16-bit addresses/pointers (default)
+
+mrelax
+Target Report
+Optimize opcode sizes at link time
+
+mOs
+Target Undocumented Mask(OPT_SPACE)
+
+minrt
+Target Report Mask(MINRT) RejectNegative
+Use a minimum runtime (no static initializers or ctors) for memory-constrained devices.

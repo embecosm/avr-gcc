@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2012, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2013, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -275,13 +275,14 @@ package body Ch3 is
 
    --  PRIVATE_TYPE_DECLARATION ::=
    --    type DEFINING_IDENTIFIER [DISCRIMINANT_PART]
-   --      is [abstract] [tagged] [limited] private;
+   --      is [abstract] [tagged] [limited] private
+   --        [ASPECT_SPECIFICATIONS];
 
    --  PRIVATE_EXTENSION_DECLARATION ::=
    --    type DEFINING_IDENTIFIER [DISCRIMINANT_PART] is
    --      [abstract] [limited | synchronized]
    --        new ancestor_SUBTYPE_INDICATION [and INTERFACE_LIST]
-   --          with private;
+   --          with private [ASPECT_SPECIFICATIONS];
 
    --  TYPE_DEFINITION ::=
    --    ENUMERATION_TYPE_DEFINITION  | INTEGER_TYPE_DEFINITION
@@ -700,7 +701,7 @@ package body Ch3 is
                else
                   Decl_Node := New_Node (N_Private_Type_Declaration, Type_Loc);
                   Set_Limited_Present (Decl_Node, True);
-                  T_Private; -- past PRIVATE (or complain if not there!)
+                  T_Private; -- past PRIVATE (or complain if not there)
                end if;
 
                exit;
@@ -1277,12 +1278,15 @@ package body Ch3 is
 
    --  OBJECT_RENAMING_DECLARATION ::=
    --    DEFINING_IDENTIFIER :
-   --      [NULL_EXCLUSION] SUBTYPE_MARK renames object_NAME;
+   --      [NULL_EXCLUSION] SUBTYPE_MARK renames object_NAME
+   --        [ASPECT_SPECIFICATIONS];
    --  | DEFINING_IDENTIFIER :
-   --      ACCESS_DEFINITION renames object_NAME;
+   --      ACCESS_DEFINITION renames object_NAME
+   --        [ASPECT_SPECIFICATIONS];
 
    --  EXCEPTION_RENAMING_DECLARATION ::=
-   --    DEFINING_IDENTIFIER : exception renames exception_NAME;
+   --    DEFINING_IDENTIFIER : exception renames exception_NAME
+   --      [ASPECT_SPECIFICATIONS];
 
    --  EXCEPTION_DECLARATION ::=
    --    DEFINING_IDENTIFIER_LIST : exception
@@ -1669,15 +1673,19 @@ package body Ch3 is
 
             --  OBJECT_DECLARATION ::=
             --    DEFINING_IDENTIFIER_LIST : [aliased] [constant]
-            --      [NULL_EXCLUSION] SUBTYPE_INDICATION [:= EXPRESSION];
+            --      [NULL_EXCLUSION] SUBTYPE_INDICATION [:= EXPRESSION]
+            --        [ASPECT_SPECIFICATIONS];
             --  | DEFINING_IDENTIFIER_LIST : [aliased] [constant]
-            --      ACCESS_DEFINITION [:= EXPRESSION];
+            --      ACCESS_DEFINITION [:= EXPRESSION]
+            --        [ASPECT_SPECIFICATIONS];
 
             --  OBJECT_RENAMING_DECLARATION ::=
             --    DEFINING_IDENTIFIER :
-            --      [NULL_EXCLUSION] SUBTYPE_MARK renames object_NAME;
+            --      [NULL_EXCLUSION] SUBTYPE_MARK renames object_NAME
+            --        [ASPECT_SPECIFICATIONS];
             --  | DEFINING_IDENTIFIER :
-            --      ACCESS_DEFINITION renames object_NAME;
+            --      ACCESS_DEFINITION renames object_NAME
+            --        [ASPECT_SPECIFICATIONS];
 
             Not_Null_Present := P_Null_Exclusion;  --  Ada 2005 (AI-231/423)
 
@@ -1893,7 +1901,7 @@ package body Ch3 is
    --     type DEFINING_IDENTIFIER [DISCRIMINANT_PART] is
    --       [abstract] [limited | synchronized]
    --          new ancestor_SUBTYPE_INDICATION [and INTERFACE_LIST]
-   --            with private;
+   --            with private [ASPECT_SPECIFICATIONS];
 
    --  RECORD_EXTENSION_PART ::= with RECORD_DEFINITION
 
@@ -4498,7 +4506,7 @@ package body Ch3 is
                Scan; -- past PRIVATE
             end if;
 
-         --  An end of file definitely terminates the declarations!
+         --  An end of file definitely terminates the declarations
 
          when Tok_EOF =>
             Done := True;
@@ -4722,7 +4730,7 @@ package body Ch3 is
       --  declaration sequence on a second error, we scan out the statement
       --  and append it to the list of declarations (note that the semantics
       --  can handle statements in a declaration list so if we proceed to
-      --  call the semantic phase, all will be (reasonably) well!
+      --  call the semantic phase, all will be (reasonably) well.
 
       Append_List_To (Decls, P_Sequence_Of_Statements (SS_Unco));
 

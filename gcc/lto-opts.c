@@ -1,6 +1,6 @@
 /* LTO IL options.
 
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
    Contributed by Simon Baldwin <simonb@google.com>
 
 This file is part of GCC.
@@ -23,9 +23,13 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
 #include "hashtab.h"
-#include "ggc.h"
-#include "vec.h"
 #include "bitmap.h"
 #include "flags.h"
 #include "opts.h"
@@ -76,7 +80,7 @@ lto_write_options (void)
 
   obstack_init (&temporary_obstack);
 
-  /* Output options that affect GIMPLE IL semantics and are implicitely
+  /* Output options that affect GIMPLE IL semantics and are implicitly
      enabled by the frontend.
      This for now includes an explicit set of options that we also handle
      explicitly in lto-wrapper.c.  In the end the effects on GIMPLE IL
@@ -84,11 +88,37 @@ lto_write_options (void)
      function rather than per compilation unit.  */
   /* -fexceptions causes the EH machinery to be initialized, enabling
      generation of unwind data so that explicit throw() calls work.  */
-  if (global_options.x_flag_exceptions)
+  if (!global_options_set.x_flag_exceptions
+      && global_options.x_flag_exceptions)
     append_to_collect_gcc_options (&temporary_obstack, &first_p,
 				   "-fexceptions");
+  /* -fnon-call-exceptions changes the generation of exception
+      regions.  It is enabled implicitly by the Go frontend.  */
+  if (!global_options_set.x_flag_non_call_exceptions
+      && global_options.x_flag_non_call_exceptions)
+    append_to_collect_gcc_options (&temporary_obstack, &first_p,
+				   "-fnon-call-exceptions");
+  /* The default -ffp-contract changes depending on the language
+     standard.  Pass thru conservative standard settings.  */
+  if (!global_options_set.x_flag_fp_contract_mode)
+    switch (global_options.x_flag_fp_contract_mode)
+      {
+      case FP_CONTRACT_OFF:
+	append_to_collect_gcc_options (&temporary_obstack, &first_p,
+				       "-ffp-contract=off");
+	break;
+      case FP_CONTRACT_ON:
+	append_to_collect_gcc_options (&temporary_obstack, &first_p,
+				       "-ffp-contract=on");
+	break;
+      case FP_CONTRACT_FAST:
+	/* Nothing.  That merges conservatively and is the default for LTO.  */
+	break;
+      default:
+	gcc_unreachable ();
+      }
 
-  /* Output explicitely passed options.  */
+  /* Output explicitly passed options.  */
   for (i = 1; i < save_decoded_options_count; ++i)
     {
       struct cl_decoded_option *option = &save_decoded_options[i];

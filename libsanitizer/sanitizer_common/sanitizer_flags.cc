@@ -16,15 +16,60 @@
 
 namespace __sanitizer {
 
+void SetCommonFlagsDefaults(CommonFlags *f) {
+  f->symbolize = true;
+  f->external_symbolizer_path = 0;
+  f->strip_path_prefix = "";
+  f->fast_unwind_on_fatal = false;
+  f->fast_unwind_on_malloc = true;
+  f->handle_ioctl = false;
+  f->malloc_context_size = 1;
+  f->log_path = "stderr";
+  f->verbosity = 0;
+  f->detect_leaks = false;
+  f->leak_check_at_exit = true;
+  f->allocator_may_return_null = false;
+  f->print_summary = true;
+}
+
+void ParseCommonFlagsFromString(CommonFlags *f, const char *str) {
+  ParseFlag(str, &f->symbolize, "symbolize");
+  ParseFlag(str, &f->external_symbolizer_path, "external_symbolizer_path");
+  ParseFlag(str, &f->strip_path_prefix, "strip_path_prefix");
+  ParseFlag(str, &f->fast_unwind_on_fatal, "fast_unwind_on_fatal");
+  ParseFlag(str, &f->fast_unwind_on_malloc, "fast_unwind_on_malloc");
+  ParseFlag(str, &f->handle_ioctl, "handle_ioctl");
+  ParseFlag(str, &f->malloc_context_size, "malloc_context_size");
+  ParseFlag(str, &f->log_path, "log_path");
+  ParseFlag(str, &f->verbosity, "verbosity");
+  ParseFlag(str, &f->detect_leaks, "detect_leaks");
+  ParseFlag(str, &f->leak_check_at_exit, "leak_check_at_exit");
+  ParseFlag(str, &f->allocator_may_return_null, "allocator_may_return_null");
+  ParseFlag(str, &f->print_summary, "print_summary");
+
+  // Do a sanity check for certain flags.
+  if (f->malloc_context_size < 1)
+    f->malloc_context_size = 1;
+}
+
 static bool GetFlagValue(const char *env, const char *name,
                          const char **value, int *value_length) {
   if (env == 0)
     return false;
-  const char *pos = internal_strstr(env, name);
-  const char *end;
-  if (pos == 0)
-    return false;
+  const char *pos = 0;
+  for (;;) {
+    pos = internal_strstr(env, name);
+    if (pos == 0)
+      return false;
+    if (pos != env && ((pos[-1] >= 'a' && pos[-1] <= 'z') || pos[-1] == '_')) {
+      // Seems to be middle of another flag name or value.
+      env = pos + 1;
+      continue;
+    }
+    break;
+  }
   pos += internal_strlen(name);
+  const char *end;
   if (pos[0] != '=') {
     end = pos;
   } else {
@@ -75,7 +120,7 @@ void ParseFlag(const char *env, int *flag, const char *name) {
   int value_length;
   if (!GetFlagValue(env, name, &value, &value_length))
     return;
-  *flag = internal_atoll(value);
+  *flag = static_cast<int>(internal_atoll(value));
 }
 
 static LowLevelAllocator allocator_for_flags;

@@ -1,5 +1,5 @@
 /* Iterator routines for manipulating GENERIC and GIMPLE tree statements.
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod  <amacleod@redhat.com>
 
 This file is part of GCC.
@@ -22,7 +22,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
-#include "gimple.h"
 #include "tree-iterator.h"
 #include "ggc.h"
 
@@ -39,7 +38,7 @@ alloc_stmt_list (void)
   if (!vec_safe_is_empty (stmt_list_cache))
     {
       list = stmt_list_cache->pop ();
-      memset (list, 0, sizeof(struct tree_base));
+      memset (list, 0, sizeof (struct tree_base));
       TREE_SET_CODE (list, STATEMENT_LIST);
     }
   else

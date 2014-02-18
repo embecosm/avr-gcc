@@ -32,7 +32,6 @@ with Fname;    use Fname;
 with Lib;      use Lib;
 with Lib.Load; use Lib.Load;
 with Nlists;   use Nlists;
-with Opt;      use Opt;
 with Output;   use Output;
 with Restrict; use Restrict;
 with Sem_Attr; use Sem_Attr;
@@ -241,6 +240,9 @@ package body Sem is
 
          when N_Freeze_Entity =>
             Analyze_Freeze_Entity (N);
+
+         when N_Freeze_Generic_Entity =>
+            Analyze_Freeze_Generic_Entity (N);
 
          when N_Full_Type_Declaration =>
             Analyze_Full_Type_Declaration (N);
@@ -527,9 +529,6 @@ package body Sem is
 
          when N_Subprogram_Declaration =>
             Analyze_Subprogram_Declaration (N);
-
-         when N_Subprogram_Info =>
-            Analyze_Subprogram_Info (N);
 
          when N_Subprogram_Renaming_Declaration =>
             Analyze_Subprogram_Renaming (N);
@@ -1313,11 +1312,21 @@ package body Sem is
       S_Outer_Gen_Scope   : constant Entity_Id        := Outer_Generic_Scope;
       S_Style_Check       : constant Boolean          := Style_Check;
 
+      Curunit : constant Unit_Number_Type := Get_Cunit_Unit_Number (Comp_Unit);
+      --  New value of Current_Sem_Unit
+
       Generic_Main : constant Boolean :=
-                       Nkind (Unit (Cunit (Main_Unit)))
-                         in N_Generic_Declaration;
+        Nkind (Unit (Cunit (Main_Unit))) in N_Generic_Declaration;
       --  If the main unit is generic, every compiled unit, including its
       --  context, is compiled with expansion disabled.
+
+      Is_Main_Unit_Or_Main_Unit_Spec : constant Boolean :=
+         Curunit = Main_Unit
+           or else
+             (Nkind (Unit (Cunit (Main_Unit))) = N_Package_Body
+               and then Library_Unit (Cunit (Main_Unit)) = Cunit (Curunit));
+      --  Configuration flags have special settings when compiling a predefined
+      --  file as a main unit. This applies to its spec as well.
 
       Ext_Main_Source_Unit : constant Boolean :=
                                In_Extended_Main_Source_Unit (Comp_Unit);
@@ -1340,8 +1349,10 @@ package body Sem is
       ----------------
 
       procedure Do_Analyze is
+         List : Elist_Id;
+
       begin
-         Save_Scope_Stack;
+         List := Save_Scope_Stack;
          Push_Scope (Standard_Standard);
          Scope_Suppress := Suppress_Options;
          Scope_Stack.Table
@@ -1362,7 +1373,7 @@ package body Sem is
          --  Then pop entry for Standard, and pop implicit types
 
          Pop_Scope;
-         Restore_Scope_Stack;
+         Restore_Scope_Stack (List);
       end Do_Analyze;
 
       Already_Analyzed : constant Boolean := Analyzed (Comp_Unit);
@@ -1383,7 +1394,7 @@ package body Sem is
       end if;
 
       Compiler_State   := Analyzing;
-      Current_Sem_Unit := Get_Cunit_Unit_Number (Comp_Unit);
+      Current_Sem_Unit := Curunit;
 
       --  Compile predefined units with GNAT_Mode set to True, to properly
       --  process the categorization stuff. However, do not set GNAT_Mode
@@ -1408,7 +1419,6 @@ package body Sem is
       Inside_A_Generic   := False;
       In_Assertion_Expr  := 0;
       In_Spec_Expression := False;
-
       Set_Comes_From_Source_Default (False);
 
       --  Save current config switches and reset then appropriately
@@ -1416,7 +1426,7 @@ package body Sem is
       Save_Opt_Config_Switches (Save_Config_Switches);
       Set_Opt_Config_Switches
         (Is_Internal_File_Name (Unit_File_Name (Current_Sem_Unit)),
-         Current_Sem_Unit = Main_Unit);
+         Is_Main_Unit_Or_Main_Unit_Spec);
 
       --  Save current non-partition-wide restrictions
 

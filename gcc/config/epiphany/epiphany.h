@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler, Argonaut EPIPHANY cpu.
-   Copyright (C) 1994-2013 Free Software Foundation, Inc.
+   Copyright (C) 1994-2014 Free Software Foundation, Inc.
    Contributed by Embecosm on behalf of Adapteva, Inc.
 
 This file is part of GCC.
@@ -896,7 +896,8 @@ enum epiphany_function_type
    finally an entity that runs in a second mode switching pass to
    resolve FP_MODE_ROUND_UNKNOWN.  */
 #define NUM_MODES_FOR_MODE_SWITCHING \
-  { 2, 2, FP_MODE_NONE, FP_MODE_NONE, FP_MODE_NONE, FP_MODE_NONE, FP_MODE_NONE }
+  { 2, 2, 2, \
+    FP_MODE_NONE, FP_MODE_NONE, FP_MODE_NONE, FP_MODE_NONE, FP_MODE_NONE }
 
 #define MODE_NEEDED(ENTITY, INSN) epiphany_mode_needed((ENTITY), (INSN))
 
@@ -918,16 +919,20 @@ enum
 {
   EPIPHANY_MSW_ENTITY_AND,
   EPIPHANY_MSW_ENTITY_OR,
+  EPIPHANY_MSW_ENTITY_CONFIG, /* 1 means config is known or saved.  */
   EPIPHANY_MSW_ENTITY_NEAREST,
   EPIPHANY_MSW_ENTITY_TRUNC,
   EPIPHANY_MSW_ENTITY_ROUND_UNKNOWN,
   EPIPHANY_MSW_ENTITY_ROUND_KNOWN,
-  EPIPHANY_MSW_ENTITY_FPU_OMNIBUS
+  EPIPHANY_MSW_ENTITY_FPU_OMNIBUS,
+  EPIPHANY_MSW_ENTITY_NUM
 };
 
 extern int epiphany_normal_fp_rounding;
-extern struct rtl_opt_pass pass_mode_switch_use;
-extern struct rtl_opt_pass pass_resolve_sw_modes;
+#ifndef IN_LIBGCC2
+extern rtl_opt_pass *make_pass_mode_switch_use (gcc::context *ctxt);
+extern rtl_opt_pass *make_pass_resolve_sw_modes (gcc::context *ctxt);
+#endif
 
 /* This will need to be adjusted when FP_CONTRACT_ON is properly
    implemented.  */

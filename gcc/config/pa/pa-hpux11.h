@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler, for HP PA-RISC
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -120,7 +120,8 @@ along with GCC; see the file COPYING3.  If not see
 #undef LIB_SPEC
 #define LIB_SPEC \
   "%{!shared:\
-     %{fopenmp:%{static:-a archive_shared} -lrt %{static:-a archive}}\
+     %{fopenmp|ftree-parallelize-loops=*:%{static:-a archive_shared} -lrt\
+       %{static:-a archive}}\
      %{mt|pthread:-lpthread} -lc\
      %{static:%{!nolibdld:-a archive_shared -ldld -a archive -lc}\
        %{!mt:%{!pthread:-a shared -lc -a archive}}}}\

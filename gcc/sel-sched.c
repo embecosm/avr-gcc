@@ -1,5 +1,5 @@
 /* Instruction scheduling pass.  Selective scheduler and pipeliner.
-   Copyright (C) 2006-2013 Free Software Foundation, Inc.
+   Copyright (C) 2006-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -509,12 +509,12 @@ typedef vec<vinsn_t> vinsn_vec_t;
    can't be moved up due to bookkeeping created during code motion to another
    fence.  See comment near the call to update_and_record_unavailable_insns
    for the detailed explanations.  */
-static vinsn_vec_t vec_bookkeeping_blocked_vinsns = vinsn_vec_t();
+static vinsn_vec_t vec_bookkeeping_blocked_vinsns = vinsn_vec_t ();
 
 /* This vector has vinsns which are scheduled with renaming on the first fence
    and then seen on the second.  For expressions with such vinsns, target
    availability information may be wrong.  */
-static vinsn_vec_t vec_target_unavailable_vinsns = vinsn_vec_t();
+static vinsn_vec_t vec_target_unavailable_vinsns = vinsn_vec_t ();
 
 /* Vector to store temporary nops inserted in move_op to prevent removal
    of empty bbs.  */
@@ -809,7 +809,7 @@ count_occurrences_1 (rtx *cur_rtx, void *arg)
       /* Bail out if mode is different or more than one register is used.  */
       if (GET_MODE (*cur_rtx) != GET_MODE (p->x)
           || (HARD_REGISTER_P (*cur_rtx)
-	      && hard_regno_nregs[REGNO(*cur_rtx)][GET_MODE (*cur_rtx)] > 1))
+	      && hard_regno_nregs[REGNO (*cur_rtx)][GET_MODE (*cur_rtx)] > 1))
         {
           p->n = 0;
           return 1;
@@ -1116,8 +1116,15 @@ init_regs_for_mode (enum machine_mode mode)
 
   for (cur_reg = 0; cur_reg < FIRST_PSEUDO_REGISTER; cur_reg++)
     {
-      int nregs = hard_regno_nregs[cur_reg][mode];
+      int nregs;
       int i;
+
+      /* See whether it accepts all modes that occur in
+         original insns.  */
+      if (! HARD_REGNO_MODE_OK (cur_reg, mode))
+        continue;
+
+      nregs = hard_regno_nregs[cur_reg][mode];
 
       for (i = nregs - 1; i >= 0; --i)
         if (fixed_regs[cur_reg + i]
@@ -1138,11 +1145,6 @@ init_regs_for_mode (enum machine_mode mode)
           break;
 
       if (i >= 0)
-        continue;
-
-      /* See whether it accepts all modes that occur in
-         original insns.  */
-      if (! HARD_REGNO_MODE_OK (cur_reg, mode))
         continue;
 
       if (HARD_REGNO_CALL_PART_CLOBBERED (cur_reg, mode))
@@ -1253,7 +1255,7 @@ mark_unavailable_hard_regs (def_t def, struct reg_rename *reg_rename_p,
 
       if (!HARD_FRAME_POINTER_IS_FRAME_POINTER)
         add_to_hard_reg_set (&reg_rename_p->unavailable_hard_regs, 
-			     Pmode, HARD_FRAME_POINTER_IS_FRAME_POINTER);
+			     Pmode, HARD_FRAME_POINTER_REGNUM);
     }
 
 #ifdef STACK_REGS
@@ -3801,6 +3803,7 @@ fill_vec_av_set (av_set_t av, blist_t bnds, fence_t fence,
       signed char target_available;
       bool is_orig_reg_p = true;
       int need_cycles, new_prio;
+      bool fence_insn_p = INSN_UID (insn) == INSN_UID (FENCE_INSN (fence));
 
       /* Don't allow any insns other than from SCHED_GROUP if we have one.  */
       if (FENCE_SCHED_NEXT (fence) && insn != FENCE_SCHED_NEXT (fence))
@@ -3855,8 +3858,15 @@ fill_vec_av_set (av_set_t av, blist_t bnds, fence_t fence,
           if (sched_verbose >= 4)
             sel_print ("Expr %d has no suitable target register\n",
                        INSN_UID (insn));
-          continue;
+
+	  /* A fence insn should not get here.  */
+	  gcc_assert (!fence_insn_p);
+	  continue;
         }
+
+      /* At this point a fence insn should always be available.  */
+      gcc_assert (!fence_insn_p
+		  || INSN_UID (FENCE_INSN (fence)) == INSN_UID (EXPR_INSN_RTX (expr)));
 
       /* Filter expressions that need to be renamed or speculated when
 	 pipelining, because compensating register copies or speculation
@@ -4551,7 +4561,8 @@ find_block_for_bookkeeping (edge e1, edge e2, bool lax)
   edge e;
 
   /* Loop over edges from E1 to E2, inclusive.  */
-  for (e = e1; !lax || e->dest != EXIT_BLOCK_PTR; e = EDGE_SUCC (e->dest, 0))
+  for (e = e1; !lax || e->dest != EXIT_BLOCK_PTR_FOR_FN (cfun); e =
+       EDGE_SUCC (e->dest, 0))
     {
       if (EDGE_COUNT (e->dest->preds) == 2)
 	{
@@ -4642,7 +4653,7 @@ create_block_for_bookkeeping (edge e1, edge e2)
       if (DEBUG_INSN_P (insn)
 	  && single_succ_p (new_bb)
 	  && (succ = single_succ (new_bb))
-	  && succ != EXIT_BLOCK_PTR
+	  && succ != EXIT_BLOCK_PTR_FOR_FN (cfun)
 	  && DEBUG_INSN_P ((last = sel_bb_end (new_bb))))
 	{
 	  while (insn != last && (DEBUG_INSN_P (insn) || NOTE_P (insn)))
@@ -4662,8 +4673,8 @@ create_block_for_bookkeeping (edge e1, edge e2)
 	      new_bb->index = succ->index;
 	      succ->index = i;
 
-	      SET_BASIC_BLOCK (new_bb->index, new_bb);
-	      SET_BASIC_BLOCK (succ->index, succ);
+	      SET_BASIC_BLOCK_FOR_FN (cfun, new_bb->index, new_bb);
+	      SET_BASIC_BLOCK_FOR_FN (cfun, succ->index, succ);
 
 	      memcpy (&gbi, SEL_GLOBAL_BB_INFO (new_bb), sizeof (gbi));
 	      memcpy (SEL_GLOBAL_BB_INFO (new_bb), SEL_GLOBAL_BB_INFO (succ),
@@ -4902,7 +4913,8 @@ remove_insns_that_need_bookkeeping (fence_t fence, av_set_t *av_ptr)
 	  && (EXPR_SPEC (expr)
 	      || !EXPR_ORIG_BB_INDEX (expr)
 	      || !dominated_by_p (CDI_DOMINATORS,
-				  BASIC_BLOCK (EXPR_ORIG_BB_INDEX (expr)),
+				  BASIC_BLOCK_FOR_FN (cfun,
+						      EXPR_ORIG_BB_INDEX (expr)),
 				  BLOCK_FOR_INSN (FENCE_INSN (fence)))))
 	{
           if (sched_verbose >= 4)
@@ -6424,10 +6436,23 @@ code_motion_process_successors (insn_t insn, av_set_t orig_ops,
         res = b;
 
       /* We have simplified the control flow below this point.  In this case,
-         the iterator becomes invalid.  We need to try again.  */
+         the iterator becomes invalid.  We need to try again.
+	 If we have removed the insn itself, it could be only an
+	 unconditional jump.  Thus, do not rescan but break immediately --
+	 we have already visited the only successor block.  */
+      if (!BLOCK_FOR_INSN (insn))
+	{
+	  if (sched_verbose >= 6)
+	    sel_print ("Not doing rescan: already visited the only successor"
+		       " of block %d\n", old_index);
+	  break;
+	}
       if (BLOCK_FOR_INSN (insn)->index != old_index
           || EDGE_COUNT (bb->succs) != old_succs)
         {
+	  if (sched_verbose >= 6)
+	    sel_print ("Rescan: CFG was simplified below insn %d, block %d\n",
+		       INSN_UID (insn), BLOCK_FOR_INSN (insn)->index);
           insn = sel_bb_end (BLOCK_FOR_INSN (insn));
           goto rescan;
         }
@@ -6718,7 +6743,11 @@ code_motion_path_driver (insn_t insn, av_set_t orig_ops, ilist_t path,
      the numbering by creating bookkeeping blocks.  */
   if (removed_last_insn)
     insn = PREV_INSN (insn);
-  bitmap_set_bit (code_motion_visited_blocks, BLOCK_FOR_INSN (insn)->index);
+
+  /* If we have simplified the control flow and removed the first jump insn,
+     there's no point in marking this block in the visited blocks bitmap.  */
+  if (BLOCK_FOR_INSN (insn))
+    bitmap_set_bit (code_motion_visited_blocks, BLOCK_FOR_INSN (insn)->index);
   return true;
 }
 
@@ -6872,7 +6901,7 @@ current_region_empty_p (void)
 {
   int i;
   for (i = 0; i < current_nr_blocks; i++)
-    if (! sel_bb_empty_p (BASIC_BLOCK (BB_TO_BLOCK (i))))
+    if (! sel_bb_empty_p (BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (i))))
       return false;
 
   return true;
@@ -6931,7 +6960,7 @@ sel_region_init (int rgn)
   bbs.create (current_nr_blocks);
 
   for (i = 0; i < current_nr_blocks; i++)
-    bbs.quick_push (BASIC_BLOCK (BB_TO_BLOCK (i)));
+    bbs.quick_push (BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (i)));
 
   sel_init_bbs (bbs);
 
@@ -6966,13 +6995,14 @@ sel_region_init (int rgn)
      compute_live for the first insn of the loop.  */
   if (current_loop_nest)
     {
-      int header = (sel_is_loop_preheader_p (BASIC_BLOCK (BB_TO_BLOCK (0)))
-                    ? 1
-                    : 0);
+      int header =
+	(sel_is_loop_preheader_p (BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (0)))
+	 ? 1
+	 : 0);
 
       if (current_nr_blocks == header + 1)
         update_liveness_on_insn
-          (sel_bb_head (BASIC_BLOCK (BB_TO_BLOCK (header))));
+          (sel_bb_head (BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (header))));
     }
 
   /* Set hooks so that no newly generated insn will go out unnoticed.  */
@@ -7010,7 +7040,7 @@ simplify_changed_insns (void)
 
   for (i = 0; i < current_nr_blocks; i++)
     {
-      basic_block bb = BASIC_BLOCK (BB_TO_BLOCK (i));
+      basic_block bb = BASIC_BLOCK_FOR_FN (cfun, BB_TO_BLOCK (i));
       rtx insn;
 
       FOR_BB_INSNS (bb, insn)
@@ -7751,7 +7781,7 @@ run_selective_scheduling (void)
 {
   int rgn;
 
-  if (n_basic_blocks == NUM_FIXED_BLOCKS)
+  if (n_basic_blocks_for_fn (cfun) == NUM_FIXED_BLOCKS)
     return;
 
   sel_global_init ();

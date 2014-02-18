@@ -1,5 +1,5 @@
 /* CPP Library.
-   Copyright (C) 1986-2013 Free Software Foundation, Inc.
+   Copyright (C) 1986-2014 Free Software Foundation, Inc.
    Contributed by Per Bothner, 1994-95.
    Based on CCCP program by Paul Rubin, June 1986
    Adapted to ANSI C, Richard Stallman, Jan 1987
@@ -77,6 +77,7 @@ struct lang_flags
   char cplusplus;
   char extended_numbers;
   char extended_identifiers;
+  char c11_identifiers;
   char std;
   char cplusplus_comments;
   char digraphs;
@@ -84,24 +85,25 @@ struct lang_flags
   char rliterals;
   char user_literals;
   char binary_constants;
+  char digit_separators;
 };
 
 static const struct lang_flags lang_defaults[] =
-{ /*              c99 c++ xnum xid std  //   digr ulit rlit udlit bin_cst */
-  /* GNUC89   */  { 0,  0,  1,   0,  0,   1,   1,   0,   0,   0,    0 },
-  /* GNUC99   */  { 1,  0,  1,   0,  0,   1,   1,   1,   1,   0,    0 },
-  /* GNUC11   */  { 1,  0,  1,   0,  0,   1,   1,   1,   1,   0,    0 },
-  /* STDC89   */  { 0,  0,  0,   0,  1,   0,   0,   0,   0,   0,    0 },
-  /* STDC94   */  { 0,  0,  0,   0,  1,   0,   1,   0,   0,   0,    0 },
-  /* STDC99   */  { 1,  0,  1,   0,  1,   1,   1,   0,   0,   0,    0 },
-  /* STDC11   */  { 1,  0,  1,   0,  1,   1,   1,   1,   0,   0,    0 },
-  /* GNUCXX   */  { 0,  1,  1,   0,  0,   1,   1,   0,   0,   0,    0 },
-  /* CXX98    */  { 0,  1,  1,   0,  1,   1,   1,   0,   0,   0,    0 },
-  /* GNUCXX11 */  { 1,  1,  1,   0,  0,   1,   1,   1,   1,   1,    0 },
-  /* CXX11    */  { 1,  1,  1,   0,  1,   1,   1,   1,   1,   1,    0 },
-  /* GNUCXX1Y */  { 1,  1,  1,   0,  0,   1,   1,   1,   1,   1,    1 },
-  /* CXX1Y    */  { 1,  1,  1,   0,  1,   1,   1,   1,   1,   1,    1 },
-  /* ASM      */  { 0,  0,  1,   0,  0,   1,   0,   0,   0,   0,    0 }
+{ /*              c99 c++ xnum xid c11 std  //   digr ulit rlit udlit bin_cst dig_sep */
+  /* GNUC89   */  { 0,  0,  1,   0,  0,  0,   1,   1,   0,   0,   0,    0,      0 },
+  /* GNUC99   */  { 1,  0,  1,   0,  0,  0,   1,   1,   1,   1,   0,    0,      0 },
+  /* GNUC11   */  { 1,  0,  1,   0,  1,  0,   1,   1,   1,   1,   0,    0,      0 },
+  /* STDC89   */  { 0,  0,  0,   0,  0,  1,   0,   0,   0,   0,   0,    0,      0 },
+  /* STDC94   */  { 0,  0,  0,   0,  0,  1,   0,   1,   0,   0,   0,    0,      0 },
+  /* STDC99   */  { 1,  0,  1,   0,  0,  1,   1,   1,   0,   0,   0,    0,      0 },
+  /* STDC11   */  { 1,  0,  1,   0,  1,  1,   1,   1,   1,   0,   0,    0,      0 },
+  /* GNUCXX   */  { 0,  1,  1,   0,  0,  0,   1,   1,   0,   0,   0,    0,      0 },
+  /* CXX98    */  { 0,  1,  1,   0,  0,  1,   1,   1,   0,   0,   0,    0,      0 },
+  /* GNUCXX11 */  { 1,  1,  1,   0,  1,  0,   1,   1,   1,   1,   1,    0,      0 },
+  /* CXX11    */  { 1,  1,  1,   0,  1,  1,   1,   1,   1,   1,   1,    0,      0 },
+  /* GNUCXX1Y */  { 1,  1,  1,   0,  1,  0,   1,   1,   1,   1,   1,    1,      1 },
+  /* CXX1Y    */  { 1,  1,  1,   0,  1,  1,   1,   1,   1,   1,   1,    1,      1 },
+  /* ASM      */  { 0,  0,  1,   0,  0,  0,   1,   0,   0,   0,   0,    0,      0 }
   /* xid should be 1 for GNUC99, STDC99, GNUCXX, CXX98, GNUCXX11, CXX11,
      GNUCXX1Y, and CXX1Y when no longer experimental (when all uses of
      identifiers in the compiler have been audited for correct handling
@@ -120,6 +122,7 @@ cpp_set_lang (cpp_reader *pfile, enum c_lang lang)
   CPP_OPTION (pfile, cplusplus)			 = l->cplusplus;
   CPP_OPTION (pfile, extended_numbers)		 = l->extended_numbers;
   CPP_OPTION (pfile, extended_identifiers)	 = l->extended_identifiers;
+  CPP_OPTION (pfile, c11_identifiers)		 = l->c11_identifiers;
   CPP_OPTION (pfile, std)			 = l->std;
   CPP_OPTION (pfile, trigraphs)			 = l->std;
   CPP_OPTION (pfile, cplusplus_comments)	 = l->cplusplus_comments;
@@ -128,6 +131,7 @@ cpp_set_lang (cpp_reader *pfile, enum c_lang lang)
   CPP_OPTION (pfile, rliterals)			 = l->rliterals;
   CPP_OPTION (pfile, user_literals)		 = l->user_literals;
   CPP_OPTION (pfile, binary_constants)		 = l->binary_constants;
+  CPP_OPTION (pfile, digit_separators)		 = l->digit_separators;
 }
 
 /* Initialize library global state.  */
@@ -191,6 +195,7 @@ cpp_create_reader (enum c_lang lang, cpp_hash_table *table,
   CPP_OPTION (pfile, canonical_system_headers)
       = ENABLE_CANONICAL_SYSTEM_HEADERS;
   CPP_OPTION (pfile, ext_numeric_literals) = 1;
+  CPP_OPTION (pfile, warn_date_time) = 0;
 
   /* Default CPP arithmetic to something sensible for the host for the
      benefit of dumb users like fix-header.  */

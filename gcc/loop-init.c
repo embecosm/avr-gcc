@@ -1,5 +1,5 @@
 /* Loop optimizer initialization routines and RTL loop optimization passes.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,6 +22,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "rtl.h"
+#include "tree.h"
 #include "regs.h"
 #include "obstack.h"
 #include "basic-block.h"
@@ -30,7 +31,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "flags.h"
 #include "df.h"
 #include "ggc.h"
-#include "tree-flow.h"
+#include "tree-ssa-loop-niter.h"
 
 
 /* Apply FLAGS to the loop state.  */
@@ -134,7 +135,6 @@ loop_optimizer_init (unsigned flags)
 void
 loop_optimizer_finalize (void)
 {
-  loop_iterator li;
   struct loop *loop;
   basic_block bb;
 
@@ -161,17 +161,15 @@ loop_optimizer_finalize (void)
 
   gcc_assert (current_loops != NULL);
 
-  FOR_EACH_LOOP (li, loop, 0)
-    {
-      free_simple_loop_desc (loop);
-    }
+  FOR_EACH_LOOP (loop, 0)
+    free_simple_loop_desc (loop);
 
   /* Clean up.  */
   flow_loops_free (current_loops);
   ggc_free (current_loops);
   current_loops = NULL;
 
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
     {
       bb->loop_father = NULL;
     }
@@ -198,7 +196,6 @@ fix_loop_structure (bitmap changed_bbs)
 {
   basic_block bb;
   int record_exits = 0;
-  loop_iterator li;
   struct loop *loop;
   unsigned old_nloops, i;
 
@@ -216,14 +213,14 @@ fix_loop_structure (bitmap changed_bbs)
   /* Remember the depth of the blocks in the loop hierarchy, so that we can
      recognize blocks whose loop nesting relationship has changed.  */
   if (changed_bbs)
-    FOR_EACH_BB (bb)
+    FOR_EACH_BB_FN (bb, cfun)
       bb->aux = (void *) (size_t) loop_depth (bb->loop_father);
 
   /* Remove the dead loops from structures.  We start from the innermost
      loops, so that when we remove the loops, we know that the loops inside
      are preserved, and do not waste time relinking loops that will be
      removed later.  */
-  FOR_EACH_LOOP (li, loop, LI_FROM_INNERMOST)
+  FOR_EACH_LOOP (loop, LI_FROM_INNERMOST)
     {
       /* Detect the case that the loop is no longer present even though
          it wasn't marked for removal.
@@ -259,7 +256,7 @@ fix_loop_structure (bitmap changed_bbs)
   /* Mark the blocks whose loop has changed.  */
   if (changed_bbs)
     {
-      FOR_EACH_BB (bb)
+      FOR_EACH_BB_FN (bb, cfun)
 	{
 	  if ((void *) (size_t) loop_depth (bb->loop_father) != bb->aux)
 	    bitmap_set_bit (changed_bbs, bb->index);
@@ -316,25 +313,42 @@ gate_handle_loop2 (void)
     } 
 }
 
-struct rtl_opt_pass pass_loop2 =
+namespace {
+
+const pass_data pass_data_loop2 =
 {
- {
-  RTL_PASS,
-  "loop2",                              /* name */
-  OPTGROUP_LOOP,                        /* optinfo_flags */
-  gate_handle_loop2, 		        /* gate */
-  NULL,                                 /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_LOOP,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  0                                     /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "loop2", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  true, /* has_gate */
+  false, /* has_execute */
+  TV_LOOP, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_loop2 : public rtl_opt_pass
+{
+public:
+  pass_loop2 (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_loop2, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_loop2 (); }
+
+}; // class pass_loop2
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_loop2 (gcc::context *ctxt)
+{
+  return new pass_loop2 (ctxt);
+}
 
 
 /* Initialization of the RTL loop passes.  */
@@ -353,25 +367,42 @@ rtl_loop_init (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_rtl_loop_init =
+namespace {
+
+const pass_data pass_data_rtl_loop_init =
 {
- {
-  RTL_PASS,
-  "loop2_init",                           /* name */
-  OPTGROUP_LOOP,                        /* optinfo_flags */
-  NULL,                                 /* gate */
-  rtl_loop_init,                        /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_LOOP,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_verify_rtl_sharing               /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "loop2_init", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  false, /* has_gate */
+  true, /* has_execute */
+  TV_LOOP, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_rtl_sharing, /* todo_flags_finish */
 };
+
+class pass_rtl_loop_init : public rtl_opt_pass
+{
+public:
+  pass_rtl_loop_init (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_loop_init, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  unsigned int execute () { return rtl_loop_init (); }
+
+}; // class pass_rtl_loop_init
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_loop_init (gcc::context *ctxt)
+{
+  return new pass_rtl_loop_init (ctxt);
+}
 
 
 /* Finalization of the RTL loop passes.  */
@@ -394,26 +425,42 @@ rtl_loop_done (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_rtl_loop_done =
+namespace {
+
+const pass_data pass_data_rtl_loop_done =
 {
- {
-  RTL_PASS,
-  "loop2_done",                          /* name */
-  OPTGROUP_LOOP,                        /* optinfo_flags */
-  NULL,                                 /* gate */
-  rtl_loop_done,                        /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_LOOP,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  PROP_loops,                           /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_verify_flow
-    | TODO_verify_rtl_sharing           /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "loop2_done", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  false, /* has_gate */
+  true, /* has_execute */
+  TV_LOOP, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  PROP_loops, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_verify_flow | TODO_verify_rtl_sharing ), /* todo_flags_finish */
 };
+
+class pass_rtl_loop_done : public rtl_opt_pass
+{
+public:
+  pass_rtl_loop_done (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_loop_done, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  unsigned int execute () { return rtl_loop_done (); }
+
+}; // class pass_rtl_loop_done
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_loop_done (gcc::context *ctxt)
+{
+  return new pass_rtl_loop_done (ctxt);
+}
 
 
 /* Loop invariant code motion.  */
@@ -431,26 +478,44 @@ rtl_move_loop_invariants (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_rtl_move_loop_invariants =
+namespace {
+
+const pass_data pass_data_rtl_move_loop_invariants =
 {
- {
-  RTL_PASS,
-  "loop2_invariant",                    /* name */
-  OPTGROUP_LOOP,                        /* optinfo_flags */
-  gate_rtl_move_loop_invariants,        /* gate */
-  rtl_move_loop_invariants,             /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_LOOP_MOVE_INVARIANTS,              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_verify |
-  TODO_df_finish | TODO_verify_rtl_sharing  /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "loop2_invariant", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_LOOP_MOVE_INVARIANTS, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_verify | TODO_df_finish
+    | TODO_verify_rtl_sharing ), /* todo_flags_finish */
 };
+
+class pass_rtl_move_loop_invariants : public rtl_opt_pass
+{
+public:
+  pass_rtl_move_loop_invariants (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_move_loop_invariants, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_rtl_move_loop_invariants (); }
+  unsigned int execute () { return rtl_move_loop_invariants (); }
+
+}; // class pass_rtl_move_loop_invariants
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_move_loop_invariants (gcc::context *ctxt)
+{
+  return new pass_rtl_move_loop_invariants (ctxt);
+}
 
 
 /* Loop unswitching for RTL.  */
@@ -468,25 +533,43 @@ rtl_unswitch (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_rtl_unswitch =
+namespace {
+
+const pass_data pass_data_rtl_unswitch =
 {
- {
-  RTL_PASS,
-  "loop2_unswitch",                      /* name */
-  OPTGROUP_LOOP,                        /* optinfo_flags */
-  gate_rtl_unswitch,                    /* gate */
-  rtl_unswitch,                         /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_LOOP_UNSWITCH,                     /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_verify_rtl_sharing,              /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "loop2_unswitch", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_LOOP_UNSWITCH, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_rtl_sharing, /* todo_flags_finish */
 };
+
+class pass_rtl_unswitch : public rtl_opt_pass
+{
+public:
+  pass_rtl_unswitch (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_unswitch, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_rtl_unswitch (); }
+  unsigned int execute () { return rtl_unswitch (); }
+
+}; // class pass_rtl_unswitch
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_unswitch (gcc::context *ctxt)
+{
+  return new pass_rtl_unswitch (ctxt);
+}
 
 
 /* Loop unswitching for RTL.  */
@@ -517,25 +600,43 @@ rtl_unroll_and_peel_loops (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_rtl_unroll_and_peel_loops =
+namespace {
+
+const pass_data pass_data_rtl_unroll_and_peel_loops =
 {
- {
-  RTL_PASS,
-  "loop2_unroll",                        /* name */
-  OPTGROUP_LOOP,                        /* optinfo_flags */
-  gate_rtl_unroll_and_peel_loops,       /* gate */
-  rtl_unroll_and_peel_loops,            /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_LOOP_UNROLL,                       /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_verify_rtl_sharing,              /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "loop2_unroll", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_LOOP_UNROLL, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_rtl_sharing, /* todo_flags_finish */
 };
+
+class pass_rtl_unroll_and_peel_loops : public rtl_opt_pass
+{
+public:
+  pass_rtl_unroll_and_peel_loops (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_unroll_and_peel_loops, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_rtl_unroll_and_peel_loops (); }
+  unsigned int execute () { return rtl_unroll_and_peel_loops (); }
+
+}; // class pass_rtl_unroll_and_peel_loops
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_unroll_and_peel_loops (gcc::context *ctxt)
+{
+  return new pass_rtl_unroll_and_peel_loops (ctxt);
+}
 
 
 /* The doloop optimization.  */
@@ -559,22 +660,40 @@ rtl_doloop (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_rtl_doloop =
+namespace {
+
+const pass_data pass_data_rtl_doloop =
 {
- {
-  RTL_PASS,
-  "loop2_doloop",                        /* name */
-  OPTGROUP_LOOP,                        /* optinfo_flags */
-  gate_rtl_doloop,                      /* gate */
-  rtl_doloop,                           /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_LOOP_DOLOOP,                       /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_verify_rtl_sharing               /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "loop2_doloop", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_LOOP_DOLOOP, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_rtl_sharing, /* todo_flags_finish */
 };
+
+class pass_rtl_doloop : public rtl_opt_pass
+{
+public:
+  pass_rtl_doloop (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_doloop, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_rtl_doloop (); }
+  unsigned int execute () { return rtl_doloop (); }
+
+}; // class pass_rtl_doloop
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_doloop (gcc::context *ctxt)
+{
+  return new pass_rtl_doloop (ctxt);
+}

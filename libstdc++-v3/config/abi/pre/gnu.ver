@@ -1,6 +1,6 @@
 ## Linker script for GNU versioning (GNU ld 2.13.91+ only.)
 ##
-## Copyright (C) 2002-2013 Free Software Foundation, Inc.
+## Copyright (C) 2002-2014 Free Software Foundation, Inc.
 ##
 ## This file is part of the GNU ISO C++ Library.  This library is free
 ## software; you can redistribute it and/or modify it under the
@@ -1303,9 +1303,6 @@ GLIBCXX_3.4.17 {
     _ZN11__gnu_debug25_Safe_local_iterator_base9_M_attachEPNS_19_Safe_sequence_baseEb;
     _ZN11__gnu_debug25_Safe_local_iterator_base9_M_detachEv;
 
-    # std::chrono::steady_clock::now()
-    _ZNSt6chrono12steady_clock3nowEv;
-
     # std::numeric_limits<__int128> and <unsigned __int128>
     _ZNSt14numeric_limitsInE*;
     _ZNSt14numeric_limitsIoE*;
@@ -1322,6 +1319,9 @@ GLIBCXX_3.4.17 {
     _ZNSt13__future_base19_Async_state_commonD0Ev;
     _ZNSt13__future_base19_Async_state_commonD1Ev;
     _ZNSt13__future_base19_Async_state_commonD2Ev;
+
+    # std::chrono::steady_clock::now()
+    _ZNSt6chrono12steady_clock3nowEv;
 
 } GLIBCXX_3.4.16;
 
@@ -1346,6 +1346,16 @@ GLIBCXX_3.4.18 {
 
 GLIBCXX_3.4.19 {
 
+    # chrono second generation
+    _ZNSt6chrono3_V212steady_clock3nowEv;
+    _ZNSt6chrono3_V212steady_clock9is_steadyE;
+    _ZNSt6chrono3_V212system_clock3nowEv;
+    _ZNSt6chrono3_V212system_clock9is_steadyE;
+
+} GLIBCXX_3.4.18;
+
+GLIBCXX_3.4.20 {
+
     # std::get_new_handler()
     _ZSt15get_new_handlerv;
 
@@ -1355,7 +1365,13 @@ GLIBCXX_3.4.19 {
     # std::get_unexpected()
     _ZSt14get_unexpectedv;
 
-} GLIBCXX_3.4.18;
+    # std::__throw_out_of_range_fmt(char const*, ...)
+    _ZSt24__throw_out_of_range_fmtPKcz;
+
+    # std::regex_error::regex_error(std::regex_constants::error_type)
+    _ZNSt11regex_errorC[01]ENSt15regex_constants10error_typeE;
+
+} GLIBCXX_3.4.19;
 
 # Symbols in the support library (libsupc++) have their own tag.
 CXXABI_1.3 {
@@ -1559,6 +1575,19 @@ CXXABI_1.3.7 {
 CXXABI_1.3.8 {
     __cxa_throw_bad_array_new_length;
     _Z*St20bad_array_new_length*;
+
+    __cxa_throw_bad_array_length;
+    _Z*St16bad_array_length*;
+
+    # Virtual table verification stub functions.
+    _Z17__VLTRegisterPair*;
+    _Z22__VLTRegisterPairDebug*;
+    _Z16__VLTRegisterSet*;
+    _Z21__VLTRegisterSetDebug*;
+    _Z24__VLTVerifyVtablePointer*;
+    _Z29__VLTVerifyVtablePointerDebug*;
+    __VLTChangePermission;
+
 } CXXABI_1.3.7;
 
 # Symbols in the support library (libsupc++) supporting transactional memory.

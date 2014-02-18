@@ -1,5 +1,5 @@
 /* Loop unswitching for GNU compiler.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -126,7 +126,7 @@ compare_and_jump_seq (rtx op0, rtx op1, enum rtx_code comp, rtx label, int prob,
       JUMP_LABEL (jump) = label;
       LABEL_NUSES (label)++;
     }
-  add_reg_note (jump, REG_BR_PROB, GEN_INT (prob));
+  add_int_reg_note (jump, REG_BR_PROB, prob);
 
   seq = get_insns ();
   end_sequence ();
@@ -138,13 +138,12 @@ compare_and_jump_seq (rtx op0, rtx op1, enum rtx_code comp, rtx label, int prob,
 void
 unswitch_loops (void)
 {
-  loop_iterator li;
   struct loop *loop;
   bool changed = false;
 
   /* Go through inner loops (only original ones).  */
 
-  FOR_EACH_LOOP (li, loop, LI_ONLY_INNERMOST)
+  FOR_EACH_LOOP (loop, LI_ONLY_INNERMOST)
     changed |= unswitch_single_loop (loop, NULL_RTX, 0);
 
   iv_analysis_done ();
@@ -191,6 +190,7 @@ may_unswitch_on (basic_block bb, struct loop *loop, rtx *cinsn)
   if (!test)
     return NULL_RTX;
 
+  mode = VOIDmode;
   for (i = 0; i < 2; i++)
     {
       op[i] = XEXP (test, i);
@@ -205,11 +205,15 @@ may_unswitch_on (basic_block bb, struct loop *loop, rtx *cinsn)
 	return NULL_RTX;
 
       op[i] = get_iv_value (&iv, const0_rtx);
+      if (iv.extend != IV_UNKNOWN_EXTEND
+	  && iv.mode != iv.extend_mode)
+	op[i] = lowpart_subreg (iv.mode, op[i], iv.extend_mode);
+      if (mode == VOIDmode)
+	mode = iv.mode;
+      else
+	gcc_assert (mode == iv.mode);
     }
 
-  mode = GET_MODE (op[0]);
-  if (mode == VOIDmode)
-    mode = GET_MODE (op[1]);
   if (GET_MODE_CLASS (mode) == MODE_CC)
     {
       if (at != BB_END (bb))
@@ -304,7 +308,7 @@ unswitch_single_loop (struct loop *loop, rtx cond_checked, int num)
     }
 
   /* Nor if the loop usually does not roll.  */
-  iterations = estimated_loop_iterations_int (loop);
+  iterations = get_estimated_loop_iterations_int (loop);
   if (iterations >= 0 && iterations <= 1)
     {
       if (dump_file)
@@ -429,7 +433,7 @@ unswitch_loop (struct loop *loop, basic_block unswitch_on, rtx cond, rtx cinsn)
 
   /* Create a block with the condition.  */
   prob = true_edge->probability;
-  switch_bb = create_empty_bb (EXIT_BLOCK_PTR->prev_bb);
+  switch_bb = create_empty_bb (EXIT_BLOCK_PTR_FOR_FN (cfun)->prev_bb);
   seq = compare_and_jump_seq (XEXP (cond, 0), XEXP (cond, 1), GET_CODE (cond),
 			      block_label (true_edge->dest),
 			      prob, cinsn);

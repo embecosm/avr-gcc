@@ -1,5 +1,5 @@
 /* Tree-dumping functionality for intermediate representation.
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
    Written by Mark Mitchell <mark@codesourcery.com>
 
 This file is part of GCC.
@@ -346,7 +346,7 @@ cp_dump_tree (void* dump_info, tree t)
 	    }
 	  dump_int (di, "fixd", THUNK_FIXED_OFFSET (t));
 	  if (virt)
-	    dump_int (di, "virt", tree_low_cst (virt, 0));
+	    dump_int (di, "virt", tree_to_shwi (virt));
 	  dump_child ("fn", DECL_INITIAL (t));
 	}
       break;

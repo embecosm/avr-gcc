@@ -1,5 +1,5 @@
 /* RunTime Type Identification
-   Copyright (C) 1995-2013 Free Software Foundation, Inc.
+   Copyright (C) 1995-2014 Free Software Foundation, Inc.
    Mostly written by Jason Merrill (jason@cygnus.com).
 
 This file is part of GCC.
@@ -24,6 +24,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "stor-layout.h"
 #include "cp-tree.h"
 #include "flags.h"
 #include "convert.h"
@@ -393,9 +395,12 @@ get_tinfo_decl (tree type)
 
   if (variably_modified_type_p (type, /*fn=*/NULL_TREE))
     {
-      error ("cannot create type information for type %qT because "
-	     "it involves types of variable size",
-	     type);
+      if (array_of_runtime_bound_p (type))
+	error ("typeid of array of runtime bound");
+      else
+	error ("cannot create type information for type %qT because "
+	       "it involves types of variable size",
+	       type);
       return error_mark_node;
     }
 
@@ -619,19 +624,10 @@ build_dynamic_cast_1 (tree type, tree expr, tsubst_flags_t complain)
   /* If *type is an unambiguous accessible base class of *exprtype,
      convert statically.  */
   {
-    tree binfo;
-
-    binfo = lookup_base (TREE_TYPE (exprtype), TREE_TYPE (type),
-			 ba_check, NULL, complain);
-
+    tree binfo = lookup_base (TREE_TYPE (exprtype), TREE_TYPE (type),
+			      ba_check, NULL, complain);
     if (binfo)
-      {
-	expr = build_base_path (PLUS_EXPR, convert_from_reference (expr),
-				binfo, 0, complain);
-	if (TYPE_PTR_P (exprtype))
-	  expr = rvalue (expr);
-	return expr;
-      }
+      return build_static_cast (type, expr, complain);
   }
 
   /* Otherwise *exprtype must be a polymorphic class (have a vtbl).  */
@@ -745,8 +741,8 @@ build_dynamic_cast_1 (tree type, tree expr, tsubst_flags_t complain)
 					      const_ptr_type_node,
 					      tinfo_ptr, tinfo_ptr,
 					      ptrdiff_type_node, NULL_TREE);
-	      dcast_fn = build_library_fn_ptr (name, tmp);
-	      DECL_PURE_P (dcast_fn) = 1;
+	      dcast_fn = build_library_fn_ptr (name, tmp,
+					       ECF_LEAF | ECF_PURE | ECF_NOTHROW);
 	      pop_abi_namespace ();
 	      dynamic_cast_node = dcast_fn;
 	    }

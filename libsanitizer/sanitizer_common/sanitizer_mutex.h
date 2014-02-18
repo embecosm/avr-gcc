@@ -38,6 +38,10 @@ class StaticSpinMutex {
     atomic_store(&state_, 0, memory_order_release);
   }
 
+  void CheckLocked() {
+    CHECK_EQ(atomic_load(&state_, memory_order_relaxed), 1);
+  }
+
  private:
   atomic_uint8_t state_;
 
@@ -68,8 +72,10 @@ class SpinMutex : public StaticSpinMutex {
 class BlockingMutex {
  public:
   explicit BlockingMutex(LinkerInitialized);
+  BlockingMutex();
   void Lock();
   void Unlock();
+  void CheckLocked();
  private:
   uptr opaque_storage_[10];
   uptr owner_;  // for debugging

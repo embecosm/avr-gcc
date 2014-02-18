@@ -1,5 +1,5 @@
 /* Tree-dumping functionality for intermediate representation.
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
    Written by Mark Mitchell <mark@codesourcery.com>
 
 This file is part of GCC.
@@ -29,6 +29,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "langhooks.h"
 #include "tree-iterator.h"
 #include "tree-pretty-print.h"
+#include "tree-cfg.h"
 
 static unsigned int queue (dump_info_p, const_tree, int);
 static void dump_index (dump_info_p, unsigned int);
@@ -277,7 +278,7 @@ dequeue_and_dump (dump_info_p di)
   if (dni->binfo_p)
     code_name = "binfo";
   else
-    code_name = tree_code_name[(int) TREE_CODE (t)];
+    code_name = get_tree_code_name (TREE_CODE (t));
   fprintf (di->stream, "%-16s ", code_name);
   di->column = 25;
 

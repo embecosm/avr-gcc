@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler. Matsushita MN10300 series
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Jeff Law (law@cygnus.com).
 
    This file is part of GCC.
@@ -32,7 +32,7 @@ extern void  mn10300_print_operand (FILE *, rtx, int);
 extern void  mn10300_print_operand_address (FILE *, rtx);
 extern void  mn10300_print_reg_list (FILE *, int);
 extern enum machine_mode mn10300_select_cc_mode (enum rtx_code, rtx, rtx);
-extern int   mn10300_store_multiple_operation (rtx, enum machine_mode);
+extern unsigned int mn10300_store_multiple_regs (rtx);
 extern int   mn10300_symbolic_operand (rtx, enum machine_mode);
 extern void  mn10300_split_cbranch (enum machine_mode, rtx, rtx);
 extern int   mn10300_split_and_operand_count (rtx);

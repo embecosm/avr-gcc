@@ -1,5 +1,5 @@
 /* Target Code for TI C6X
-   Copyright (C) 2010-2013 Free Software Foundation, Inc.
+   Copyright (C) 2010-2014 Free Software Foundation, Inc.
    Contributed by Andrew Jenner <andrew@codesourcery.com>
    Contributed by Bernd Schmidt <bernds@codesourcery.com>
 
@@ -25,6 +25,10 @@
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "varasm.h"
+#include "calls.h"
+#include "stringpool.h"
 #include "insn-flags.h"
 #include "output.h"
 #include "insn-attr.h"
@@ -52,6 +56,7 @@
 #include "hw-doloop.h"
 #include "regrename.h"
 #include "dumpfile.h"
+#include "gimple-expr.h"
 
 /* Table of supported architecture variants.  */
 typedef struct
@@ -4624,7 +4629,7 @@ c6x_gen_bundles (void)
   basic_block bb;
   rtx insn, next, last_call;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       rtx insn, next;
       /* The machine is eight insns wide.  We can have up to six shadow
@@ -5378,7 +5383,7 @@ conditionalize_after_sched (void)
 {
   basic_block bb;
   rtx insn;
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     FOR_BB_INSNS (bb, insn)
       {
 	unsigned uid = INSN_UID (insn);
@@ -5954,7 +5959,7 @@ c6x_reorg (void)
 
   if (c6x_flag_schedule_insns2)
     {
-      FOR_EACH_BB (bb)
+      FOR_EACH_BB_FN (bb, cfun)
 	if ((bb->flags & BB_DISABLE_SCHEDULE) == 0)
 	  assign_reservations (BB_HEAD (bb), BB_END (bb));
     }

@@ -204,7 +204,7 @@ package body Sprint is
      (Node    : Node_Id;
       Default : Node_Id);
    --  Print the end label for a Handled_Sequence_Of_Statements in a body.
-   --  If there is not end label, use the defining identifier of the enclosing
+   --  If there is no end label, use the defining identifier of the enclosing
    --  construct. If the end label is present, treat it as a reference to the
    --  defining entity of the construct: this guarantees that it carries the
    --  proper sloc information for debugging purposes.
@@ -800,6 +800,7 @@ package body Sprint is
             --  do not duplicate the output at this point.
 
             if Nkind (Node) = N_Freeze_Entity
+              or else Nkind (Node) = N_Freeze_Generic_Entity
               or else Nkind (Node) = N_Implicit_Label_Declaration
             then
                Sprint_Node_Actual (Node);
@@ -1130,7 +1131,7 @@ package body Sprint is
 
             if Present (Identifier (Node))
               and then (not Has_Created_Identifier (Node)
-                          or else not Dump_Original_Only)
+                         or else not Dump_Original_Only)
             then
                Write_Rewrite_Str ("<<<");
                Write_Id (Identifier (Node));
@@ -1862,6 +1863,16 @@ package body Sprint is
                Write_Rewrite_Str (">>>");
             end if;
 
+         when N_Freeze_Generic_Entity =>
+            if Dump_Original_Only then
+               null;
+
+            else
+               Write_Indent;
+               Write_Str_With_Col_Check_Sloc ("freeze_generic ");
+               Write_Id (Entity (Node));
+            end if;
+
          when N_Full_Type_Declaration =>
             Write_Indent_Str_Sloc ("type ");
             Sprint_Node (Defining_Identifier (Node));
@@ -1998,7 +2009,7 @@ package body Sprint is
                Sprint_Node (Condition);
                Write_Str_With_Col_Check (" then ");
 
-               --  Defense against junk here!
+               --  Defense against junk here
 
                if Present (Then_Expr) then
                   Sprint_Node (Then_Expr);
@@ -2479,6 +2490,18 @@ package body Sprint is
             Sprint_Node_Sloc (Specification (Node));
             Write_Char (';');
 
+            --  If this is an instantiation, get the aspects from the original
+            --  instantiation node.
+
+            if Is_Generic_Instance (Defining_Entity (Node))
+              and then Has_Aspects
+                         (Package_Instantiation (Defining_Entity (Node)))
+            then
+               Sprint_Aspect_Specifications
+                 (Package_Instantiation (Defining_Entity (Node)),
+                   Semicolon => True);
+            end if;
+
          when N_Package_Instantiation =>
             Extra_Blank_Line;
             Write_Indent_Str_Sloc ("package ");
@@ -2499,12 +2522,27 @@ package body Sprint is
             Write_Str_With_Col_Check_Sloc ("package ");
             Sprint_Node (Defining_Unit_Name (Node));
 
-            if Nkind_In (Parent (Node), N_Package_Declaration,
-                                        N_Generic_Package_Declaration)
+            if Nkind (Parent (Node)) = N_Generic_Package_Declaration
               and then Has_Aspects (Parent (Node))
             then
                Sprint_Aspect_Specifications
                  (Parent (Node), Semicolon => False);
+
+            --  An instantiation is rewritten as a package declaration, but
+            --  the aspects belong to the instantiation node.
+
+            elsif Nkind (Parent (Node)) = N_Package_Declaration then
+               declare
+                  Pack : constant Entity_Id := Defining_Entity (Node);
+
+               begin
+                  if not Is_Generic_Instance (Pack) then
+                     if Has_Aspects (Parent (Node)) then
+                        Sprint_Aspect_Specifications
+                          (Parent (Node), Semicolon => False);
+                     end if;
+                  end if;
+               end;
             end if;
 
             Write_Str (" is");
@@ -3052,10 +3090,6 @@ package body Sprint is
             end if;
 
             Write_Char (';');
-
-         when N_Subprogram_Info =>
-            Sprint_Node (Identifier (Node));
-            Write_Str_With_Col_Check_Sloc ("'subprogram_info");
 
          when N_Subprogram_Renaming_Declaration =>
             Write_Indent;
@@ -3973,7 +4007,7 @@ package body Sprint is
               and then Defining_Entity (P) = Typ
             then
                --  We must set Itype_Printed true before the recursive call to
-               --  print the node, otherwise we get an infinite recursion!
+               --  print the node, otherwise we get an infinite recursion.
 
                Set_Itype_Printed (Typ, True);
 

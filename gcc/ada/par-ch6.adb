@@ -73,9 +73,6 @@ package body Ch6 is
          else
             Restore_Scan_State (Scan_State);
          end if;
-
-      elsif Bad_Spelling_Of (Tok_Return) then
-         null;
       end if;
    end Check_Junk_Semicolon_Before_Return;
 
@@ -161,13 +158,16 @@ package body Ch6 is
    --      [ASPECT_SPECIFICATIONS];
 
    --  SUBPROGRAM_BODY_STUB ::=
-   --    SUBPROGRAM_SPECIFICATION is separate;
+   --    SUBPROGRAM_SPECIFICATION is separate
+   --      [ASPECT_SPECIFICATIONS];
 
    --  GENERIC_INSTANTIATION ::=
    --    procedure DEFINING_PROGRAM_UNIT_NAME is
-   --      new generic_procedure_NAME [GENERIC_ACTUAL_PART];
+   --      new generic_procedure_NAME [GENERIC_ACTUAL_PART]
+   --        [ASPECT_SPECIFICATIONS];
    --  | function DEFINING_DESIGNATOR is
-   --      new generic_function_NAME [GENERIC_ACTUAL_PART];
+   --      new generic_function_NAME [GENERIC_ACTUAL_PART]
+   --        [ASPECT_SPECIFICATIONS];
 
    --  NULL_PROCEDURE_DECLARATION ::=
    --    SUBPROGRAM_SPECIFICATION is null;
@@ -394,8 +394,8 @@ package body Ch6 is
       if Token = Tok_Identifier
         and then not Token_Is_At_Start_Of_Line
       then
-            T_Left_Paren; -- to generate message
-            Fpart_List := P_Formal_Part;
+         T_Left_Paren; -- to generate message
+         Fpart_List := P_Formal_Part;
 
       --  Otherwise scan out an optional formal part in the usual manner
 
@@ -681,21 +681,21 @@ package body Ch6 is
                   Sloc (Name_Node));
             end if;
 
+            Scan; -- past SEPARATE
+
             Stub_Node :=
               New_Node (N_Subprogram_Body_Stub, Sloc (Specification_Node));
             Set_Specification (Stub_Node, Specification_Node);
 
-            --  The specification has been parsed as part of a subprogram
-            --  declaration, and aspects have already been collected.
-
             if Is_Non_Empty_List (Aspects) then
-               Set_Parent (Aspects, Stub_Node);
-               Set_Aspect_Specifications (Stub_Node, Aspects);
+               Error_Msg
+                 ("aspect specifications must come after SEPARATE",
+                  Sloc (First (Aspects)));
             end if;
 
-            Scan; -- past SEPARATE
-            Pop_Scope_Stack;
+            P_Aspect_Specifications (Stub_Node, Semicolon => False);
             TF_Semicolon;
+            Pop_Scope_Stack;
             return Stub_Node;
 
          --  Subprogram body or expression function case
@@ -831,12 +831,8 @@ package body Ch6 is
 
                   --  Check we are in Ada 2012 mode
 
-                  if Ada_Version < Ada_2012 then
-                     Error_Msg_SC
-                       ("expression function is an Ada 2012 feature!");
-                     Error_Msg_SC
-                       ("\unit must be compiled with -gnat2012 switch!");
-                  end if;
+                  Error_Msg_Ada_2012_Feature
+                    ("!expression function", Token_Ptr);
 
                   --  Catch an illegal placement of the aspect specification
                   --  list:
@@ -1150,7 +1146,7 @@ package body Ch6 is
 
          --  On exit from the loop, Ident_Node is the last identifier scanned,
          --  i.e. the defining identifier, and Prefix_Node is a node for the
-         --  entire name, structured (incorrectly!) as a selected component.
+         --  entire name, structured (incorrectly) as a selected component.
 
          Name_Node := Prefix (Prefix_Node);
          Change_Node (Prefix_Node, N_Designator);
@@ -1256,7 +1252,7 @@ package body Ch6 is
 
          --  On exit from the loop, Ident_Node is the last identifier scanned,
          --  i.e. the defining identifier, and Prefix_Node is a node for the
-         --  entire name, structured (incorrectly!) as a selected component.
+         --  entire name, structured (incorrectly) as a selected component.
 
          Name_Node := Prefix (Prefix_Node);
          Change_Node (Prefix_Node, N_Defining_Program_Unit_Name);
@@ -1403,7 +1399,7 @@ package body Ch6 is
 
                      --  If we run into a semicolon, then assume that a
                      --  colon was missing, e.g.  Parms (X Y; ...). Also
-                     --  assume missing colon on EOF (a real disaster!)
+                     --  assume missing colon on EOF (a real disaster)
                      --  and on a right paren, e.g. Parms (X Y), and also
                      --  on an assignment symbol, e.g. Parms (X Y := ..)
 
@@ -1464,7 +1460,8 @@ package body Ch6 is
 
                if Token = Tok_Aliased then
                   if Ada_Version < Ada_2012 then
-                     Error_Msg_SC ("ALIASED parameter is an Ada 2012 feature");
+                     Error_Msg_Ada_2012_Feature
+                       ("ALIASED parameter", Token_Ptr);
                   else
                      Set_Aliased_Present (Specification_Node);
                   end if;

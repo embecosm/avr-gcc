@@ -1,5 +1,5 @@
 /* Dwarf2 assembler output helper routines.
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -24,6 +24,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 #include "flags.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "varasm.h"
 #include "rtl.h"
 #include "output.h"
 #include "target.h"
@@ -315,7 +317,7 @@ dw2_asm_output_nstring (const char *str, size_t orig_len,
 	  int c = str[i];
 	  if (c == '\"' || c == '\\')
 	    fputc ('\\', asm_out_file);
-	  if (ISPRINT(c))
+	  if (ISPRINT (c))
 	    fputc (c, asm_out_file);
 	  else
 	    fprintf (asm_out_file, "\\%o", c);
@@ -906,6 +908,7 @@ dw2_output_indirect_constant_1 (splay_tree_node node,
   DECL_IGNORED_P (decl) = 1;
   DECL_INITIAL (decl) = decl;
   TREE_READONLY (decl) = 1;
+  TREE_STATIC (decl) = 1;
 
   if (TREE_PUBLIC (id))
     {
@@ -914,8 +917,6 @@ dw2_output_indirect_constant_1 (splay_tree_node node,
       if (USE_LINKONCE_INDIRECT)
 	DECL_VISIBILITY (decl) = VISIBILITY_HIDDEN;
     }
-  else
-    TREE_STATIC (decl) = 1;
 
   sym_ref = gen_rtx_SYMBOL_REF (Pmode, sym);
   assemble_variable (decl, 1, 1, 1);

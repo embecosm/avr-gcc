@@ -1,5 +1,5 @@
 /* Declaration statement matcher
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -27,6 +27,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "flags.h"
 #include "constructor.h"
 #include "tree.h"
+#include "stringpool.h"
 
 /* Macros to access allocate memory for gfc_data_variable,
    gfc_data_value and gfc_data.  */
@@ -4208,6 +4209,9 @@ gfc_match_bind_c_stmt (void)
 
   if (found_match == MATCH_YES)
     {
+      if (!gfc_notify_std (GFC_STD_F2003, "BIND(C) statement at %C"))
+	return MATCH_ERROR;
+
       /* Look for the :: now, but it is not required.  */
       gfc_match (" :: ");
 
@@ -4283,12 +4287,10 @@ gfc_match_data_decl (void)
 	      || current_ts.u.derived->attr.zero_comp))
 	goto ok;
 
-      /* Now we have an error, which we signal, and then fix up
-	 because the knock-on is plain and simple confusing.  */
-      gfc_error_now ("Derived type at %C has not been previously defined "
-		     "and so cannot appear in a derived type definition");
-      current_attr.pointer = 1;
-      goto ok;
+      gfc_error ("Derived type at %C has not been previously defined "
+		 "and so cannot appear in a derived type definition");
+      m = MATCH_ERROR;
+      goto cleanup;
     }
 
 ok:
@@ -5052,7 +5054,14 @@ match_ppc_decl (void)
       if (!gfc_add_proc (&c->attr, name, NULL))
 	return MATCH_ERROR;
 
-      c->tb = tb;
+      if (num == 1)
+	c->tb = tb;
+      else
+	{
+	  c->tb = XCNEW (gfc_typebound_proc);
+	  c->tb->where = gfc_current_locus;
+	  *c->tb = *tb;
+	}
 
       /* Set interface.  */
       if (proc_if != NULL)
@@ -5351,27 +5360,59 @@ cleanup:
    to return false upon finding an existing global entry.  */
 
 static bool
-add_global_entry (const char *name, int sub)
+add_global_entry (const char *name, const char *binding_label, bool sub,
+		  locus *where)
 {
   gfc_gsymbol *s;
   enum gfc_symbol_type type;
 
-  s = gfc_get_gsymbol(name);
   type = sub ? GSYM_SUBROUTINE : GSYM_FUNCTION;
 
-  if (s->defined
-      || (s->type != GSYM_UNKNOWN
-	  && s->type != type))
-    gfc_global_used(s, NULL);
-  else
+  /* Only in Fortran 2003: For procedures with a binding label also the Fortran
+     name is a global identifier.  */
+  if (!binding_label || gfc_notification_std (GFC_STD_F2008))
     {
-      s->type = type;
-      s->where = gfc_current_locus;
-      s->defined = 1;
-      s->ns = gfc_current_ns;
-      return true;
+      s = gfc_get_gsymbol (name);
+
+      if (s->defined || (s->type != GSYM_UNKNOWN && s->type != type))
+	{
+	  gfc_global_used (s, where);
+	  return false;
+	}
+      else
+	{
+	  s->type = type;
+	  s->sym_name = name;
+	  s->where = *where;
+	  s->defined = 1;
+	  s->ns = gfc_current_ns;
+	}
     }
-  return false;
+
+  /* Don't add the symbol multiple times.  */
+  if (binding_label
+      && (!gfc_notification_std (GFC_STD_F2008)
+	  || strcmp (name, binding_label) != 0))
+    {
+      s = gfc_get_gsymbol (binding_label);
+
+      if (s->defined || (s->type != GSYM_UNKNOWN && s->type != type))
+	{
+	  gfc_global_used (s, where);
+	  return false;
+	}
+      else
+	{
+	  s->type = type;
+	  s->sym_name = name;
+	  s->binding_label = binding_label;
+	  s->where = *where;
+	  s->defined = 1;
+	  s->ns = gfc_current_ns;
+	}
+    }
+
+  return true;
 }
 
 
@@ -5494,15 +5535,12 @@ gfc_match_entry (void)
 
   /* Check what next non-whitespace character is so we can tell if there
      is the required parens if we have a BIND(C).  */
+  old_loc = gfc_current_locus;
   gfc_gobble_whitespace ();
   peek_char = gfc_peek_ascii_char ();
 
   if (state == COMP_SUBROUTINE)
     {
-      /* An entry in a subroutine.  */
-      if (!gfc_current_ns->parent && !add_global_entry (name, 1))
-	return MATCH_ERROR;
-
       m = gfc_match_formal_arglist (entry, 0, 1);
       if (m != MATCH_YES)
 	return MATCH_ERROR;
@@ -5524,6 +5562,12 @@ gfc_match_entry (void)
 	      return MATCH_ERROR;
 	}
 
+      if (!gfc_current_ns->parent
+	  && !add_global_entry (name, entry->binding_label, true,
+				&old_loc))
+	return MATCH_ERROR;
+
+      /* An entry in a subroutine.  */
       if (!gfc_add_entry (&entry->attr, entry->name, NULL)
 	  || !gfc_add_subroutine (&entry->attr, entry->name, NULL))
 	return MATCH_ERROR;
@@ -5539,10 +5583,6 @@ gfc_match_entry (void)
 	    ENTRY f() RESULT (r)
 	 can't be written as
 	    ENTRY f RESULT (r).  */
-      if (!gfc_current_ns->parent && !add_global_entry (name, 0))
-	return MATCH_ERROR;
-
-      old_loc = gfc_current_locus;
       if (gfc_match_eos () == MATCH_YES)
 	{
 	  gfc_current_locus = old_loc;
@@ -5590,6 +5630,11 @@ gfc_match_entry (void)
 	      entry->result = entry;
 	    }
 	}
+
+      if (!gfc_current_ns->parent
+	  && !add_global_entry (name, entry->binding_label, false,
+				&old_loc))
+	return MATCH_ERROR;
     }
 
   if (gfc_match_eos () != MATCH_YES)
@@ -6072,6 +6117,7 @@ gfc_match_end (gfc_statement *st)
       goto cleanup;
     }
 
+  old_loc = gfc_current_locus;
   if (gfc_match_eos () == MATCH_YES)
     {
       if (!eos_ok && (*st == ST_END_SUBROUTINE || *st == ST_END_FUNCTION))
@@ -6095,10 +6141,12 @@ gfc_match_end (gfc_statement *st)
   /* Verify that we've got the sort of end-block that we're expecting.  */
   if (gfc_match (target) != MATCH_YES)
     {
-      gfc_error ("Expecting %s statement at %C", gfc_ascii_statement (*st));
+      gfc_error ("Expecting %s statement at %L", gfc_ascii_statement (*st),
+		 &old_loc);
       goto cleanup;
     }
 
+  old_loc = gfc_current_locus;
   /* If we're at the end, make sure a block name wasn't required.  */
   if (gfc_match_eos () == MATCH_YES)
     {
@@ -6111,8 +6159,8 @@ gfc_match_end (gfc_statement *st)
       if (!block_name)
 	return MATCH_YES;
 
-      gfc_error ("Expected block name of '%s' in %s statement at %C",
-		 block_name, gfc_ascii_statement (*st));
+      gfc_error ("Expected block name of '%s' in %s statement at %L",
+		 block_name, gfc_ascii_statement (*st), &old_loc);
 
       return MATCH_ERROR;
     }
@@ -7348,6 +7396,7 @@ syntax:
 
 
 /* Check a derived type that is being extended.  */
+
 static gfc_symbol*
 check_extended_derived_type (char *name)
 {
@@ -7359,13 +7408,14 @@ check_extended_derived_type (char *name)
       return NULL;
     }
 
+  extended = gfc_find_dt_in_generic (extended);
+
+  /* F08:C428.  */
   if (!extended)
     {
-      gfc_error ("No such symbol in TYPE definition at %C");
+      gfc_error ("Symbol '%s' at %C has not been previously defined", name);
       return NULL;
     }
-
-  extended = gfc_find_dt_in_generic (extended);
 
   if (extended->attr.flavor != FL_DERIVED)
     {
@@ -8213,7 +8263,7 @@ match_procedure_in_type (void)
 	}
 
       /* See if we already have a binding with this name in the symtree which
-	 would be an error.  If a GENERIC already targetted this binding, it may
+	 would be an error.  If a GENERIC already targeted this binding, it may
 	 be already there but then typebound is still NULL.  */
       stree = gfc_find_symtree (ns->tb_sym_root, name);
       if (stree && stree->n.tb)

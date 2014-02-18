@@ -10,16 +10,18 @@
 // Linux-specific code.
 //===----------------------------------------------------------------------===//
 
-#ifdef __linux__
+
+#include "sanitizer_common/sanitizer_platform.h"
+#if SANITIZER_LINUX
 
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_procmaps.h"
+#include "sanitizer_common/sanitizer_stoptheworld.h"
 #include "tsan_platform.h"
 #include "tsan_rtl.h"
 #include "tsan_flags.h"
 
-#include <asm/prctl.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -30,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/resource.h>
@@ -40,10 +43,21 @@
 #include <dlfcn.h>
 #define __need_res_state
 #include <resolv.h>
+#include <malloc.h>
 
-extern "C" int arch_prctl(int code, __sanitizer::uptr *addr);
+#ifdef sa_handler
+# undef sa_handler
+#endif
+
+#ifdef sa_sigaction
+# undef sa_sigaction
+#endif
+
+extern "C" struct mallinfo __libc_mallinfo();
 
 namespace __tsan {
+
+const uptr kPageSize = 4096;
 
 #ifndef TSAN_GO
 ScopedInRtl::ScopedInRtl()
@@ -66,12 +80,55 @@ ScopedInRtl::~ScopedInRtl() {
 }
 #endif
 
-uptr GetShadowMemoryConsumption() {
-  return 0;
+void FillProfileCallback(uptr start, uptr rss, bool file,
+                         uptr *mem, uptr stats_size) {
+  CHECK_EQ(7, stats_size);
+  mem[6] += rss;  // total
+  start >>= 40;
+  if (start < 0x10)  // shadow
+    mem[0] += rss;
+  else if (start >= 0x20 && start < 0x30)  // compat modules
+    mem[file ? 1 : 2] += rss;
+  else if (start >= 0x7e)  // modules
+    mem[file ? 1 : 2] += rss;
+  else if (start >= 0x60 && start < 0x62)  // traces
+    mem[3] += rss;
+  else if (start >= 0x7d && start < 0x7e)  // heap
+    mem[4] += rss;
+  else  // other
+    mem[5] += rss;
+}
+
+void WriteMemoryProfile(char *buf, uptr buf_size) {
+  uptr mem[7] = {};
+  __sanitizer::GetMemoryProfile(FillProfileCallback, mem, 7);
+  char *buf_pos = buf;
+  char *buf_end = buf + buf_size;
+  buf_pos += internal_snprintf(buf_pos, buf_end - buf_pos,
+      "RSS %zd MB: shadow:%zd file:%zd mmap:%zd trace:%zd heap:%zd other:%zd\n",
+      mem[6] >> 20, mem[0] >> 20, mem[1] >> 20, mem[2] >> 20,
+      mem[3] >> 20, mem[4] >> 20, mem[5] >> 20);
+  struct mallinfo mi = __libc_mallinfo();
+  buf_pos += internal_snprintf(buf_pos, buf_end - buf_pos,
+      "mallinfo: arena=%d mmap=%d fordblks=%d keepcost=%d\n",
+      mi.arena >> 20, mi.hblkhd >> 20, mi.fordblks >> 20, mi.keepcost >> 20);
+}
+
+uptr GetRSS() {
+  uptr mem[7] = {};
+  __sanitizer::GetMemoryProfile(FillProfileCallback, mem, 7);
+  return mem[6];
+}
+
+
+void FlushShadowMemoryCallback(
+    const SuspendedThreadsList &suspended_threads_list,
+    void *argument) {
+  FlushUnneededShadowMemory(kLinuxShadowBeg, kLinuxShadowEnd - kLinuxShadowBeg);
 }
 
 void FlushShadowMemory() {
-  FlushUnneededShadowMemory(kLinuxShadowBeg, kLinuxShadowEnd - kLinuxShadowBeg);
+  StopTheWorld(FlushShadowMemoryCallback, 0);
 }
 
 #ifndef TSAN_GO
@@ -89,6 +146,63 @@ static void ProtectRange(uptr beg, uptr end) {
 #endif
 
 #ifndef TSAN_GO
+// Mark shadow for .rodata sections with the special kShadowRodata marker.
+// Accesses to .rodata can't race, so this saves time, memory and trace space.
+static void MapRodata() {
+  // First create temp file.
+  const char *tmpdir = GetEnv("TMPDIR");
+  if (tmpdir == 0)
+    tmpdir = GetEnv("TEST_TMPDIR");
+#ifdef P_tmpdir
+  if (tmpdir == 0)
+    tmpdir = P_tmpdir;
+#endif
+  if (tmpdir == 0)
+    return;
+  char filename[256];
+  internal_snprintf(filename, sizeof(filename), "%s/tsan.rodata.%d",
+                    tmpdir, (int)internal_getpid());
+  uptr openrv = internal_open(filename, O_RDWR | O_CREAT | O_EXCL, 0600);
+  if (internal_iserror(openrv))
+    return;
+  fd_t fd = openrv;
+  // Fill the file with kShadowRodata.
+  const uptr kMarkerSize = 512 * 1024 / sizeof(u64);
+  InternalScopedBuffer<u64> marker(kMarkerSize);
+  for (u64 *p = marker.data(); p < marker.data() + kMarkerSize; p++)
+    *p = kShadowRodata;
+  internal_write(fd, marker.data(), marker.size());
+  // Map the file into memory.
+  uptr page = internal_mmap(0, kPageSize, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, fd, 0);
+  if (internal_iserror(page)) {
+    internal_close(fd);
+    internal_unlink(filename);
+    return;
+  }
+  // Map the file into shadow of .rodata sections.
+  MemoryMappingLayout proc_maps(/*cache_enabled*/true);
+  uptr start, end, offset, prot;
+  char name[128];
+  while (proc_maps.Next(&start, &end, &offset, name, ARRAY_SIZE(name), &prot)) {
+    if (name[0] != 0 && name[0] != '['
+        && (prot & MemoryMappingLayout::kProtectionRead)
+        && (prot & MemoryMappingLayout::kProtectionExecute)
+        && !(prot & MemoryMappingLayout::kProtectionWrite)
+        && IsAppMem(start)) {
+      // Assume it's .rodata
+      char *shadow_start = (char*)MemToShadow(start);
+      char *shadow_end = (char*)MemToShadow(end);
+      for (char *p = shadow_start; p < shadow_end; p += marker.size()) {
+        internal_mmap(p, Min<uptr>(marker.size(), shadow_end - p),
+                      PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, 0);
+      }
+    }
+  }
+  internal_close(fd);
+  internal_unlink(filename);
+}
+
 void InitializeShadowMemory() {
   uptr shadow = (uptr)MmapFixedNoReserve(kLinuxShadowBeg,
     kLinuxShadowEnd - kLinuxShadowBeg);
@@ -115,6 +229,8 @@ void InitializeShadowMemory() {
       kLinuxAppMemBeg, kLinuxAppMemEnd,
       (kLinuxAppMemEnd - kLinuxAppMemBeg) >> 30);
   DPrintf("stack        %zx\n", (uptr)&shadow);
+
+  MapRodata();
 }
 #endif
 
@@ -124,10 +240,11 @@ static uptr g_data_end;
 #ifndef TSAN_GO
 static void CheckPIE() {
   // Ensure that the binary is indeed compiled with -pie.
-  MemoryMappingLayout proc_maps;
+  MemoryMappingLayout proc_maps(true);
   uptr start, end;
   if (proc_maps.Next(&start, &end,
-                     /*offset*/0, /*filename*/0, /*filename_size*/0)) {
+                     /*offset*/0, /*filename*/0, /*filename_size*/0,
+                     /*protection*/0)) {
     if ((u64)start < kLinuxAppMemBeg) {
       Printf("FATAL: ThreadSanitizer can not mmap the shadow memory ("
              "something is mapped at 0x%zx < 0x%zx)\n",
@@ -140,11 +257,12 @@ static void CheckPIE() {
 }
 
 static void InitDataSeg() {
-  MemoryMappingLayout proc_maps;
+  MemoryMappingLayout proc_maps(true);
   uptr start, end, offset;
   char name[128];
   bool prev_is_data = false;
-  while (proc_maps.Next(&start, &end, &offset, name, ARRAY_SIZE(name))) {
+  while (proc_maps.Next(&start, &end, &offset, name, ARRAY_SIZE(name),
+                        /*protection*/ 0)) {
     DPrintf("%p-%p %p %s\n", start, end, offset, name);
     bool is_data = offset != 0 && name[0] != 0;
     // BSS may get merged with [heap] in /proc/self/maps. This is not very
@@ -163,27 +281,6 @@ static void InitDataSeg() {
   CHECK_LT((uptr)&g_data_start, g_data_end);
 }
 
-static uptr g_tls_size;
-
-#ifdef __i386__
-# define INTERNAL_FUNCTION __attribute__((regparm(3), stdcall))
-#else
-# define INTERNAL_FUNCTION
-#endif
-
-static int InitTlsSize() {
-  typedef void (*get_tls_func)(size_t*, size_t*) INTERNAL_FUNCTION;
-  get_tls_func get_tls;
-  void *get_tls_static_info_ptr = dlsym(RTLD_NEXT, "_dl_get_tls_static_info");
-  CHECK_EQ(sizeof(get_tls), sizeof(get_tls_static_info_ptr));
-  internal_memcpy(&get_tls, &get_tls_static_info_ptr,
-                  sizeof(get_tls_static_info_ptr));
-  CHECK_NE(get_tls, 0);
-  size_t tls_size = 0;
-  size_t tls_align = 0;
-  get_tls(&tls_size, &tls_align);
-  return tls_size;
-}
 #endif  // #ifndef TSAN_GO
 
 static rlim_t getlim(int res) {
@@ -238,51 +335,10 @@ const char *InitializePlatform() {
 
 #ifndef TSAN_GO
   CheckPIE();
-  g_tls_size = (uptr)InitTlsSize();
+  InitTlsSize();
   InitDataSeg();
 #endif
   return GetEnv(kTsanOptionsEnv);
-}
-
-void FinalizePlatform() {
-  fflush(0);
-}
-
-uptr GetTlsSize() {
-#ifndef TSAN_GO
-  return g_tls_size;
-#else
-  return 0;
-#endif
-}
-
-void GetThreadStackAndTls(bool main, uptr *stk_addr, uptr *stk_size,
-                          uptr *tls_addr, uptr *tls_size) {
-#ifndef TSAN_GO
-  arch_prctl(ARCH_GET_FS, tls_addr);
-  *tls_addr -= g_tls_size;
-  *tls_size = g_tls_size;
-
-  uptr stack_top, stack_bottom;
-  GetThreadStackTopAndBottom(main, &stack_top, &stack_bottom);
-  *stk_addr = stack_bottom;
-  *stk_size = stack_top - stack_bottom;
-
-  if (!main) {
-    // If stack and tls intersect, make them non-intersecting.
-    if (*tls_addr > *stk_addr && *tls_addr < *stk_addr + *stk_size) {
-      CHECK_GT(*tls_addr + *tls_size, *stk_addr);
-      CHECK_LE(*tls_addr + *tls_size, *stk_addr + *stk_size);
-      *stk_size -= *tls_size;
-      *tls_addr = *stk_addr + *stk_size;
-    }
-  }
-#else
-  *stk_addr = 0;
-  *stk_size = 0;
-  *tls_addr = 0;
-  *tls_size = 0;
-#endif
 }
 
 bool IsGlobalVar(uptr addr) {
@@ -290,6 +346,9 @@ bool IsGlobalVar(uptr addr) {
 }
 
 #ifndef TSAN_GO
+// Extract file descriptors passed to glibc internal __res_iclose function.
+// This is required to properly "close" the fds, because we do not see internal
+// closes within glibc. The code is a pure hack.
 int ExtractResolvFDs(void *state, int *fds, int nfd) {
   int cnt = 0;
   __res_state *statp = (__res_state*)state;
@@ -299,9 +358,29 @@ int ExtractResolvFDs(void *state, int *fds, int nfd) {
   }
   return cnt;
 }
+
+// Extract file descriptors passed via UNIX domain sockets.
+// This is requried to properly handle "open" of these fds.
+// see 'man recvmsg' and 'man 3 cmsg'.
+int ExtractRecvmsgFDs(void *msgp, int *fds, int nfd) {
+  int res = 0;
+  msghdr *msg = (msghdr*)msgp;
+  struct cmsghdr *cmsg = CMSG_FIRSTHDR(msg);
+  for (; cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+    if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+      continue;
+    int n = (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(fds[0]);
+    for (int i = 0; i < n; i++) {
+      fds[res++] = ((int*)CMSG_DATA(cmsg))[i];
+      if (res == nfd)
+        return res;
+    }
+  }
+  return res;
+}
 #endif
 
 
 }  // namespace __tsan
 
-#endif  // #ifdef __linux__
+#endif  // SANITIZER_LINUX

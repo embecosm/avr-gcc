@@ -1,5 +1,5 @@
 /* Code sinking for trees
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2014 Free Software Foundation, Inc.
    Contributed by Daniel Berlin <dan@dberlin.org>
 
 This file is part of GCC.
@@ -23,17 +23,25 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "basic-block.h"
 #include "gimple-pretty-print.h"
 #include "tree-inline.h"
-#include "tree-flow.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
 #include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
 #include "hashtab.h"
 #include "tree-iterator.h"
 #include "alloc-pool.h"
 #include "tree-pass.h"
 #include "flags.h"
-#include "bitmap.h"
 #include "cfgloop.h"
 #include "params.h"
 
@@ -166,7 +174,7 @@ nearest_common_dominator_of_uses (gimple stmt, bool *debug_stmts)
 	    }
 
 	  /* Short circuit. Nothing dominates the entry block.  */
-	  if (useblock == ENTRY_BLOCK_PTR)
+	  if (useblock == ENTRY_BLOCK_PTR_FOR_FN (cfun))
 	    {
 	      BITMAP_FREE (blocks);
 	      return NULL;
@@ -174,10 +182,10 @@ nearest_common_dominator_of_uses (gimple stmt, bool *debug_stmts)
 	  bitmap_set_bit (blocks, useblock->index);
 	}
     }
-  commondom = BASIC_BLOCK (bitmap_first_set_bit (blocks));
+  commondom = BASIC_BLOCK_FOR_FN (cfun, bitmap_first_set_bit (blocks));
   EXECUTE_IF_SET_IN_BITMAP (blocks, 0, j, bi)
     commondom = nearest_common_dominator (CDI_DOMINATORS, commondom,
-					  BASIC_BLOCK (j));
+					  BASIC_BLOCK_FOR_FN (cfun, j));
   BITMAP_FREE (blocks);
   return commondom;
 }
@@ -331,11 +339,19 @@ statement_sink_location (gimple stmt, basic_block frombb,
 	  gimple use_stmt = USE_STMT (use_p);
 
 	  /* A killing definition is not a use.  */
-	  if (gimple_assign_single_p (use_stmt)
-	      && gimple_vdef (use_stmt)
-	      && operand_equal_p (gimple_assign_lhs (stmt),
-				  gimple_assign_lhs (use_stmt), 0))
-	    continue;
+	  if ((gimple_has_lhs (use_stmt)
+	       && operand_equal_p (gimple_assign_lhs (stmt),
+				   gimple_get_lhs (use_stmt), 0))
+	      || stmt_kills_ref_p (use_stmt, gimple_assign_lhs (stmt)))
+	    {
+	      /* If use_stmt is or might be a nop assignment then USE_STMT
+	         acts as a use as well as definition.  */
+	      if (stmt != use_stmt
+		  && ref_maybe_used_by_stmt_p (use_stmt,
+					       gimple_assign_lhs (stmt)))
+		return false;
+	      continue;
+	    }
 
 	  if (gimple_code (use_stmt) != GIMPLE_PHI)
 	    return false;
@@ -551,12 +567,12 @@ static void
 execute_sink_code (void)
 {
   loop_optimizer_init (LOOPS_NORMAL);
-
+  split_critical_edges ();
   connect_infinite_loops_to_exit ();
   memset (&sink_stats, 0, sizeof (sink_stats));
   calculate_dominance_info (CDI_DOMINATORS);
   calculate_dominance_info (CDI_POST_DOMINATORS);
-  sink_code_in_bb (EXIT_BLOCK_PTR);
+  sink_code_in_bb (EXIT_BLOCK_PTR_FOR_FN (cfun));
   statistics_counter_event (cfun, "Sunk statements", sink_stats.sunk);
   free_dominance_info (CDI_POST_DOMINATORS);
   remove_fake_exit_edges ();
@@ -578,25 +594,43 @@ gate_sink (void)
   return flag_tree_sink != 0;
 }
 
-struct gimple_opt_pass pass_sink_code =
+namespace {
+
+const pass_data pass_data_sink_code =
 {
- {
-  GIMPLE_PASS,
-  "sink",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_sink,				/* gate */
-  do_sink,				/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_TREE_SINK,				/* tv_id */
-  PROP_no_crit_edges | PROP_cfg
-    | PROP_ssa,				/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_update_ssa
-    | TODO_verify_ssa
-    | TODO_verify_flow			/* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "sink", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_SINK, /* tv_id */
+  /* PROP_no_crit_edges is ensured by running split_critical_edges in
+     execute_sink_code.  */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_update_ssa | TODO_verify_ssa
+    | TODO_verify_flow ), /* todo_flags_finish */
 };
+
+class pass_sink_code : public gimple_opt_pass
+{
+public:
+  pass_sink_code (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_sink_code, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_sink (); }
+  unsigned int execute () { return do_sink (); }
+
+}; // class pass_sink_code
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_sink_code (gcc::context *ctxt)
+{
+  return new pass_sink_code (ctxt);
+}

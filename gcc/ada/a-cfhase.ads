@@ -30,8 +30,10 @@
 ------------------------------------------------------------------------------
 
 --  This spec is derived from package Ada.Containers.Bounded_Hashed_Sets in the
---  Ada 2012 RM. The modifications are to facilitate formal proofs by making it
---  easier to express properties.
+--  Ada 2012 RM. The modifications are meant to facilitate formal proofs by
+--  making it easier to express properties, and by making the specification of
+--  this unit compatible with SPARK 2014. Note that the API of this unit may be
+--  subject to incompatible changes as SPARK 2014 evolves.
 
 --  The modifications are:
 
@@ -64,9 +66,10 @@ generic
    with function "=" (Left, Right : Element_Type) return Boolean is <>;
 
 package Ada.Containers.Formal_Hashed_Sets is
+   pragma Annotate (GNATprove, External_Axiomatization);
    pragma Pure;
 
-   type Set (Capacity : Count_Type; Modulus : Hash_Type) is tagged private;
+   type Set (Capacity : Count_Type; Modulus : Hash_Type) is private;
    pragma Preelaborable_Initialization (Set);
 
    type Cursor is private;
@@ -86,7 +89,9 @@ package Ada.Containers.Formal_Hashed_Sets is
 
    procedure Reserve_Capacity
      (Container : in out Set;
-      Capacity  : Count_Type);
+      Capacity  : Count_Type)
+   with
+     Pre => Capacity <= Container.Capacity;
 
    function Length (Container : Set) return Count_Type;
 
@@ -94,39 +99,60 @@ package Ada.Containers.Formal_Hashed_Sets is
 
    procedure Clear (Container : in out Set);
 
-   procedure Assign (Target : in out Set; Source : Set);
+   procedure Assign (Target : in out Set; Source : Set) with
+     Pre => Target.Capacity >= Length (Source);
 
-   function Copy (Source   : Set;
-                  Capacity : Count_Type := 0) return Set;
+   function Copy
+     (Source   : Set;
+      Capacity : Count_Type := 0) return Set
+   with
+     Pre => Capacity = 0 or else Capacity >= Source.Capacity;
 
-   function Element (Container : Set; Position : Cursor) return Element_Type;
+   function Element
+     (Container : Set;
+      Position  : Cursor) return Element_Type
+   with
+     Pre => Has_Element (Container, Position);
 
    procedure Replace_Element
      (Container : in out Set;
       Position  : Cursor;
-      New_Item  : Element_Type);
+      New_Item  : Element_Type)
+   with
+     Pre => Has_Element (Container, Position);
 
-   procedure Move (Target : in out Set; Source : in out Set);
+   procedure Move (Target : in out Set; Source : in out Set) with
+     Pre => Target.Capacity >= Length (Source);
 
    procedure Insert
      (Container : in out Set;
       New_Item  : Element_Type;
       Position  : out Cursor;
-      Inserted  : out Boolean);
+      Inserted  : out Boolean)
+   with
+     Pre => Length (Container) < Container.Capacity;
 
-   procedure Insert  (Container : in out Set; New_Item : Element_Type);
+   procedure Insert  (Container : in out Set; New_Item : Element_Type) with
+     Pre => Length (Container) < Container.Capacity
+              and then (not Contains (Container, New_Item));
 
-   procedure Include (Container : in out Set; New_Item : Element_Type);
+   procedure Include (Container : in out Set; New_Item : Element_Type) with
+     Pre => Length (Container) < Container.Capacity;
 
-   procedure Replace (Container : in out Set; New_Item : Element_Type);
+   procedure Replace (Container : in out Set; New_Item : Element_Type) with
+     Pre => Contains (Container, New_Item);
 
    procedure Exclude (Container : in out Set; Item     : Element_Type);
 
-   procedure Delete  (Container : in out Set; Item     : Element_Type);
+   procedure Delete  (Container : in out Set; Item     : Element_Type) with
+     Pre => Contains (Container, Item);
 
-   procedure Delete (Container : in out Set; Position  : in out Cursor);
+   procedure Delete (Container : in out Set; Position  : in out Cursor) with
+     Pre => Has_Element (Container, Position);
 
-   procedure Union (Target : in out Set; Source : Set);
+   procedure Union (Target : in out Set; Source : Set) with
+     Pre => Length (Target) + Length (Source) -
+              Length (Intersection (Target, Source)) <= Target.Capacity;
 
    function Union (Left, Right : Set) return Set;
 
@@ -149,7 +175,7 @@ package Ada.Containers.Formal_Hashed_Sets is
    function Symmetric_Difference (Left, Right : Set) return Set;
 
    function "xor" (Left, Right : Set) return Set
-                   renames Symmetric_Difference;
+     renames Symmetric_Difference;
 
    function Overlap (Left, Right : Set) return Boolean;
 
@@ -157,9 +183,11 @@ package Ada.Containers.Formal_Hashed_Sets is
 
    function First (Container : Set) return Cursor;
 
-   function Next (Container : Set; Position : Cursor) return Cursor;
+   function Next (Container : Set; Position : Cursor) return Cursor with
+     Pre => Has_Element (Container, Position) or else Position = No_Element;
 
-   procedure Next (Container : Set; Position : in out Cursor);
+   procedure Next (Container : Set; Position : in out Cursor) with
+     Pre => Has_Element (Container, Position) or else Position = No_Element;
 
    function Find
      (Container : Set;
@@ -217,8 +245,10 @@ package Ada.Containers.Formal_Hashed_Sets is
    --  they are structurally equal (function "=" returns True) and that they
    --  have the same set of cursors.
 
-   function Left  (Container : Set; Position : Cursor) return Set;
-   function Right (Container : Set; Position : Cursor) return Set;
+   function Left  (Container : Set; Position : Cursor) return Set with
+     Pre => Has_Element (Container, Position) or else Position = No_Element;
+   function Right (Container : Set; Position : Cursor) return Set with
+     Pre => Has_Element (Container, Position) or else Position = No_Element;
    --  Left returns a container containing all elements preceding Position
    --  (excluded) in Container. Right returns a container containing all
    --  elements following Position (included) in Container. These two new

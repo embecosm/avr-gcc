@@ -1,6 +1,6 @@
 /* GIMPLE lowering pass.  Converts High GIMPLE into Low GIMPLE.
 
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -23,15 +23,24 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "tree-nested.h"
+#include "calls.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
 #include "gimple.h"
+#include "gimple-iterator.h"
 #include "tree-iterator.h"
 #include "tree-inline.h"
-#include "tree-flow.h"
 #include "flags.h"
 #include "function.h"
 #include "diagnostic-core.h"
 #include "tree-pass.h"
 #include "langhooks.h"
+#include "gimple-low.h"
+#include "tree-nested.h"
 
 /* The differences between High GIMPLE and Low GIMPLE are the
    following:
@@ -67,9 +76,6 @@ struct lower_data
 
   /* True if the current statement cannot fall through.  */
   bool cannot_fallthru;
-
-  /* True if the function calls __builtin_setjmp.  */
-  bool calls_builtin_setjmp;
 };
 
 static void lower_stmt (gimple_stmt_iterator *, struct lower_data *);
@@ -77,6 +83,7 @@ static void lower_gimple_bind (gimple_stmt_iterator *, struct lower_data *);
 static void lower_try_catch (gimple_stmt_iterator *, struct lower_data *);
 static void lower_gimple_return (gimple_stmt_iterator *, struct lower_data *);
 static void lower_builtin_setjmp (gimple_stmt_iterator *);
+static void lower_builtin_posix_memalign (gimple_stmt_iterator *);
 
 
 /* Lower the body of current_function_decl from High GIMPLE into Low
@@ -90,7 +97,6 @@ lower_function_body (void)
   gimple_seq lowered_body;
   gimple_stmt_iterator i;
   gimple bind;
-  tree t;
   gimple x;
 
   /* The gimplifier should've left a body of exactly one statement,
@@ -118,7 +124,8 @@ lower_function_body (void)
      need to do anything special.  Otherwise build one by hand.  */
   if (gimple_seq_may_fallthru (lowered_body)
       && (data.return_statements.is_empty ()
-	  || gimple_return_retval (data.return_statements.last().stmt) != NULL))
+	  || (gimple_return_retval (data.return_statements.last().stmt)
+	      != NULL)))
     {
       x = gimple_build_return (NULL);
       gimple_set_location (x, cfun->function_end_locus);
@@ -136,34 +143,6 @@ lower_function_body (void)
       gsi_insert_after (&i, t.stmt, GSI_CONTINUE_LINKING);
     }
 
-  /* If the function calls __builtin_setjmp, we need to emit the computed
-     goto that will serve as the unique dispatcher for all the receivers.  */
-  if (data.calls_builtin_setjmp)
-    {
-      tree disp_label, disp_var, arg;
-
-      /* Build 'DISP_LABEL:' and insert.  */
-      disp_label = create_artificial_label (cfun->function_end_locus);
-      /* This mark will create forward edges from every call site.  */
-      DECL_NONLOCAL (disp_label) = 1;
-      cfun->has_nonlocal_label = 1;
-      x = gimple_build_label (disp_label);
-      gsi_insert_after (&i, x, GSI_CONTINUE_LINKING);
-
-      /* Build 'DISP_VAR = __builtin_setjmp_dispatcher (DISP_LABEL);'
-	 and insert.  */
-      disp_var = create_tmp_var (ptr_type_node, "setjmpvar");
-      arg = build_addr (disp_label, current_function_decl);
-      t = builtin_decl_implicit (BUILT_IN_SETJMP_DISPATCHER);
-      x = gimple_build_call (t, 1, arg);
-      gimple_call_set_lhs (x, disp_var);
-
-      /* Build 'goto DISP_VAR;' and insert.  */
-      gsi_insert_after (&i, x, GSI_CONTINUE_LINKING);
-      x = gimple_build_goto (disp_var);
-      gsi_insert_after (&i, x, GSI_CONTINUE_LINKING);
-    }
-
   /* Once the old body has been lowered, replace it with the new
      lowered sequence.  */
   gimple_set_body (current_function_decl, lowered_body);
@@ -177,117 +156,41 @@ lower_function_body (void)
   return 0;
 }
 
-struct gimple_opt_pass pass_lower_cf =
+namespace {
+
+const pass_data pass_data_lower_cf =
 {
- {
-  GIMPLE_PASS,
-  "lower",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  NULL,					/* gate */
-  lower_function_body,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_NONE,				/* tv_id */
-  PROP_gimple_any,			/* properties_required */
-  PROP_gimple_lcf,			/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  0             			/* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "lower", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  false, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  PROP_gimple_any, /* properties_required */
+  PROP_gimple_lcf, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
 
-
-
-/* Verify if the type of the argument matches that of the function
-   declaration.  If we cannot verify this or there is a mismatch,
-   return false.  */
-
-static bool
-gimple_check_call_args (gimple stmt, tree fndecl)
+class pass_lower_cf : public gimple_opt_pass
 {
-  tree parms, p;
-  unsigned int i, nargs;
+public:
+  pass_lower_cf (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_lower_cf, ctxt)
+  {}
 
-  /* Calls to internal functions always match their signature.  */
-  if (gimple_call_internal_p (stmt))
-    return true;
+  /* opt_pass methods: */
+  unsigned int execute () { return lower_function_body (); }
 
-  nargs = gimple_call_num_args (stmt);
+}; // class pass_lower_cf
 
-  /* Get argument types for verification.  */
-  if (fndecl)
-    parms = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
-  else
-    parms = TYPE_ARG_TYPES (gimple_call_fntype (stmt));
+} // anon namespace
 
-  /* Verify if the type of the argument matches that of the function
-     declaration.  If we cannot verify this or there is a mismatch,
-     return false.  */
-  if (fndecl && DECL_ARGUMENTS (fndecl))
-    {
-      for (i = 0, p = DECL_ARGUMENTS (fndecl);
-	   i < nargs;
-	   i++, p = DECL_CHAIN (p))
-	{
-	  tree arg;
-	  /* We cannot distinguish a varargs function from the case
-	     of excess parameters, still deferring the inlining decision
-	     to the callee is possible.  */
-	  if (!p)
-	    break;
-	  arg = gimple_call_arg (stmt, i);
-	  if (p == error_mark_node
-	      || arg == error_mark_node
-	      || (!types_compatible_p (DECL_ARG_TYPE (p), TREE_TYPE (arg))
-		  && !fold_convertible_p (DECL_ARG_TYPE (p), arg)))
-            return false;
-	}
-    }
-  else if (parms)
-    {
-      for (i = 0, p = parms; i < nargs; i++, p = TREE_CHAIN (p))
-	{
-	  tree arg;
-	  /* If this is a varargs function defer inlining decision
-	     to callee.  */
-	  if (!p)
-	    break;
-	  arg = gimple_call_arg (stmt, i);
-	  if (TREE_VALUE (p) == error_mark_node
-	      || arg == error_mark_node
-	      || TREE_CODE (TREE_VALUE (p)) == VOID_TYPE
-	      || (!types_compatible_p (TREE_VALUE (p), TREE_TYPE (arg))
-		  && !fold_convertible_p (TREE_VALUE (p), arg)))
-            return false;
-	}
-    }
-  else
-    {
-      if (nargs != 0)
-        return false;
-    }
-  return true;
-}
-
-/* Verify if the type of the argument and lhs of CALL_STMT matches
-   that of the function declaration CALLEE.
-   If we cannot verify this or there is a mismatch, return false.  */
-
-bool
-gimple_check_call_matching_types (gimple call_stmt, tree callee)
+gimple_opt_pass *
+make_pass_lower_cf (gcc::context *ctxt)
 {
-  tree lhs;
-
-  if ((DECL_RESULT (callee)
-       && !DECL_BY_REFERENCE (DECL_RESULT (callee))
-       && (lhs = gimple_call_lhs (call_stmt)) != NULL_TREE
-       && !useless_type_conversion_p (TREE_TYPE (DECL_RESULT (callee)),
-                                      TREE_TYPE (lhs))
-       && !fold_convertible_p (TREE_TYPE (DECL_RESULT (callee)), lhs))
-      || !gimple_check_call_args (call_stmt, callee))
-    return false;
-  return true;
+  return new pass_lower_cf (ctxt);
 }
 
 /* Lower sequence SEQ.  Unlike gimplification the statements are not relowered
@@ -403,6 +306,7 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
     case GIMPLE_OMP_SECTION:
     case GIMPLE_OMP_SINGLE:
     case GIMPLE_OMP_MASTER:
+    case GIMPLE_OMP_TASKGROUP:
     case GIMPLE_OMP_ORDERED:
     case GIMPLE_OMP_CRITICAL:
     case GIMPLE_OMP_RETURN:
@@ -424,13 +328,20 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
 	  }
 
 	if (decl
-	    && DECL_BUILT_IN_CLASS (decl) == BUILT_IN_NORMAL
-	    && DECL_FUNCTION_CODE (decl) == BUILT_IN_SETJMP)
+	    && DECL_BUILT_IN_CLASS (decl) == BUILT_IN_NORMAL)
 	  {
-	    lower_builtin_setjmp (gsi);
-	    data->cannot_fallthru = false;
-	    data->calls_builtin_setjmp = true;
-	    return;
+	    if (DECL_FUNCTION_CODE (decl) == BUILT_IN_SETJMP)
+	      {
+		lower_builtin_setjmp (gsi);
+		data->cannot_fallthru = false;
+		return;
+	      }
+	    else if (DECL_FUNCTION_CODE (decl) == BUILT_IN_POSIX_MEMALIGN
+		     && flag_tree_bit_ccp)
+	      {
+		lower_builtin_posix_memalign (gsi);
+		return;
+	      }
 	  }
 
 	if (decl && (flags_from_decl_or_type (decl) & ECF_NORETURN))
@@ -444,6 +355,8 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
 
     case GIMPLE_OMP_PARALLEL:
     case GIMPLE_OMP_TASK:
+    case GIMPLE_OMP_TARGET:
+    case GIMPLE_OMP_TEAMS:
       data->cannot_fallthru = false;
       lower_omp_directive (gsi, data);
       data->cannot_fallthru = false;
@@ -576,56 +489,9 @@ lower_try_catch (gimple_stmt_iterator *gsi, struct lower_data *data)
   gsi_next (gsi);
 }
 
+
 /* Try to determine whether a TRY_CATCH expression can fall through.
-   This is a subroutine of block_may_fallthru.  */
-
-static bool
-try_catch_may_fallthru (const_tree stmt)
-{
-  tree_stmt_iterator i;
-
-  /* If the TRY block can fall through, the whole TRY_CATCH can
-     fall through.  */
-  if (block_may_fallthru (TREE_OPERAND (stmt, 0)))
-    return true;
-
-  i = tsi_start (TREE_OPERAND (stmt, 1));
-  switch (TREE_CODE (tsi_stmt (i)))
-    {
-    case CATCH_EXPR:
-      /* We expect to see a sequence of CATCH_EXPR trees, each with a
-	 catch expression and a body.  The whole TRY_CATCH may fall
-	 through iff any of the catch bodies falls through.  */
-      for (; !tsi_end_p (i); tsi_next (&i))
-	{
-	  if (block_may_fallthru (CATCH_BODY (tsi_stmt (i))))
-	    return true;
-	}
-      return false;
-
-    case EH_FILTER_EXPR:
-      /* The exception filter expression only matters if there is an
-	 exception.  If the exception does not match EH_FILTER_TYPES,
-	 we will execute EH_FILTER_FAILURE, and we will fall through
-	 if that falls through.  If the exception does match
-	 EH_FILTER_TYPES, the stack unwinder will continue up the
-	 stack, so we will not fall through.  We don't know whether we
-	 will throw an exception which matches EH_FILTER_TYPES or not,
-	 so we just ignore EH_FILTER_TYPES and assume that we might
-	 throw an exception which doesn't match.  */
-      return block_may_fallthru (EH_FILTER_FAILURE (tsi_stmt (i)));
-
-    default:
-      /* This case represents statements to be executed when an
-	 exception occurs.  Those statements are implicitly followed
-	 by a RESX statement to resume execution after the exception.
-	 So in this case the TRY_CATCH never falls through.  */
-      return false;
-    }
-}
-
-
-/* Same as above, but for a GIMPLE_TRY_CATCH.  */
+   This is a subroutine of gimple_stmt_may_fallthru.  */
 
 static bool
 gimple_try_catch_may_fallthru (gimple stmt)
@@ -672,81 +538,6 @@ gimple_try_catch_may_fallthru (gimple stmt)
 	 by a GIMPLE_RESX to resume execution after the exception.  So
 	 in this case the try/catch never falls through.  */
       return false;
-    }
-}
-
-
-/* Try to determine if we can fall out of the bottom of BLOCK.  This guess
-   need not be 100% accurate; simply be conservative and return true if we
-   don't know.  This is used only to avoid stupidly generating extra code.
-   If we're wrong, we'll just delete the extra code later.  */
-
-bool
-block_may_fallthru (const_tree block)
-{
-  /* This CONST_CAST is okay because expr_last returns its argument
-     unmodified and we assign it to a const_tree.  */
-  const_tree stmt = expr_last (CONST_CAST_TREE(block));
-
-  switch (stmt ? TREE_CODE (stmt) : ERROR_MARK)
-    {
-    case GOTO_EXPR:
-    case RETURN_EXPR:
-      /* Easy cases.  If the last statement of the block implies
-	 control transfer, then we can't fall through.  */
-      return false;
-
-    case SWITCH_EXPR:
-      /* If SWITCH_LABELS is set, this is lowered, and represents a
-	 branch to a selected label and hence can not fall through.
-	 Otherwise SWITCH_BODY is set, and the switch can fall
-	 through.  */
-      return SWITCH_LABELS (stmt) == NULL_TREE;
-
-    case COND_EXPR:
-      if (block_may_fallthru (COND_EXPR_THEN (stmt)))
-	return true;
-      return block_may_fallthru (COND_EXPR_ELSE (stmt));
-
-    case BIND_EXPR:
-      return block_may_fallthru (BIND_EXPR_BODY (stmt));
-
-    case TRY_CATCH_EXPR:
-      return try_catch_may_fallthru (stmt);
-
-    case TRY_FINALLY_EXPR:
-      /* The finally clause is always executed after the try clause,
-	 so if it does not fall through, then the try-finally will not
-	 fall through.  Otherwise, if the try clause does not fall
-	 through, then when the finally clause falls through it will
-	 resume execution wherever the try clause was going.  So the
-	 whole try-finally will only fall through if both the try
-	 clause and the finally clause fall through.  */
-      return (block_may_fallthru (TREE_OPERAND (stmt, 0))
-	      && block_may_fallthru (TREE_OPERAND (stmt, 1)));
-
-    case MODIFY_EXPR:
-      if (TREE_CODE (TREE_OPERAND (stmt, 1)) == CALL_EXPR)
-	stmt = TREE_OPERAND (stmt, 1);
-      else
-	return true;
-      /* FALLTHRU */
-
-    case CALL_EXPR:
-      /* Functions that do not return do not fall through.  */
-      return (call_expr_flags (stmt) & ECF_NORETURN) == 0;
-
-    case CLEANUP_POINT_EXPR:
-      return block_may_fallthru (TREE_OPERAND (stmt, 0));
-
-    case TARGET_EXPR:
-      return block_may_fallthru (TREE_OPERAND (stmt, 1));
-
-    case ERROR_MARK:
-      return true;
-
-    default:
-      return lang_hooks.block_may_fallthru (stmt);
     }
 }
 
@@ -874,15 +665,12 @@ lower_gimple_return (gimple_stmt_iterator *gsi, struct lower_data *data)
    all will be used on all machines).  It operates similarly to the C
    library function of the same name, but is more efficient.
 
-   It is lowered into 3 other builtins, namely __builtin_setjmp_setup,
-   __builtin_setjmp_dispatcher and __builtin_setjmp_receiver, but with
-   __builtin_setjmp_dispatcher shared among all the instances; that's
-   why it is only emitted at the end by lower_function_body.
+   It is lowered into 2 other builtins, namely __builtin_setjmp_setup,
+   __builtin_setjmp_receiver.
 
    After full lowering, the body of the function should look like:
 
     {
-      void * setjmpvar.0;
       int D.1844;
       int D.2844;
 
@@ -912,14 +700,13 @@ lower_gimple_return (gimple_stmt_iterator *gsi, struct lower_data *data)
 
       <D3850>:;
       return;
-      <D3853>: [non-local];
-      setjmpvar.0 = __builtin_setjmp_dispatcher (&<D3853>);
-      goto setjmpvar.0;
     }
 
-   The dispatcher block will be both the unique destination of all the
-   abnormal call edges and the unique source of all the abnormal edges
-   to the receivers, thus keeping the complexity explosion localized.  */
+   During cfg creation an extra per-function (or per-OpenMP region)
+   block with ABNORMAL_DISPATCHER internal call will be added, unique
+   destination of all the abnormal call edges and the unique source of
+   all the abnormal edges to the receivers, thus keeping the complexity
+   explosion localized.  */
 
 static void
 lower_builtin_setjmp (gimple_stmt_iterator *gsi)
@@ -930,6 +717,12 @@ lower_builtin_setjmp (gimple_stmt_iterator *gsi)
   tree next_label = create_artificial_label (loc);
   tree dest, t, arg;
   gimple g;
+
+  /* __builtin_setjmp_{setup,receiver} aren't ECF_RETURNS_TWICE and for RTL
+     these builtins are modelled as non-local label jumps to the label
+     that is passed to these two builtins, so pretend we have a non-local
+     label during GIMPLE passes too.  See PR60003.  */ 
+  cfun->has_nonlocal_label = true;
 
   /* NEXT_LABEL is the label __builtin_longjmp will jump to.  Its address is
      passed to both __builtin_setjmp_setup and __builtin_setjmp_receiver.  */
@@ -986,6 +779,60 @@ lower_builtin_setjmp (gimple_stmt_iterator *gsi)
 
   /* Remove the call to __builtin_setjmp.  */
   gsi_remove (gsi, false);
+}
+
+/* Lower calls to posix_memalign to
+     res = posix_memalign (ptr, align, size);
+     if (res == 0)
+       *ptr = __builtin_assume_aligned (*ptr, align);
+   or to
+     void *tem;
+     res = posix_memalign (&tem, align, size);
+     if (res == 0)
+       ptr = __builtin_assume_aligned (tem, align);
+   in case the first argument was &ptr.  That way we can get at the
+   alignment of the heap pointer in CCP.  */
+
+static void
+lower_builtin_posix_memalign (gimple_stmt_iterator *gsi)
+{
+  gimple stmt, call = gsi_stmt (*gsi);
+  tree pptr = gimple_call_arg (call, 0);
+  tree align = gimple_call_arg (call, 1);
+  tree res = gimple_call_lhs (call);
+  tree ptr = create_tmp_reg (ptr_type_node, NULL);
+  if (TREE_CODE (pptr) == ADDR_EXPR)
+    {
+      tree tem = create_tmp_var (ptr_type_node, NULL);
+      TREE_ADDRESSABLE (tem) = 1;
+      gimple_call_set_arg (call, 0, build_fold_addr_expr (tem));
+      stmt = gimple_build_assign (ptr, tem);
+    }
+  else
+    stmt = gimple_build_assign (ptr,
+				fold_build2 (MEM_REF, ptr_type_node, pptr,
+					     build_int_cst (ptr_type_node, 0)));
+  if (res == NULL_TREE)
+    {
+      res = create_tmp_reg (integer_type_node, NULL);
+      gimple_call_set_lhs (call, res);
+    }
+  tree align_label = create_artificial_label (UNKNOWN_LOCATION);
+  tree noalign_label = create_artificial_label (UNKNOWN_LOCATION);
+  gimple cond = gimple_build_cond (EQ_EXPR, res, integer_zero_node,
+				   align_label, noalign_label);
+  gsi_insert_after (gsi, cond, GSI_NEW_STMT);
+  gsi_insert_after (gsi, gimple_build_label (align_label), GSI_NEW_STMT);
+  gsi_insert_after (gsi, stmt, GSI_NEW_STMT);
+  stmt = gimple_build_call (builtin_decl_implicit (BUILT_IN_ASSUME_ALIGNED),
+			    2, ptr, align);
+  gimple_call_set_lhs (stmt, ptr);
+  gsi_insert_after (gsi, stmt, GSI_NEW_STMT);
+  stmt = gimple_build_assign (fold_build2 (MEM_REF, ptr_type_node, pptr,
+					   build_int_cst (ptr_type_node, 0)),
+			      ptr);
+  gsi_insert_after (gsi, stmt, GSI_NEW_STMT);
+  gsi_insert_after (gsi, gimple_build_label (noalign_label), GSI_NEW_STMT);
 }
 
 

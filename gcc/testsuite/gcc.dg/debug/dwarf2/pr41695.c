@@ -1,6 +1,6 @@
 /* PR debug/41695 */
 /* { dg-do compile } */
-/* { dg-options "-gdwarf-2 -O2 -dA -fno-merge-debug-strings" } */
+/* { dg-options "-gdwarf -O2 -dA -fno-merge-debug-strings" } */
 
 int bar (int);
 

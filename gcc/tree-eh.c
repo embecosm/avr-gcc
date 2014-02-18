@@ -1,5 +1,5 @@
 /* Exception handling semantics and decomposition for trees.
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -23,32 +23,40 @@ along with GCC; see the file COPYING3.  If not see
 #include "hash-table.h"
 #include "tm.h"
 #include "tree.h"
+#include "expr.h"
+#include "calls.h"
 #include "flags.h"
 #include "function.h"
 #include "except.h"
 #include "pointer-set.h"
-#include "tree-flow.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "tree-eh.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "cgraph.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "tree-into-ssa.h"
+#include "tree-ssa.h"
 #include "tree-inline.h"
 #include "tree-pass.h"
 #include "langhooks.h"
-#include "ggc.h"
 #include "diagnostic-core.h"
-#include "gimple.h"
 #include "target.h"
 #include "cfgloop.h"
+#include "gimple-low.h"
 
 /* In some instances a tree and a gimple need to be stored in a same table,
    i.e. in hash tables. This is a structure to do this. */
 typedef union {tree *tp; tree t; gimple g;} treemple;
-
-/* Nonzero if we are using EH to handle cleanups.  */
-static int using_eh_for_cleanups_p = 0;
-
-void
-using_eh_for_cleanups (void)
-{
-  using_eh_for_cleanups_p = 1;
-}
 
 /* Misc functions used in this file.  */
 
@@ -66,7 +74,7 @@ using_eh_for_cleanups (void)
 
 /* Add statement T in function IFUN to landing pad NUM.  */
 
-void
+static void
 add_stmt_to_eh_lp_fn (struct function *ifun, gimple t, int num)
 {
   struct throw_stmt_node *n;
@@ -1380,9 +1388,6 @@ lower_try_finally_switch (struct leh_state *state, struct leh_tf_state *tf)
   x = gimple_seq_last_stmt (finally);
   finally_loc = x ? gimple_location (x) : tf_loc;
 
-  /* Lower the finally block itself.  */
-  lower_eh_constructs_1 (state, &finally);
-
   /* Prepare for switch statement generation.  */
   nlabels = tf->dest_array.length ();
   return_index = nlabels;
@@ -1468,6 +1473,7 @@ lower_try_finally_switch (struct leh_state *state, struct leh_tf_state *tf)
   x = gimple_build_label (finally_label);
   gimple_seq_add_stmt (&tf->top_p_seq, x);
 
+  lower_eh_constructs_1 (state, &finally);
   gimple_seq_add_seq (&tf->top_p_seq, finally);
 
   /* Redirect each incoming goto edge.  */
@@ -1655,7 +1661,7 @@ lower_try_finally (struct leh_state *state, gimple tp)
   this_tf.try_finally_expr = tp;
   this_tf.top_p = tp;
   this_tf.outer = state;
-  if (using_eh_for_cleanups_p && !cleanup_is_dead_in (state->cur_region))
+  if (using_eh_for_cleanups_p () && !cleanup_is_dead_in (state->cur_region))
     {
       this_tf.region = gen_eh_region_cleanup (state->cur_region);
       this_state.cur_region = this_tf.region;
@@ -1737,7 +1743,7 @@ lower_try_finally (struct leh_state *state, gimple tp)
 	{
 	  gimple_seq new_eh_seq = eh_seq;
 	  eh_seq = old_eh_seq;
-	  gimple_seq_add_seq(&eh_seq, new_eh_seq);
+	  gimple_seq_add_seq (&eh_seq, new_eh_seq);
 	}
     }
 
@@ -2157,25 +2163,42 @@ lower_eh_constructs (void)
   return 0;
 }
 
-struct gimple_opt_pass pass_lower_eh =
+namespace {
+
+const pass_data pass_data_lower_eh =
 {
- {
-  GIMPLE_PASS,
-  "eh",					/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  NULL,					/* gate */
-  lower_eh_constructs,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_TREE_EH,				/* tv_id */
-  PROP_gimple_lcf,			/* properties_required */
-  PROP_gimple_leh,			/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  0             			/* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "eh", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  false, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_EH, /* tv_id */
+  PROP_gimple_lcf, /* properties_required */
+  PROP_gimple_leh, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_lower_eh : public gimple_opt_pass
+{
+public:
+  pass_lower_eh (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_lower_eh, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  unsigned int execute () { return lower_eh_constructs (); }
+
+}; // class pass_lower_eh
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_lower_eh (gcc::context *ctxt)
+{
+  return new pass_lower_eh (ctxt);
+}
 
 /* Create the multiple edges from an EH_DISPATCH statement to all of
    the possible handlers for its EH region.  Return true if there's
@@ -2490,6 +2513,68 @@ operation_could_trap_p (enum tree_code op, bool fp_operation, bool honor_trapv,
 					&handled);
 }
 
+
+/* Returns true if it is possible to prove that the index of
+   an array access REF (an ARRAY_REF expression) falls into the
+   array bounds.  */
+
+static bool
+in_array_bounds_p (tree ref)
+{
+  tree idx = TREE_OPERAND (ref, 1);
+  tree min, max;
+
+  if (TREE_CODE (idx) != INTEGER_CST)
+    return false;
+
+  min = array_ref_low_bound (ref);
+  max = array_ref_up_bound (ref);
+  if (!min
+      || !max
+      || TREE_CODE (min) != INTEGER_CST
+      || TREE_CODE (max) != INTEGER_CST)
+    return false;
+
+  if (tree_int_cst_lt (idx, min)
+      || tree_int_cst_lt (max, idx))
+    return false;
+
+  return true;
+}
+
+/* Returns true if it is possible to prove that the range of
+   an array access REF (an ARRAY_RANGE_REF expression) falls
+   into the array bounds.  */
+
+static bool
+range_in_array_bounds_p (tree ref)
+{
+  tree domain_type = TYPE_DOMAIN (TREE_TYPE (ref));
+  tree range_min, range_max, min, max;
+
+  range_min = TYPE_MIN_VALUE (domain_type);
+  range_max = TYPE_MAX_VALUE (domain_type);
+  if (!range_min
+      || !range_max
+      || TREE_CODE (range_min) != INTEGER_CST
+      || TREE_CODE (range_max) != INTEGER_CST)
+    return false;
+
+  min = array_ref_low_bound (ref);
+  max = array_ref_up_bound (ref);
+  if (!min
+      || !max
+      || TREE_CODE (min) != INTEGER_CST
+      || TREE_CODE (max) != INTEGER_CST)
+    return false;
+
+  if (tree_int_cst_lt (range_min, min)
+      || tree_int_cst_lt (max, range_max))
+    return false;
+
+  return true;
+}
+
 /* Return true if EXPR can trap, as in dereferencing an invalid pointer
    location or floating point arithmetic.  C.f. the rtl version, may_trap_p.
    This routine expects only GIMPLE lhs or rhs input.  */
@@ -2525,12 +2610,6 @@ tree_could_trap_p (tree expr)
  restart:
   switch (code)
     {
-    case TARGET_MEM_REF:
-      if (TREE_CODE (TMR_BASE (expr)) == ADDR_EXPR
-	  && !TMR_INDEX (expr) && !TMR_INDEX2 (expr))
-	return false;
-      return !TREE_THIS_NOTRAP (expr);
-
     case COMPONENT_REF:
     case REALPART_EXPR:
     case IMAGPART_EXPR:
@@ -2557,10 +2636,36 @@ tree_could_trap_p (tree expr)
 	return false;
       return !in_array_bounds_p (expr);
 
+    case TARGET_MEM_REF:
     case MEM_REF:
-      if (TREE_CODE (TREE_OPERAND (expr, 0)) == ADDR_EXPR)
+      if (TREE_CODE (TREE_OPERAND (expr, 0)) == ADDR_EXPR
+	  && tree_could_trap_p (TREE_OPERAND (TREE_OPERAND (expr, 0), 0)))
+	return true;
+      if (TREE_THIS_NOTRAP (expr))
 	return false;
-      /* Fallthru.  */
+      /* We cannot prove that the access is in-bounds when we have
+         variable-index TARGET_MEM_REFs.  */
+      if (code == TARGET_MEM_REF
+	  && (TMR_INDEX (expr) || TMR_INDEX2 (expr)))
+	return true;
+      if (TREE_CODE (TREE_OPERAND (expr, 0)) == ADDR_EXPR)
+	{
+	  tree base = TREE_OPERAND (TREE_OPERAND (expr, 0), 0);
+	  double_int off = mem_ref_offset (expr);
+	  if (off.is_negative ())
+	    return true;
+	  if (TREE_CODE (base) == STRING_CST)
+	    return double_int::from_uhwi (TREE_STRING_LENGTH (base)).ule (off);
+	  else if (DECL_SIZE_UNIT (base) == NULL_TREE
+		   || TREE_CODE (DECL_SIZE_UNIT (base)) != INTEGER_CST
+		   || tree_to_double_int (DECL_SIZE_UNIT (base)).ule (off))
+	    return true;
+	  /* Now we are sure the first byte of the access is inside
+	     the object.  */
+	  return false;
+	}
+      return true;
+
     case INDIRECT_REF:
       return !TREE_THIS_NOTRAP (expr);
 
@@ -2580,13 +2685,13 @@ tree_could_trap_p (tree expr)
       /* Assume that accesses to weak functions may trap, unless we know
 	 they are certainly defined in current TU or in some other
 	 LTO partition.  */
-      if (DECL_WEAK (expr))
+      if (DECL_WEAK (expr) && !DECL_COMDAT (expr))
 	{
 	  struct cgraph_node *node;
 	  if (!DECL_EXTERNAL (expr))
 	    return false;
 	  node = cgraph_function_node (cgraph_get_node (expr), NULL);
-	  if (node && node->symbol.in_other_partition)
+	  if (node && node->in_other_partition)
 	    return false;
 	  return true;
 	}
@@ -2596,13 +2701,13 @@ tree_could_trap_p (tree expr)
       /* Assume that accesses to weak vars may trap, unless we know
 	 they are certainly defined in current TU or in some other
 	 LTO partition.  */
-      if (DECL_WEAK (expr))
+      if (DECL_WEAK (expr) && !DECL_COMDAT (expr))
 	{
-	  struct varpool_node *node;
+	  varpool_node *node;
 	  if (!DECL_EXTERNAL (expr))
 	    return false;
 	  node = varpool_variable_node (varpool_get_node (expr), NULL);
-	  if (node && node->symbol.in_other_partition)
+	  if (node && node->in_other_partition)
 	    return false;
 	  return true;
 	}
@@ -3017,25 +3122,43 @@ gate_refactor_eh (void)
   return flag_exceptions != 0;
 }
 
-struct gimple_opt_pass pass_refactor_eh =
+namespace {
+
+const pass_data pass_data_refactor_eh =
 {
- {
-  GIMPLE_PASS,
-  "ehopt",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_refactor_eh,			/* gate */
-  refactor_eh,				/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_TREE_EH,				/* tv_id */
-  PROP_gimple_lcf,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  0             			/* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "ehopt", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_EH, /* tv_id */
+  PROP_gimple_lcf, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_refactor_eh : public gimple_opt_pass
+{
+public:
+  pass_refactor_eh (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_refactor_eh, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_refactor_eh (); }
+  unsigned int execute () { return refactor_eh (); }
+
+}; // class pass_refactor_eh
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_refactor_eh (gcc::context *ctxt)
+{
+  return new pass_refactor_eh (ctxt);
+}
 
 /* At the end of gimple optimization, we can lower RESX.  */
 
@@ -3199,7 +3322,7 @@ execute_lower_resx (void)
 
   mnt_map = pointer_map_create ();
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple last = last_stmt (bb);
       if (last && is_gimple_resx (last))
@@ -3226,25 +3349,43 @@ gate_lower_resx (void)
   return flag_exceptions != 0;
 }
 
-struct gimple_opt_pass pass_lower_resx =
+namespace {
+
+const pass_data pass_data_lower_resx =
 {
- {
-  GIMPLE_PASS,
-  "resx",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_lower_resx,			/* gate */
-  execute_lower_resx,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_TREE_EH,				/* tv_id */
-  PROP_gimple_lcf,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_verify_flow	                /* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "resx", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_EH, /* tv_id */
+  PROP_gimple_lcf, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_flow, /* todo_flags_finish */
 };
+
+class pass_lower_resx : public gimple_opt_pass
+{
+public:
+  pass_lower_resx (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_lower_resx, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_lower_resx (); }
+  unsigned int execute () { return execute_lower_resx (); }
+
+}; // class pass_lower_resx
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_lower_resx (gcc::context *ctxt)
+{
+  return new pass_lower_resx (ctxt);
+}
 
 /* Try to optimize var = {v} {CLOBBER} stmts followed just by
    external throw.  */
@@ -3312,6 +3453,7 @@ sink_clobbers (basic_block bb)
   gimple_stmt_iterator gsi, dgsi;
   basic_block succbb;
   bool any_clobbers = false;
+  unsigned todo = 0;
 
   /* Only optimize if BB has a single EH successor and
      all predecessor edges are EH too.  */
@@ -3410,9 +3552,22 @@ sink_clobbers (basic_block bb)
 	  SET_USE (PHI_ARG_DEF_PTR_FROM_EDGE (vphi, succe), gimple_vuse (stmt));
 	  SET_USE (gimple_vuse_op (stmt), vuse);
 	}
+      /* If there isn't a single predecessor but no virtual PHI node
+         arrange for virtual operands to be renamed.  */
+      else if (gimple_vuse_op (stmt) != NULL_USE_OPERAND_P
+	       && !single_pred_p (succbb))
+	{
+	  /* In this case there will be no use of the VDEF of this stmt. 
+	     ???  Unless this is a secondary opportunity and we have not
+	     removed unreachable blocks yet, so we cannot assert this.  
+	     Which also means we will end up renaming too many times.  */
+	  SET_USE (gimple_vuse_op (stmt), gimple_vop (cfun));
+	  mark_virtual_operands_for_renaming (cfun);
+	  todo |= TODO_update_ssa_only_virtuals;
+	}
     }
 
-  return 0;
+  return todo;
 }
 
 /* At the end of inlining, we can lower EH_DISPATCH.  Return true when 
@@ -3437,7 +3592,7 @@ lower_eh_dispatch (basic_block src, gimple stmt)
     {
     case ERT_TRY:
       {
-	vec<tree> labels = vNULL;
+	auto_vec<tree> labels;
 	tree default_label = NULL;
 	eh_catch c;
 	edge_iterator ei;
@@ -3525,8 +3680,6 @@ lower_eh_dispatch (basic_block src, gimple stmt)
 
 	    x = gimple_build_switch (filter, default_label, labels);
 	    gsi_insert_before (&gsi, x, GSI_SAME_STMT);
-
-	    labels.release ();
 	  }
 	pointer_set_destroy (seen_values);
       }
@@ -3575,7 +3728,7 @@ execute_lower_eh_dispatch (void)
 
   assign_filter_values ();
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple last = last_stmt (bb);
       if (last == NULL)
@@ -3605,25 +3758,43 @@ gate_lower_eh_dispatch (void)
   return cfun->eh->region_tree != NULL;
 }
 
-struct gimple_opt_pass pass_lower_eh_dispatch =
+namespace {
+
+const pass_data pass_data_lower_eh_dispatch =
 {
- {
-  GIMPLE_PASS,
-  "ehdisp",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_lower_eh_dispatch,		/* gate */
-  execute_lower_eh_dispatch,		/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_TREE_EH,				/* tv_id */
-  PROP_gimple_lcf,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_verify_flow	                /* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "ehdisp", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_EH, /* tv_id */
+  PROP_gimple_lcf, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_flow, /* todo_flags_finish */
 };
+
+class pass_lower_eh_dispatch : public gimple_opt_pass
+{
+public:
+  pass_lower_eh_dispatch (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_lower_eh_dispatch, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_lower_eh_dispatch (); }
+  unsigned int execute () { return execute_lower_eh_dispatch (); }
+
+}; // class pass_lower_eh_dispatch
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_lower_eh_dispatch (gcc::context *ctxt)
+{
+  return new pass_lower_eh_dispatch (ctxt);
+}
 
 /* Walk statements, see what regions and, optionally, landing pads
    are really referenced.
@@ -3657,7 +3828,7 @@ mark_reachable_handlers (sbitmap *r_reachablep, sbitmap *lp_reachablep)
   else
     lp_reachable = NULL;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator gsi;
 
@@ -4245,8 +4416,11 @@ cleanup_empty_eh (eh_landing_pad lp)
   /* If the block is totally empty, look for more unsplitting cases.  */
   if (gsi_end_p (gsi))
     {
-      /* For the degenerate case of an infinite loop bail out.  */
-      if (infinite_empty_loop_p (e_out))
+      /* For the degenerate case of an infinite loop bail out.
+	 If bb has no successors and is totally empty, which can happen e.g.
+	 because of incorrect noreturn attribute, bail out too.  */
+      if (e_out == NULL
+	  || infinite_empty_loop_p (e_out))
 	return ret;
 
       return ret | cleanup_empty_eh_unsplit (bb, e_out, lp);
@@ -4369,7 +4543,7 @@ cleanup_all_empty_eh (void)
     2) MUST_NOT_THROW regions that became dead because of 1) are optimized out
     3) Info about regions that are containing instructions, and regions
        reachable via local EH edges is collected
-    4) Eh tree is pruned for regions no longer neccesary.
+    4) Eh tree is pruned for regions no longer necessary.
 
    TODO: Push MUST_NOT_THROW regions to the root of the EH tree.
 	 Unify those that have the same failure decl and locus.
@@ -4431,24 +4605,44 @@ gate_cleanup_eh (void)
   return cfun->eh != NULL && cfun->eh->region_tree != NULL;
 }
 
-struct gimple_opt_pass pass_cleanup_eh = {
-  {
-   GIMPLE_PASS,
-   "ehcleanup",			/* name */
-   OPTGROUP_NONE,               /* optinfo_flags */
-   gate_cleanup_eh,		/* gate */
-   execute_cleanup_eh,		/* execute */
-   NULL,			/* sub */
-   NULL,			/* next */
-   0,				/* static_pass_number */
-   TV_TREE_EH,			/* tv_id */
-   PROP_gimple_lcf,		/* properties_required */
-   0,				/* properties_provided */
-   0,				/* properties_destroyed */
-   0,				/* todo_flags_start */
-   TODO_verify_ssa    		/* todo_flags_finish */
-   }
+namespace {
+
+const pass_data pass_data_cleanup_eh =
+{
+  GIMPLE_PASS, /* type */
+  "ehcleanup", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TREE_EH, /* tv_id */
+  PROP_gimple_lcf, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_ssa, /* todo_flags_finish */
 };
+
+class pass_cleanup_eh : public gimple_opt_pass
+{
+public:
+  pass_cleanup_eh (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_cleanup_eh, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  opt_pass * clone () { return new pass_cleanup_eh (m_ctxt); }
+  bool gate () { return gate_cleanup_eh (); }
+  unsigned int execute () { return execute_cleanup_eh (); }
+
+}; // class pass_cleanup_eh
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_cleanup_eh (gcc::context *ctxt)
+{
+  return new pass_cleanup_eh (ctxt);
+}
 
 /* Verify that BB containing STMT as the last statement, has precisely the
    edge that make_eh_edges would create.  */

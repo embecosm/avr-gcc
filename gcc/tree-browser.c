@@ -1,5 +1,5 @@
 /* Tree browser.
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <s.pop@laposte.net>
 
 This file is part of GCC.
@@ -24,6 +24,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "hash-table.h"
 #include "tree.h"
 #include "tree-pretty-print.h"
+#include "print-tree.h"
 
 #define TB_OUT_FILE stdout
 #define TB_IN_FILE stdin
@@ -46,7 +47,7 @@ struct tb_command {
   TB_CODE comm_code;
 };
 
-#define DEFTBCODE(code, str, help) { help, str, sizeof(str) - 1, code },
+#define DEFTBCODE(code, str, help) { help, str, sizeof (str) - 1, code },
 static const struct tb_command tb_commands[] =
 {
 #include "tree-browser.def"

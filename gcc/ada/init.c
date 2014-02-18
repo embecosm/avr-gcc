@@ -226,19 +226,6 @@ nanosleep (struct timestruc_t *Rqtp, struct timestruc_t *Rmtp)
 
 #endif /* _AIXVERSION_430 */
 
-/* Version of AIX before 5.3 don't have pthread_condattr_setclock:
- * supply it as a weak symbol here so that if linking on a 5.3 or newer
- * machine, we get the real one.
- */
-
-#ifndef _AIXVERSION_530
-#pragma weak pthread_condattr_setclock
-int
-pthread_condattr_setclock (pthread_condattr_t *attr, clockid_t cl) {
-  return 0;
-}
-#endif
-
 static void
 __gnat_error_handler (int sig,
 		      siginfo_t *si ATTRIBUTE_UNUSED,
@@ -443,19 +430,22 @@ __gnat_install_handler (void)
 
 #pragma weak linux_sigaction
 int linux_sigaction (int signum, const struct sigaction *act,
-		     struct sigaction *oldact) {
+		     struct sigaction *oldact)
+{
   return sigaction (signum, act, oldact);
 }
 #define sigaction(signum, act, oldact) linux_sigaction (signum, act, oldact)
 
 #pragma weak fake_linux_sigfillset
-void fake_linux_sigfillset (sigset_t *set) {
+void fake_linux_sigfillset (sigset_t *set)
+{
   sigfillset (set);
 }
 #define sigfillset(set) fake_linux_sigfillset (set)
 
 #pragma weak fake_linux_sigemptyset
-void fake_linux_sigemptyset (sigset_t *set) {
+void fake_linux_sigemptyset (sigset_t *set)
+{
   sigemptyset (set);
 }
 #define sigemptyset(set) fake_linux_sigemptyset (set)
@@ -593,7 +583,7 @@ __gnat_install_handler (void)
 
   /* Turn the current Linux task into a native Xenomai task */
 
-  rt_task_shadow(&main_task, "environment_task", prio, T_FPU);
+  rt_task_shadow (&main_task, "environment_task", prio, T_FPU);
 #endif
 
   /* Set up signal handler to map synchronous signals to appropriate
@@ -819,6 +809,7 @@ void (*__gnat_ctrl_c_handler) (void) = 0;
 /* Masks for facility identification. */
 #define FAC_MASK  		0x0fff0000
 #define DECADA_M_FACILITY	0x00310000
+#define SEVERITY_MASK		0x7
 
 /* Define macro symbols for the VMS conditions that become Ada exceptions.
    It would be better to just include <ssdef.h> */
@@ -910,10 +901,10 @@ extern struct Exception_Data Layout_Error;
 extern struct Exception_Data Non_Ada_Error;
 
 #define Coded_Exception system__vms_exception_table__coded_exception
-extern struct Exception_Data *Coded_Exception (Exception_Code);
+extern struct Exception_Data *Coded_Exception (void *);
 
 #define Base_Code_In system__vms_exception_table__base_code_in
-extern Exception_Code Base_Code_In (Exception_Code);
+extern void *Base_Code_In (void *);
 
 /* DEC Ada exceptions are not defined in a header file, so they
    must be declared.  */
@@ -1046,8 +1037,7 @@ static const struct cond_except system_cond_except_table [] =
    should be use with caution since the implementation has been kept
    very simple.  */
 
-typedef int
-resignal_predicate (int code);
+typedef int resignal_predicate (int code);
 
 static const int * const cond_resignal_table [] =
 {
@@ -1078,6 +1068,9 @@ __gnat_default_resignal_p (int code)
   for (i = 0; facility_resignal_table [i]; i++)
     if ((code & FAC_MASK) == facility_resignal_table [i])
       return 1;
+
+  if ((code & SEVERITY_MASK) == 1 || (code & SEVERITY_MASK) == 3)
+    return 1;
 
   for (i = 0, iexcept = 0;
        cond_resignal_table [i]
@@ -1136,7 +1129,7 @@ copy_msg (struct descriptor_s *msgdesc, char *message)
 /* Scan TABLE for a match for the condition contained in SIGARGS,
    and return the entry, or the empty entry if no match found.  */
 static const struct cond_except *
-  scan_conditions ( int *sigargs, const struct cond_except *table [])
+scan_conditions ( int *sigargs, const struct cond_except *table [])
 {
   int i;
   struct cond_except entry;
@@ -1190,7 +1183,7 @@ __gnat_handle_vms_condition (int *sigargs, void *mechargs)
 {
   struct Exception_Data *exception = 0;
   unsigned int needs_adjust = 0;
-  Exception_Code base_code;
+  void *base_code;
   struct descriptor_s gnat_facility = {4, 0, "GNAT"};
   char message [Default_Exception_Msg_Max_Length];
 
@@ -1209,7 +1202,7 @@ __gnat_handle_vms_condition (int *sigargs, void *mechargs)
 #ifdef IN_RTS
   /* See if it's an imported exception.  Beware that registered exceptions
      are bound to their base code, with the severity bits masked off.  */
-  base_code = Base_Code_In ((Exception_Code) sigargs[1]);
+  base_code = Base_Code_In ((void *) sigargs[1]);
   exception = Coded_Exception (base_code);
 #endif
 
@@ -1674,11 +1667,13 @@ __gnat_install_handler ()
 #include <iv.h>
 #endif
 
+#if defined (ARMEL) && (_WRS_VXWORKS_MAJOR == 6)
+#include <vmLib.h>
+#endif
+
 #ifdef VTHREADS
 #include "private/vThreadsP.h"
 #endif
-
-void __gnat_error_handler (int, void *, struct sigcontext *);
 
 #ifndef __RTP__
 
@@ -1690,7 +1685,7 @@ extern int __gnat_inum_to_ivec (int);
 int
 __gnat_inum_to_ivec (int num)
 {
-  return INUM_TO_IVEC (num);
+  return (int) INUM_TO_IVEC (num);
 }
 #endif
 
@@ -1724,8 +1719,8 @@ __gnat_clear_exception_count (void)
 /* Handle different SIGnal to exception mappings in different VxWorks
    versions.   */
 static void
-__gnat_map_signal (int sig, void *si ATTRIBUTE_UNUSED,
-		   struct sigcontext *sc ATTRIBUTE_UNUSED)
+__gnat_map_signal (int sig, siginfo_t *si ATTRIBUTE_UNUSED,
+		   void *sc ATTRIBUTE_UNUSED)
 {
   struct Exception_Data *exception;
   const char *msg;
@@ -1812,6 +1807,49 @@ __gnat_map_signal (int sig, void *si ATTRIBUTE_UNUSED,
       msg = "unhandled signal";
     }
 
+  /* On ARM VxWorks 6.x, the guard page is left un-armed by the kernel
+     after being violated, so subsequent violations aren't detected.
+     so we retrieve the address of the guard page from the TCB and compare it
+     with the page that is violated (pREG 12 in the context) and re-arm that
+     page if there's a match.  Additionally we're are assured this is a
+     genuine stack overflow condition and and set the message and exception
+     to that effect.  */
+#if defined (ARMEL) && (_WRS_VXWORKS_MAJOR == 6)
+
+  /* We re-arm the guard page by marking it invalid */
+
+#define PAGE_SIZE 4096
+#define REG_IP 12
+
+  if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL)
+    {
+      TASK_ID tid = taskIdSelf ();
+      WIND_TCB *pTcb = taskTcb (tid);
+      unsigned long violated_page
+          = ((struct sigcontext *) sc)->sc_pregs->r[REG_IP] & ~(PAGE_SIZE - 1);
+
+      if ((unsigned long) (pTcb->pStackEnd - PAGE_SIZE) == violated_page)
+        {
+	  vmStateSet (NULL, violated_page,
+		      PAGE_SIZE, VM_STATE_MASK_VALID, VM_STATE_VALID_NOT);
+	  exception = &storage_error;
+
+	  switch (sig)
+	  {
+            case SIGSEGV:
+	      msg = "SIGSEGV: stack overflow";
+	      break;
+            case SIGBUS:
+	      msg = "SIGBUS: stack overflow";
+	      break;
+            case SIGILL:
+	      msg = "SIGILL: stack overflow";
+	      break;
+	  }
+       }
+    }
+#endif /* defined (ARMEL) && (_WRS_VXWORKS_MAJOR == 6) */
+
   __gnat_clear_exception_count ();
   Raise_From_Signal_Handler (exception, msg);
 }
@@ -1819,8 +1857,8 @@ __gnat_map_signal (int sig, void *si ATTRIBUTE_UNUSED,
 /* Tasking and Non-tasking signal handler.  Map SIGnal to Ada exception
    propagation after the required low level adjustments.  */
 
-void
-__gnat_error_handler (int sig, void *si, struct sigcontext *sc)
+static void
+__gnat_error_handler (int sig, siginfo_t *si, void *sc)
 {
   sigset_t mask;
 
@@ -1878,7 +1916,7 @@ __gnat_install_handler (void)
      exceptions.  Make sure that the handler isn't interrupted by another
      signal that might cause a scheduling event!  */
 
-  act.sa_handler = __gnat_error_handler;
+  act.sa_sigaction = __gnat_error_handler;
   act.sa_flags = SA_SIGINFO | SA_ONSTACK;
   sigemptyset (&act.sa_mask);
 
@@ -2282,6 +2320,83 @@ __gnat_install_handler (void)
     sigaction (SIGSEGV, &act, NULL);
   if (__gnat_get_interrupt_state (SIGBUS) != 's')
     sigaction (SIGBUS,  &act, NULL);
+
+  __gnat_handler_installed = 1;
+}
+
+#elif defined(__ANDROID__)
+
+/*******************/
+/* Android Section */
+/*******************/
+
+#include <signal.h>
+#include <stdlib.h>
+
+static void
+__gnat_error_handler (int sig,
+		      siginfo_t *si ATTRIBUTE_UNUSED,
+		      void *ucontext ATTRIBUTE_UNUSED)
+{
+  struct Exception_Data *exception;
+  const char *msg;
+
+  switch (sig)
+    {
+    case SIGSEGV:
+      exception = &storage_error;
+      msg = "stack overflow or erroneous memory access";
+      break;
+
+    case SIGBUS:
+      exception = &constraint_error;
+      msg = "SIGBUS";
+      break;
+
+    case SIGFPE:
+      exception = &constraint_error;
+      msg = "SIGFPE";
+      break;
+
+    default:
+      exception = &program_error;
+      msg = "unhandled signal";
+    }
+
+  Raise_From_Signal_Handler (exception, msg);
+}
+
+/* This must be in keeping with System.OS_Interface.Alternate_Stack_Size.  */
+char __gnat_alternate_stack[16 * 1024];
+
+void
+__gnat_install_handler (void)
+{
+  struct sigaction act;
+
+  /* Set up signal handler to map synchronous signals to appropriate
+     exceptions.  Make sure that the handler isn't interrupted by another
+     signal that might cause a scheduling event!  Also setup an alternate
+     stack region for the handler execution so that stack overflows can be
+     handled properly, avoiding a SEGV generation from stack usage by the
+     handler itself.  */
+
+  stack_t stack;
+  stack.ss_sp = __gnat_alternate_stack;
+  stack.ss_size = sizeof (__gnat_alternate_stack);
+  stack.ss_flags = 0;
+  sigaltstack (&stack, NULL);
+
+  act.sa_sigaction = __gnat_error_handler;
+  act.sa_flags = SA_NODEFER | SA_RESTART | SA_SIGINFO;
+  sigemptyset (&act.sa_mask);
+
+  sigaction (SIGABRT, &act, NULL);
+  sigaction (SIGFPE,  &act, NULL);
+  sigaction (SIGILL,  &act, NULL);
+  sigaction (SIGBUS,  &act, NULL);
+  act.sa_flags |= SA_ONSTACK;
+  sigaction (SIGSEGV, &act, NULL);
 
   __gnat_handler_installed = 1;
 }

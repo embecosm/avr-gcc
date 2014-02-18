@@ -1,5 +1,5 @@
 /* Define per-register tables for data flow info and register allocation.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -69,7 +69,7 @@ extern struct regstat_n_sets_and_refs_t *regstat_n_sets_and_refs;
 
 /* Indexed by n, gives number of times (REG n) is used or set.  */
 static inline int
-REG_N_REFS(int regno)
+REG_N_REFS (int regno)
 {
   return regstat_n_sets_and_refs[regno].refs;
 }
@@ -137,7 +137,7 @@ extern size_t reg_info_p_size;
    frequency.  */
 #define REG_FREQ_FROM_BB(bb) (optimize_size				      \
 			      || (flag_branch_probabilities		      \
-				  && !ENTRY_BLOCK_PTR->count)		      \
+				  && !ENTRY_BLOCK_PTR_FOR_FN (cfun)->count)   \
 			      ? REG_FREQ_MAX				      \
 			      : ((bb)->frequency * REG_FREQ_MAX / BB_FREQ_MAX)\
 			      ? ((bb)->frequency * REG_FREQ_MAX / BB_FREQ_MAX)\

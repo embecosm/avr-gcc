@@ -1,5 +1,5 @@
 /* Lower complex number operations to scalar operations.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,9 +22,27 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "flags.h"
-#include "tree-flow.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "tree-eh.h"
+#include "gimple-expr.h"
+#include "is-a.h"
 #include "gimple.h"
+#include "gimplify.h"
+#include "gimple-iterator.h"
+#include "gimplify-me.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "expr.h"
+#include "tree-dfa.h"
+#include "tree-ssa.h"
 #include "tree-iterator.h"
 #include "tree-pass.h"
 #include "tree-ssa-propagate.h"
@@ -189,7 +207,7 @@ init_dont_simulate_again (void)
   gimple phi;
   bool saw_a_complex_op = false;
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       for (gsi = gsi_start_phis (bb); !gsi_end_p (gsi); gsi_next (&gsi))
 	{
@@ -678,7 +696,7 @@ update_complex_assignment (gimple_stmt_iterator *gsi, tree r, tree i)
 static void
 update_parameter_components (void)
 {
-  edge entry_edge = single_succ_edge (ENTRY_BLOCK_PTR);
+  edge entry_edge = single_succ_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun));
   tree parm;
 
   for (parm = DECL_ARGUMENTS (cfun->decl); parm ; parm = DECL_CHAIN (parm))
@@ -1472,7 +1490,7 @@ expand_complex_operations_1 (gimple_stmt_iterator *gsi)
     case EQ_EXPR:
     case NE_EXPR:
       /* Note, both GIMPLE_ASSIGN and GIMPLE_COND may have an EQ_EXPR
-	 subocde, so we need to access the operands using gimple_op.  */
+	 subcode, so we need to access the operands using gimple_op.  */
       inner_type = TREE_TYPE (gimple_op (stmt, 1));
       if (TREE_CODE (inner_type) != COMPLEX_TYPE)
 	return;
@@ -1618,8 +1636,8 @@ tree_lower_complex (void)
   update_parameter_components ();
 
   /* ??? Ideally we'd traverse the blocks in breadth-first order.  */
-  old_last_basic_block = last_basic_block;
-  FOR_EACH_BB (bb)
+  old_last_basic_block = last_basic_block_for_fn (cfun);
+  FOR_EACH_BB_FN (bb, cfun)
     {
       if (bb->index >= old_last_basic_block)
 	continue;
@@ -1637,26 +1655,43 @@ tree_lower_complex (void)
   return 0;
 }
 
-struct gimple_opt_pass pass_lower_complex =
+namespace {
+
+const pass_data pass_data_lower_complex =
 {
- {
-  GIMPLE_PASS,
-  "cplxlower",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  0,					/* gate */
-  tree_lower_complex,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_NONE,				/* tv_id */
-  PROP_ssa,				/* properties_required */
-  PROP_gimple_lcx,			/* properties_provided */
-  0,                       		/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_update_ssa
-  | TODO_verify_stmts	 		/* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "cplxlower", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  false, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  PROP_ssa, /* properties_required */
+  PROP_gimple_lcx, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_update_ssa | TODO_verify_stmts ), /* todo_flags_finish */
 };
+
+class pass_lower_complex : public gimple_opt_pass
+{
+public:
+  pass_lower_complex (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_lower_complex, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  opt_pass * clone () { return new pass_lower_complex (m_ctxt); }
+  unsigned int execute () { return tree_lower_complex (); }
+
+}; // class pass_lower_complex
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_lower_complex (gcc::context *ctxt)
+{
+  return new pass_lower_complex (ctxt);
+}
 
 
 static bool
@@ -1667,23 +1702,40 @@ gate_no_optimization (void)
   return !(cfun->curr_properties & PROP_gimple_lcx);
 }
 
-struct gimple_opt_pass pass_lower_complex_O0 =
+namespace {
+
+const pass_data pass_data_lower_complex_O0 =
 {
- {
-  GIMPLE_PASS,
-  "cplxlower0",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_no_optimization,			/* gate */
-  tree_lower_complex,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_NONE,				/* tv_id */
-  PROP_cfg,				/* properties_required */
-  PROP_gimple_lcx,			/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_update_ssa
-  | TODO_verify_stmts	 		/* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "cplxlower0", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  PROP_cfg, /* properties_required */
+  PROP_gimple_lcx, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_update_ssa | TODO_verify_stmts ), /* todo_flags_finish */
 };
+
+class pass_lower_complex_O0 : public gimple_opt_pass
+{
+public:
+  pass_lower_complex_O0 (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_lower_complex_O0, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_no_optimization (); }
+  unsigned int execute () { return tree_lower_complex (); }
+
+}; // class pass_lower_complex_O0
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_lower_complex_O0 (gcc::context *ctxt)
+{
+  return new pass_lower_complex_O0 (ctxt);
+}

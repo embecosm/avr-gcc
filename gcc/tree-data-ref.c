@@ -1,5 +1,5 @@
 /* Data references and dependences detectors.
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <pop@cri.ensmp.fr>
 
 This file is part of GCC.
@@ -76,8 +76,19 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "tree.h"
+#include "expr.h"
 #include "gimple-pretty-print.h"
-#include "tree-flow.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "tree-ssa-loop-niter.h"
+#include "tree-ssa-loop.h"
+#include "tree-ssa.h"
 #include "cfgloop.h"
 #include "tree-data-ref.h"
 #include "tree-scalar-evolution.h"
@@ -1136,13 +1147,13 @@ common_affine_function (conflict_function *cf)
   affine_fn comm;
 
   if (!CF_NONTRIVIAL_P (cf))
-    return affine_fn();
+    return affine_fn ();
 
   comm = cf->fns[0];
 
   for (i = 1; i < cf->n; i++)
     if (!affine_function_equal_p (comm, cf->fns[i]))
-      return affine_fn();
+      return affine_fn ();
 
   return comm;
 }
@@ -1637,12 +1648,12 @@ conflict_fn (unsigned n, ...)
   va_list ap;
 
   gcc_assert (0 < n && n <= MAX_DIM);
-  va_start(ap, n);
+  va_start (ap, n);
 
   ret->n = n;
   for (i = 0; i < n; i++)
     ret->fns[i] = va_arg (ap, affine_fn);
-  va_end(ap);
+  va_end (ap);
 
   return ret;
 }
@@ -2833,16 +2844,16 @@ gcd_of_steps_may_divide_p (const_tree chrec, const_tree cst)
   HOST_WIDE_INT cd = 0, val;
   tree step;
 
-  if (!host_integerp (cst, 0))
+  if (!tree_fits_shwi_p (cst))
     return true;
-  val = tree_low_cst (cst, 0);
+  val = tree_to_shwi (cst);
 
   while (TREE_CODE (chrec) == POLYNOMIAL_CHREC)
     {
       step = CHREC_RIGHT (chrec);
-      if (!host_integerp (step, 0))
+      if (!tree_fits_shwi_p (step))
 	return true;
-      cd = gcd (cd, tree_low_cst (step, 0));
+      cd = gcd (cd, tree_to_shwi (step));
       chrec = CHREC_LEFT (chrec);
     }
 
@@ -4309,8 +4320,8 @@ compute_all_dependences (vec<data_reference_p> datarefs,
 
 typedef struct data_ref_loc_d
 {
-  /* Position of the memory reference.  */
-  tree *pos;
+  /* The memory reference.  */
+  tree ref;
 
   /* True if the memory reference is read.  */
   bool is_read;
@@ -4321,20 +4332,45 @@ typedef struct data_ref_loc_d
    true if STMT clobbers memory, false otherwise.  */
 
 static bool
-get_references_in_stmt (gimple stmt, vec<data_ref_loc, va_stack> *references)
+get_references_in_stmt (gimple stmt, vec<data_ref_loc, va_heap> *references)
 {
   bool clobbers_memory = false;
   data_ref_loc ref;
-  tree *op0, *op1;
+  tree op0, op1;
   enum gimple_code stmt_code = gimple_code (stmt);
 
   /* ASM_EXPR and CALL_EXPR may embed arbitrary side effects.
      As we cannot model data-references to not spelled out
      accesses give up if they may occur.  */
-  if ((stmt_code == GIMPLE_CALL
-       && !(gimple_call_flags (stmt) & ECF_CONST))
-      || (stmt_code == GIMPLE_ASM
-	  && (gimple_asm_volatile_p (stmt) || gimple_vuse (stmt))))
+  if (stmt_code == GIMPLE_CALL
+      && !(gimple_call_flags (stmt) & ECF_CONST))
+    {
+      /* Allow IFN_GOMP_SIMD_LANE in their own loops.  */
+      if (gimple_call_internal_p (stmt))
+	switch (gimple_call_internal_fn (stmt))
+	  {
+	  case IFN_GOMP_SIMD_LANE:
+	    {
+	      struct loop *loop = gimple_bb (stmt)->loop_father;
+	      tree uid = gimple_call_arg (stmt, 0);
+	      gcc_assert (TREE_CODE (uid) == SSA_NAME);
+	      if (loop == NULL
+		  || loop->simduid != SSA_NAME_VAR (uid))
+		clobbers_memory = true;
+	      break;
+	    }
+	  case IFN_MASK_LOAD:
+	  case IFN_MASK_STORE:
+	    break;
+	  default:
+	    clobbers_memory = true;
+	    break;
+	  }
+      else
+	clobbers_memory = true;
+    }
+  else if (stmt_code == GIMPLE_ASM
+	   && (gimple_asm_volatile_p (stmt) || gimple_vuse (stmt)))
     clobbers_memory = true;
 
   if (!gimple_vuse (stmt))
@@ -4343,15 +4379,15 @@ get_references_in_stmt (gimple stmt, vec<data_ref_loc, va_stack> *references)
   if (stmt_code == GIMPLE_ASSIGN)
     {
       tree base;
-      op0 = gimple_assign_lhs_ptr (stmt);
-      op1 = gimple_assign_rhs1_ptr (stmt);
+      op0 = gimple_assign_lhs (stmt);
+      op1 = gimple_assign_rhs1 (stmt);
 
-      if (DECL_P (*op1)
-	  || (REFERENCE_CLASS_P (*op1)
-	      && (base = get_base_address (*op1))
+      if (DECL_P (op1)
+	  || (REFERENCE_CLASS_P (op1)
+	      && (base = get_base_address (op1))
 	      && TREE_CODE (base) != SSA_NAME))
 	{
-	  ref.pos = op1;
+	  ref.ref = op1;
 	  ref.is_read = true;
 	  references->safe_push (ref);
 	}
@@ -4360,16 +4396,37 @@ get_references_in_stmt (gimple stmt, vec<data_ref_loc, va_stack> *references)
     {
       unsigned i, n;
 
-      op0 = gimple_call_lhs_ptr (stmt);
+      ref.is_read = false;
+      if (gimple_call_internal_p (stmt))
+	switch (gimple_call_internal_fn (stmt))
+	  {
+	  case IFN_MASK_LOAD:
+	    if (gimple_call_lhs (stmt) == NULL_TREE)
+	      break;
+	    ref.is_read = true;
+	  case IFN_MASK_STORE:
+	    ref.ref = fold_build2 (MEM_REF,
+				   ref.is_read
+				   ? TREE_TYPE (gimple_call_lhs (stmt))
+				   : TREE_TYPE (gimple_call_arg (stmt, 3)),
+				   gimple_call_arg (stmt, 0),
+				   gimple_call_arg (stmt, 1));
+	    references->safe_push (ref);
+	    return false;
+	  default:
+	    break;
+	  }
+
+      op0 = gimple_call_lhs (stmt);
       n = gimple_call_num_args (stmt);
       for (i = 0; i < n; i++)
 	{
-	  op1 = gimple_call_arg_ptr (stmt, i);
+	  op1 = gimple_call_arg (stmt, i);
 
-	  if (DECL_P (*op1)
-	      || (REFERENCE_CLASS_P (*op1) && get_base_address (*op1)))
+	  if (DECL_P (op1)
+	      || (REFERENCE_CLASS_P (op1) && get_base_address (op1)))
 	    {
-	      ref.pos = op1;
+	      ref.ref = op1;
 	      ref.is_read = true;
 	      references->safe_push (ref);
 	    }
@@ -4378,11 +4435,11 @@ get_references_in_stmt (gimple stmt, vec<data_ref_loc, va_stack> *references)
   else
     return clobbers_memory;
 
-  if (*op0
-      && (DECL_P (*op0)
-	  || (REFERENCE_CLASS_P (*op0) && get_base_address (*op0))))
+  if (op0
+      && (DECL_P (op0)
+	  || (REFERENCE_CLASS_P (op0) && get_base_address (op0))))
     {
-      ref.pos = op0;
+      ref.ref = op0;
       ref.is_read = false;
       references->safe_push (ref);
     }
@@ -4398,22 +4455,18 @@ find_data_references_in_stmt (struct loop *nest, gimple stmt,
 			      vec<data_reference_p> *datarefs)
 {
   unsigned i;
-  vec<data_ref_loc, va_stack> references;
+  auto_vec<data_ref_loc, 2> references;
   data_ref_loc *ref;
   bool ret = true;
   data_reference_p dr;
 
-  vec_stack_alloc (data_ref_loc, references, 2);
   if (get_references_in_stmt (stmt, &references))
-    {
-      references.release ();
-      return false;
-    }
+    return false;
 
   FOR_EACH_VEC_ELT (references, i, ref)
     {
       dr = create_data_ref (nest, loop_containing_stmt (stmt),
-			    *ref->pos, stmt, ref->is_read);
+			    ref->ref, stmt, ref->is_read);
       gcc_assert (dr != NULL);
       datarefs->safe_push (dr);
     }
@@ -4432,21 +4485,17 @@ graphite_find_data_references_in_stmt (loop_p nest, loop_p loop, gimple stmt,
 				       vec<data_reference_p> *datarefs)
 {
   unsigned i;
-  vec<data_ref_loc, va_stack> references;
+  auto_vec<data_ref_loc, 2> references;
   data_ref_loc *ref;
   bool ret = true;
   data_reference_p dr;
 
-  vec_stack_alloc (data_ref_loc, references, 2);
   if (get_references_in_stmt (stmt, &references))
-    {
-      references.release ();
-      return false;
-    }
+    return false;
 
   FOR_EACH_VEC_ELT (references, i, ref)
     {
-      dr = create_data_ref (nest, loop, *ref->pos, stmt, ref->is_read);
+      dr = create_data_ref (nest, loop, ref->ref, stmt, ref->is_read);
       gcc_assert (dr != NULL);
       datarefs->safe_push (dr);
     }
@@ -4732,10 +4781,9 @@ analyze_all_data_dependences (struct loop *loop)
 void
 tree_check_data_deps (void)
 {
-  loop_iterator li;
   struct loop *loop_nest;
 
-  FOR_EACH_LOOP (li, loop_nest, 0)
+  FOR_EACH_LOOP (loop_nest, 0)
     analyze_all_data_dependences (loop_nest);
 }
 
@@ -4782,447 +4830,4 @@ free_data_refs (vec<data_reference_p> datarefs)
   FOR_EACH_VEC_ELT (datarefs, i, dr)
     free_data_ref (dr);
   datarefs.release ();
-}
-
-
-
-/* Dump vertex I in RDG to FILE.  */
-
-static void
-dump_rdg_vertex (FILE *file, struct graph *rdg, int i)
-{
-  struct vertex *v = &(rdg->vertices[i]);
-  struct graph_edge *e;
-
-  fprintf (file, "(vertex %d: (%s%s) (in:", i,
-	   RDG_MEM_WRITE_STMT (rdg, i) ? "w" : "",
-	   RDG_MEM_READS_STMT (rdg, i) ? "r" : "");
-
-  if (v->pred)
-    for (e = v->pred; e; e = e->pred_next)
-      fprintf (file, " %d", e->src);
-
-  fprintf (file, ") (out:");
-
-  if (v->succ)
-    for (e = v->succ; e; e = e->succ_next)
-      fprintf (file, " %d", e->dest);
-
-  fprintf (file, ")\n");
-  print_gimple_stmt (file, RDGV_STMT (v), 0, TDF_VOPS|TDF_MEMSYMS);
-  fprintf (file, ")\n");
-}
-
-/* Call dump_rdg_vertex on stderr.  */
-
-DEBUG_FUNCTION void
-debug_rdg_vertex (struct graph *rdg, int i)
-{
-  dump_rdg_vertex (stderr, rdg, i);
-}
-
-/* Dump component C of RDG to FILE.  If DUMPED is non-null, set the
-   dumped vertices to that bitmap.  */
-
-static void
-dump_rdg_component (FILE *file, struct graph *rdg, int c, bitmap dumped)
-{
-  int i;
-
-  fprintf (file, "(%d\n", c);
-
-  for (i = 0; i < rdg->n_vertices; i++)
-    if (rdg->vertices[i].component == c)
-      {
-	if (dumped)
-	  bitmap_set_bit (dumped, i);
-
-	dump_rdg_vertex (file, rdg, i);
-      }
-
-  fprintf (file, ")\n");
-}
-
-/* Call dump_rdg_vertex on stderr.  */
-
-DEBUG_FUNCTION void
-debug_rdg_component (struct graph *rdg, int c)
-{
-  dump_rdg_component (stderr, rdg, c, NULL);
-}
-
-/* Dump the reduced dependence graph RDG to FILE.  */
-
-void
-dump_rdg (FILE *file, struct graph *rdg)
-{
-  int i;
-  bitmap dumped = BITMAP_ALLOC (NULL);
-
-  fprintf (file, "(rdg\n");
-
-  for (i = 0; i < rdg->n_vertices; i++)
-    if (!bitmap_bit_p (dumped, i))
-      dump_rdg_component (file, rdg, rdg->vertices[i].component, dumped);
-
-  fprintf (file, ")\n");
-  BITMAP_FREE (dumped);
-}
-
-/* Call dump_rdg on stderr.  */
-
-DEBUG_FUNCTION void
-debug_rdg (struct graph *rdg)
-{
-  dump_rdg (stderr, rdg);
-}
-
-static void
-dot_rdg_1 (FILE *file, struct graph *rdg)
-{
-  int i;
-
-  fprintf (file, "digraph RDG {\n");
-
-  for (i = 0; i < rdg->n_vertices; i++)
-    {
-      struct vertex *v = &(rdg->vertices[i]);
-      struct graph_edge *e;
-
-      /* Highlight reads from memory.  */
-      if (RDG_MEM_READS_STMT (rdg, i))
-       fprintf (file, "%d [style=filled, fillcolor=green]\n", i);
-
-      /* Highlight stores to memory.  */
-      if (RDG_MEM_WRITE_STMT (rdg, i))
-       fprintf (file, "%d [style=filled, fillcolor=red]\n", i);
-
-      if (v->succ)
-       for (e = v->succ; e; e = e->succ_next)
-         switch (RDGE_TYPE (e))
-           {
-           case input_dd:
-             fprintf (file, "%d -> %d [label=input] \n", i, e->dest);
-             break;
-
-           case output_dd:
-             fprintf (file, "%d -> %d [label=output] \n", i, e->dest);
-             break;
-
-           case flow_dd:
-             /* These are the most common dependences: don't print these. */
-             fprintf (file, "%d -> %d \n", i, e->dest);
-             break;
-
-           case anti_dd:
-             fprintf (file, "%d -> %d [label=anti] \n", i, e->dest);
-             break;
-
-           default:
-             gcc_unreachable ();
-           }
-    }
-
-  fprintf (file, "}\n\n");
-}
-
-/* Display the Reduced Dependence Graph using dotty.  */
-extern void dot_rdg (struct graph *);
-
-DEBUG_FUNCTION void
-dot_rdg (struct graph *rdg)
-{
-  /* When debugging, enable the following code.  This cannot be used
-     in production compilers because it calls "system".  */
-#if 0
-  FILE *file = fopen ("/tmp/rdg.dot", "w");
-  gcc_assert (file != NULL);
-
-  dot_rdg_1 (file, rdg);
-  fclose (file);
-
-  system ("dotty /tmp/rdg.dot &");
-#else
-  dot_rdg_1 (stderr, rdg);
-#endif
-}
-
-/* Returns the index of STMT in RDG.  */
-
-int
-rdg_vertex_for_stmt (struct graph *rdg ATTRIBUTE_UNUSED, gimple stmt)
-{
-  int index = gimple_uid (stmt);
-  gcc_checking_assert (index == -1 || RDG_STMT (rdg, index) == stmt);
-  return index;
-}
-
-/* Creates an edge in RDG for each distance vector from DDR.  The
-   order that we keep track of in the RDG is the order in which
-   statements have to be executed.  */
-
-static void
-create_rdg_edge_for_ddr (struct graph *rdg, ddr_p ddr)
-{
-  struct graph_edge *e;
-  int va, vb;
-  data_reference_p dra = DDR_A (ddr);
-  data_reference_p drb = DDR_B (ddr);
-  unsigned level = ddr_dependence_level (ddr);
-
-  /* For non scalar dependences, when the dependence is REVERSED,
-     statement B has to be executed before statement A.  */
-  if (level > 0
-      && !DDR_REVERSED_P (ddr))
-    {
-      data_reference_p tmp = dra;
-      dra = drb;
-      drb = tmp;
-    }
-
-  va = rdg_vertex_for_stmt (rdg, DR_STMT (dra));
-  vb = rdg_vertex_for_stmt (rdg, DR_STMT (drb));
-
-  if (va < 0 || vb < 0)
-    return;
-
-  e = add_edge (rdg, va, vb);
-  e->data = XNEW (struct rdg_edge);
-
-  RDGE_LEVEL (e) = level;
-  RDGE_RELATION (e) = ddr;
-
-  /* Determines the type of the data dependence.  */
-  if (DR_IS_READ (dra) && DR_IS_READ (drb))
-    RDGE_TYPE (e) = input_dd;
-  else if (DR_IS_WRITE (dra) && DR_IS_WRITE (drb))
-    RDGE_TYPE (e) = output_dd;
-  else if (DR_IS_WRITE (dra) && DR_IS_READ (drb))
-    RDGE_TYPE (e) = flow_dd;
-  else if (DR_IS_READ (dra) && DR_IS_WRITE (drb))
-    RDGE_TYPE (e) = anti_dd;
-}
-
-/* Creates dependence edges in RDG for all the uses of DEF.  IDEF is
-   the index of DEF in RDG.  */
-
-static void
-create_rdg_edges_for_scalar (struct graph *rdg, tree def, int idef)
-{
-  use_operand_p imm_use_p;
-  imm_use_iterator iterator;
-
-  FOR_EACH_IMM_USE_FAST (imm_use_p, iterator, def)
-    {
-      struct graph_edge *e;
-      int use = rdg_vertex_for_stmt (rdg, USE_STMT (imm_use_p));
-
-      if (use < 0)
-	continue;
-
-      e = add_edge (rdg, idef, use);
-      e->data = XNEW (struct rdg_edge);
-      RDGE_TYPE (e) = flow_dd;
-      RDGE_RELATION (e) = NULL;
-    }
-}
-
-/* Creates the edges of the reduced dependence graph RDG.  */
-
-static void
-create_rdg_edges (struct graph *rdg, vec<ddr_p> ddrs)
-{
-  int i;
-  struct data_dependence_relation *ddr;
-  def_operand_p def_p;
-  ssa_op_iter iter;
-
-  FOR_EACH_VEC_ELT (ddrs, i, ddr)
-    if (DDR_ARE_DEPENDENT (ddr) == NULL_TREE)
-      create_rdg_edge_for_ddr (rdg, ddr);
-
-  for (i = 0; i < rdg->n_vertices; i++)
-    FOR_EACH_PHI_OR_STMT_DEF (def_p, RDG_STMT (rdg, i),
-			      iter, SSA_OP_DEF)
-      create_rdg_edges_for_scalar (rdg, DEF_FROM_PTR (def_p), i);
-}
-
-/* Build the vertices of the reduced dependence graph RDG.  */
-
-static void
-create_rdg_vertices (struct graph *rdg, vec<gimple> stmts, loop_p loop)
-{
-  int i, j;
-  gimple stmt;
-
-  FOR_EACH_VEC_ELT (stmts, i, stmt)
-    {
-      vec<data_ref_loc, va_stack> references;
-      data_ref_loc *ref;
-      struct vertex *v = &(rdg->vertices[i]);
-
-      /* Record statement to vertex mapping.  */
-      gimple_set_uid (stmt, i);
-
-      v->data = XNEW (struct rdg_vertex);
-      RDGV_STMT (v) = stmt;
-      RDGV_DATAREFS (v).create (0);
-      RDGV_HAS_MEM_WRITE (v) = false;
-      RDGV_HAS_MEM_READS (v) = false;
-      if (gimple_code (stmt) == GIMPLE_PHI)
-	continue;
-
-      vec_stack_alloc (data_ref_loc, references, 2);
-      get_references_in_stmt (stmt, &references);
-      FOR_EACH_VEC_ELT (references, j, ref)
-	{
-	  data_reference_p dr;
-	  if (!ref->is_read)
-	    RDGV_HAS_MEM_WRITE (v) = true;
-	  else
-	    RDGV_HAS_MEM_READS (v) = true;
-	  dr = create_data_ref (loop, loop_containing_stmt (stmt),
-				*ref->pos, stmt, ref->is_read);
-	  if (dr)
-	    RDGV_DATAREFS (v).safe_push (dr);
-	}
-      references.release ();
-    }
-}
-
-/* Initialize STMTS with all the statements of LOOP.  When
-   INCLUDE_PHIS is true, include also the PHI nodes.  The order in
-   which we discover statements is important as
-   generate_loops_for_partition is using the same traversal for
-   identifying statements. */
-
-static void
-stmts_from_loop (struct loop *loop, vec<gimple> *stmts)
-{
-  unsigned int i;
-  basic_block *bbs = get_loop_body_in_dom_order (loop);
-
-  for (i = 0; i < loop->num_nodes; i++)
-    {
-      basic_block bb = bbs[i];
-      gimple_stmt_iterator bsi;
-      gimple stmt;
-
-      for (bsi = gsi_start_phis (bb); !gsi_end_p (bsi); gsi_next (&bsi))
-	stmts->safe_push (gsi_stmt (bsi));
-
-      for (bsi = gsi_start_bb (bb); !gsi_end_p (bsi); gsi_next (&bsi))
-	{
-	  stmt = gsi_stmt (bsi);
-	  if (gimple_code (stmt) != GIMPLE_LABEL && !is_gimple_debug (stmt))
-	    stmts->safe_push (stmt);
-	}
-    }
-
-  free (bbs);
-}
-
-/* Returns true when all the dependences are computable.  */
-
-static bool
-known_dependences_p (vec<ddr_p> dependence_relations)
-{
-  ddr_p ddr;
-  unsigned int i;
-
-  FOR_EACH_VEC_ELT (dependence_relations, i, ddr)
-    if (DDR_ARE_DEPENDENT (ddr) == chrec_dont_know)
-      return false;
-
-  return true;
-}
-
-/* Build the Reduced Dependence Graph (RDG) with one vertex per
-   statement of the loop nest, and one edge per data dependence or
-   scalar dependence.  */
-
-struct graph *
-build_empty_rdg (int n_stmts)
-{
-  struct graph *rdg = new_graph (n_stmts);
-  return rdg;
-}
-
-/* Build the Reduced Dependence Graph (RDG) with one vertex per
-   statement of the loop nest, and one edge per data dependence or
-   scalar dependence.  */
-
-struct graph *
-build_rdg (struct loop *loop,
-	   vec<loop_p> *loop_nest,
-	   vec<ddr_p> *dependence_relations,
-	   vec<data_reference_p> *datarefs)
-{
-  struct graph *rdg = NULL;
-
-  if (compute_data_dependences_for_loop (loop, false, loop_nest, datarefs,
-					 dependence_relations)
-      && known_dependences_p (*dependence_relations))
-    {
-      vec<gimple> stmts;
-      stmts.create (10);
-      stmts_from_loop (loop, &stmts);
-      rdg = build_empty_rdg (stmts.length ());
-      create_rdg_vertices (rdg, stmts, loop);
-      create_rdg_edges (rdg, *dependence_relations);
-      stmts.release ();
-    }
-
-  return rdg;
-}
-
-/* Free the reduced dependence graph RDG.  */
-
-void
-free_rdg (struct graph *rdg)
-{
-  int i;
-
-  for (i = 0; i < rdg->n_vertices; i++)
-    {
-      struct vertex *v = &(rdg->vertices[i]);
-      struct graph_edge *e;
-
-      for (e = v->succ; e; e = e->succ_next)
-	free (e->data);
-
-      gimple_set_uid (RDGV_STMT (v), -1);
-      free_data_refs (RDGV_DATAREFS (v));
-      free (v->data);
-    }
-
-  free_graph (rdg);
-}
-
-/* Determines whether the statement from vertex V of the RDG has a
-   definition used outside the loop that contains this statement.  */
-
-bool
-rdg_defs_used_in_other_loops_p (struct graph *rdg, int v)
-{
-  gimple stmt = RDG_STMT (rdg, v);
-  struct loop *loop = loop_containing_stmt (stmt);
-  use_operand_p imm_use_p;
-  imm_use_iterator iterator;
-  ssa_op_iter it;
-  def_operand_p def_p;
-
-  if (!loop)
-    return true;
-
-  FOR_EACH_PHI_OR_STMT_DEF (def_p, stmt, it, SSA_OP_DEF)
-    {
-      FOR_EACH_IMM_USE_FAST (imm_use_p, iterator, DEF_FROM_PTR (def_p))
-	{
-	  if (loop_containing_stmt (USE_STMT (imm_use_p)) != loop)
-	    return true;
-	}
-    }
-
-  return false;
 }

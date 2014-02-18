@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005-2013 Free Software Foundation, Inc.
+ * Copyright (C) 2005-2014 Free Software Foundation, Inc.
  *
  * This file is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -21,6 +21,7 @@
  * <http://www.gnu.org/licenses/>.
  */
 
+#ifndef _SOFT_FLOAT
 #define MXCSR_DAZ (1 << 6)	/* Enable denormals are zero mode */
 #define MXCSR_FTZ (1 << 15)	/* Enable flush to zero mode */
 
@@ -134,3 +135,4 @@ set_fast_math (void)
   __builtin_ia32_ldmxcsr (mxcsr);
 #endif
 }
+#endif

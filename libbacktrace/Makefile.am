@@ -1,5 +1,5 @@
 # Makefile.am -- Backtrace Makefile.
-# Copyright (C) 2012-2013 Free Software Foundation, Inc.
+# Copyright (C) 2012-2014 Free Software Foundation, Inc.
 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -40,6 +40,7 @@ noinst_LTLIBRARIES = libbacktrace.la
 
 libbacktrace_la_SOURCES = \
 	backtrace.h \
+	atomic.c \
 	dwarf.c \
 	fileline.c \
 	internal.h \

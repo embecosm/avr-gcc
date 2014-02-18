@@ -608,6 +608,7 @@ build_os
 build_vendor
 build_cpu
 build
+enable_vtable_verify
 enable_shared
 libgcc_topdir
 target_alias
@@ -655,6 +656,7 @@ with_target_subdir
 with_cross_host
 with_ld
 enable_shared
+enable_vtable_verify
 enable_version_specific_runtime_libs
 with_slibdir
 enable_maintainer_mode
@@ -1288,6 +1290,7 @@ Optional Features:
   --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
   --disable-shared        don't provide a shared libgcc
+  --enable-vtable-verify    Enable vtable verification feature
   --enable-version-specific-runtime-libs    Specify that runtime libraries should be installed in a compiler-specific directory
   --enable-maintainer-mode
                           enable make rules and dependencies not useful (and
@@ -2140,6 +2143,19 @@ fi
 
 
 
+# Check whether --enable-vtable-verify was given.
+if test "${enable_vtable_verify+set}" = set; then :
+  enableval=$enable_vtable_verify; case "$enableval" in
+ yes) enable_vtable_verify=yes ;;
+ no)  enable_vtable_verify=no ;;
+ *)   enable_vtable_verify=no;;
+ esac
+else
+  enable_vtable_verify=no
+fi
+
+
+
 # Make sure we can run config.sub.
 $SHELL "$ac_aux_dir/config.sub" sun4 >/dev/null 2>&1 ||
   as_fn_error "cannot run $SHELL $ac_aux_dir/config.sub" "$LINENO" 5
@@ -2259,9 +2275,6 @@ case "${host}" in
     # Some targets support both -fPIC and -fpic, but prefer the latter.
     # FIXME: Why?
     i[34567]86-*-* | x86_64-*-*)
-	PICFLAG=-fpic
-	;;
-    m68k-*-*)
 	PICFLAG=-fpic
 	;;
     # FIXME: Override -fPIC default in libgcc only?
@@ -4050,7 +4063,20 @@ if test "${libgcc_cv_dfp+set}" = set; then :
 else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
+
+#include <fenv.h>
+
+int
+main ()
+{
+
 _Decimal32 x;
+int fe_except =
+  FE_INVALID|FE_DIVBYZERO|FE_OVERFLOW|FE_UNDERFLOW|FE_INEXACT;
+
+  ;
+  return 0;
+}
 _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
   libgcc_cv_dfp=yes
@@ -4291,9 +4317,11 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $libgcc_cv_cfi" >&5
 $as_echo "$libgcc_cv_cfi" >&6; }
 
-# Check 32bit or 64bit
+# Check 32bit or 64bit.  In the case of MIPS, this really determines the
+# word size rather than the address size.
 cat > conftest.c <<EOF
-#if defined(__x86_64__) || (!defined(__i386__) && defined(__LP64__))
+#if defined(__x86_64__) || (!defined(__i386__) && defined(__LP64__)) \
+    || defined(__mips64)
 host_address=64
 #else
 host_address=32
@@ -4301,6 +4329,30 @@ host_address=32
 EOF
 eval `${CC-cc} -E conftest.c | grep host_address=`
 rm -f conftest.c
+
+case ${host} in
+mips*-*-*)
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the target is hard-float" >&5
+$as_echo_n "checking whether the target is hard-float... " >&6; }
+if test "${libgcc_cv_mips_hard_float+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#ifndef __mips_hard_float
+     #error FOO
+     #endif
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  libgcc_cv_mips_hard_float=yes
+else
+  libgcc_cv_mips_hard_float=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $libgcc_cv_mips_hard_float" >&5
+$as_echo "$libgcc_cv_mips_hard_float" >&6; }
+esac
 
 # Collect host-machine-specific information.
 . ${srcdir}/config.host

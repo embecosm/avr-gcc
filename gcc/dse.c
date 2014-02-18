@@ -1,5 +1,5 @@
 /* RTL dead store elimination.
-   Copyright (C) 2005-2013 Free Software Foundation, Inc.
+   Copyright (C) 2005-2014 Free Software Foundation, Inc.
 
    Contributed by Richard Sandiford <rsandifor@codesourcery.com>
    and Kenneth Zadeck <zadeck@naturalbridge.com>
@@ -29,6 +29,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "tm_p.h"
 #include "regs.h"
 #include "hard-reg-set.h"
@@ -46,7 +47,13 @@ along with GCC; see the file COPYING3.  If not see
 #include "dbgcnt.h"
 #include "target.h"
 #include "params.h"
-#include "tree-flow.h" /* for may_be_aliased */
+#include "pointer-set.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-ssa.h"
 
 /* This file contains three techniques for performing Dead Store
    Elimination (dse).
@@ -765,7 +772,7 @@ dse_step0 (void)
 
   rtx_group_table.create (11);
 
-  bb_table = XNEWVEC (bb_info_t, last_basic_block);
+  bb_table = XNEWVEC (bb_info_t, last_basic_block_for_fn (cfun));
   rtx_group_next_id = 0;
 
   stores_off_frame_dead_at_return = !cfun->stdarg;
@@ -2701,7 +2708,7 @@ dse_step1 (void)
   bitmap_set_bit (all_blocks, ENTRY_BLOCK);
   bitmap_set_bit (all_blocks, EXIT_BLOCK);
 
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
     {
       insn_info_t ptr;
       bb_info_t bb_info = (bb_info_t) pool_alloc (bb_info_pool);
@@ -2749,7 +2756,7 @@ dse_step1 (void)
 	  if (stores_off_frame_dead_at_return
 	      && (EDGE_COUNT (bb->succs) == 0
 		  || (single_succ_p (bb)
-		      && single_succ (bb) == EXIT_BLOCK_PTR
+		      && single_succ (bb) == EXIT_BLOCK_PTR_FOR_FN (cfun)
 		      && ! crtl->calls_eh_return)))
 	    {
 	      insn_info_t i_ptr = active_local_stores;
@@ -2916,8 +2923,8 @@ dse_step2_nospill (void)
       if (group == clear_alias_group)
 	continue;
 
-      memset (group->offset_map_n, 0, sizeof(int) * group->offset_map_size_n);
-      memset (group->offset_map_p, 0, sizeof(int) * group->offset_map_size_p);
+      memset (group->offset_map_n, 0, sizeof (int) * group->offset_map_size_n);
+      memset (group->offset_map_p, 0, sizeof (int) * group->offset_map_size_p);
       bitmap_clear (group->group_kill);
 
       EXECUTE_IF_SET_IN_BITMAP (group->store2_n, 0, j, bi)
@@ -3276,14 +3283,14 @@ static void
 dse_step3 (bool for_spills)
 {
   basic_block bb;
-  sbitmap unreachable_blocks = sbitmap_alloc (last_basic_block);
+  sbitmap unreachable_blocks = sbitmap_alloc (last_basic_block_for_fn (cfun));
   sbitmap_iterator sbi;
   bitmap all_ones = NULL;
   unsigned int i;
 
   bitmap_ones (unreachable_blocks);
 
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
     {
       bb_info_t bb_info = bb_table[bb->index];
       if (bb_info->gen)
@@ -3462,7 +3469,7 @@ dse_step4 (void)
       basic_block bb;
 
       fprintf (dump_file, "\n\n*** Global dataflow info after analysis.\n");
-      FOR_ALL_BB (bb)
+      FOR_ALL_BB_FN (bb, cfun)
 	{
 	  bb_info_t bb_info = bb_table[bb->index];
 
@@ -3500,7 +3507,7 @@ static void
 dse_step5_nospill (void)
 {
   basic_block bb;
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       bb_info_t bb_info = bb_table[bb->index];
       insn_info_t insn_info = bb_info->last_insn;
@@ -3610,7 +3617,7 @@ dse_step6 (void)
 {
   basic_block bb;
 
-  FOR_ALL_BB (bb)
+  FOR_ALL_BB_FN (bb, cfun)
     {
       bb_info_t bb_info = bb_table[bb->index];
       insn_info_t insn_info = bb_info->last_insn;
@@ -3729,42 +3736,78 @@ gate_dse2 (void)
     && dbg_cnt (dse2);
 }
 
-struct rtl_opt_pass pass_rtl_dse1 =
+namespace {
+
+const pass_data pass_data_rtl_dse1 =
 {
- {
-  RTL_PASS,
-  "dse1",                               /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_dse1,                            /* gate */
-  rest_of_handle_dse,                   /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_DSE1,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "dse1", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_DSE1, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing ), /* todo_flags_finish */
 };
 
-struct rtl_opt_pass pass_rtl_dse2 =
+class pass_rtl_dse1 : public rtl_opt_pass
 {
- {
-  RTL_PASS,
-  "dse2",                               /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_dse2,                            /* gate */
-  rest_of_handle_dse,                   /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_DSE2,                              /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing /* todo_flags_finish */
- }
+public:
+  pass_rtl_dse1 (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_dse1, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_dse1 (); }
+  unsigned int execute () { return rest_of_handle_dse (); }
+
+}; // class pass_rtl_dse1
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_dse1 (gcc::context *ctxt)
+{
+  return new pass_rtl_dse1 (ctxt);
+}
+
+namespace {
+
+const pass_data pass_data_rtl_dse2 =
+{
+  RTL_PASS, /* type */
+  "dse2", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_DSE2, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing ), /* todo_flags_finish */
 };
+
+class pass_rtl_dse2 : public rtl_opt_pass
+{
+public:
+  pass_rtl_dse2 (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_rtl_dse2, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_dse2 (); }
+  unsigned int execute () { return rest_of_handle_dse (); }
+
+}; // class pass_rtl_dse2
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_rtl_dse2 (gcc::context *ctxt)
+{
+  return new pass_rtl_dse2 (ctxt);
+}

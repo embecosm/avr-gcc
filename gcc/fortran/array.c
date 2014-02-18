@@ -1,5 +1,5 @@
 /* Array things
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -1073,7 +1073,7 @@ gfc_match_array_constructor (gfc_expr **result)
   /* Try to match an optional "type-spec ::"  */
   gfc_clear_ts (&ts);
   gfc_new_undo_checkpoint (changed_syms);
-  if (gfc_match_decl_type_spec (&ts, 0) == MATCH_YES)
+  if (gfc_match_type_spec (&ts) == MATCH_YES)
     {
       seen_ts = (gfc_match (" ::") == MATCH_YES);
 
@@ -2084,7 +2084,7 @@ spec_size (gfc_array_spec *as, mpz_t *result)
   mpz_t size;
   int d;
 
-  if (as->type == AS_ASSUMED_RANK)
+  if (!as || as->type == AS_ASSUMED_RANK)
     return false;
 
   mpz_init_set_ui (*result, 1);
@@ -2112,6 +2112,7 @@ bool
 gfc_ref_dimen_size (gfc_array_ref *ar, int dimen, mpz_t *result, mpz_t *end)
 {
   mpz_t upper, lower, stride;
+  mpz_t diff;
   bool t;
 
   if (dimen < 0 || ar == NULL || dimen > ar->dimen - 1)
@@ -2130,9 +2131,63 @@ gfc_ref_dimen_size (gfc_array_ref *ar, int dimen, mpz_t *result, mpz_t *end)
       break;
 
     case DIMEN_RANGE:
+
+      mpz_init (stride);
+
+      if (ar->stride[dimen] == NULL)
+	mpz_set_ui (stride, 1);
+      else
+	{
+	  if (ar->stride[dimen]->expr_type != EXPR_CONSTANT)
+	    {
+	      mpz_clear (stride);
+	      return false;
+	    }
+	  mpz_set (stride, ar->stride[dimen]->value.integer);
+	}
+
+      /* Calculate the number of elements via gfc_dep_differce, but only if
+	 start and end are both supplied in the reference or the array spec.
+	 This is to guard against strange but valid code like
+
+	 subroutine foo(a,n)
+	 real a(1:n)
+	 n = 3
+	 print *,size(a(n-1:))
+
+	 where the user changes the value of a variable.  If we have to
+	 determine end as well, we cannot do this using gfc_dep_difference.
+	 Fall back to the constants-only code then.  */
+
+      if (end == NULL)
+	{
+	  bool use_dep;
+
+	  use_dep = gfc_dep_difference (ar->end[dimen], ar->start[dimen],
+					&diff);
+	  if (!use_dep && ar->end[dimen] == NULL && ar->start[dimen] == NULL)
+	    use_dep = gfc_dep_difference (ar->as->upper[dimen],
+					    ar->as->lower[dimen], &diff);
+
+	  if (use_dep)
+	    {
+	      mpz_init (*result);
+	      mpz_add (*result, diff, stride);
+	      mpz_div (*result, *result, stride);
+	      if (mpz_cmp_ui (*result, 0) < 0)
+		mpz_set_ui (*result, 0);
+
+	      mpz_clear (stride);
+	      mpz_clear (diff);
+	      return true;
+	    }
+
+	}
+
+      /*  Constant-only code here, which covers more cases
+	  like a(:4) etc.  */
       mpz_init (upper);
       mpz_init (lower);
-      mpz_init (stride);
       t = false;
 
       if (ar->start[dimen] == NULL)
@@ -2161,15 +2216,6 @@ gfc_ref_dimen_size (gfc_array_ref *ar, int dimen, mpz_t *result, mpz_t *end)
 	  if (ar->end[dimen]->expr_type != EXPR_CONSTANT)
 	    goto cleanup;
 	  mpz_set (upper, ar->end[dimen]->value.integer);
-	}
-
-      if (ar->stride[dimen] == NULL)
-	mpz_set_ui (stride, 1);
-      else
-	{
-	  if (ar->stride[dimen]->expr_type != EXPR_CONSTANT)
-	    goto cleanup;
-	  mpz_set (stride, ar->stride[dimen]->value.integer);
 	}
 
       mpz_init (*result);

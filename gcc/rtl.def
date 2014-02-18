@@ -1,7 +1,7 @@
 /* This file contains the definitions and documentation for the
    Register Transfer Expressions (rtx's) that make up the
    Register Transfer Language (rtl) used in the Back End of the GNU compiler.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -82,7 +82,7 @@ DEF_RTL_EXPR(UNKNOWN, "UnKnown", "*", RTX_EXTRA)
 
 /* Used in the cselib routines to describe a value.  Objects of this
    kind are only allocated in cselib.c, in an alloc pool instead of in
-   GC memory.  The only operand of a VALUE is a cselib_val_struct.
+   GC memory.  The only operand of a VALUE is a cselib_val.
    var-tracking requires this to have a distinct integral value from
    DECL codes in trees.  */
 DEF_RTL_EXPR(VALUE, "value", "0", RTX_OBJ)
@@ -95,12 +95,15 @@ DEF_RTL_EXPR(DEBUG_EXPR, "debug_expr", "0", RTX_OBJ)
    Expressions used in constructing lists.
    --------------------------------------------------------------------- */
 
-/* a linked list of expressions */
+/* A linked list of expressions.  */
 DEF_RTL_EXPR(EXPR_LIST, "expr_list", "ee", RTX_EXTRA)
 
-/* a linked list of instructions.
+/* A linked list of instructions.
    The insns are represented in print by their uids.  */
 DEF_RTL_EXPR(INSN_LIST, "insn_list", "ue", RTX_EXTRA)
+
+/* A linked list of integers.  */
+DEF_RTL_EXPR(INT_LIST, "int_list", "ie", RTX_EXTRA)
 
 /* SEQUENCE is used in late passes of the compiler to group insns for
    one reason or another.
@@ -962,8 +965,9 @@ DEF_RTL_EXPR(DEFINE_ASM_ATTRIBUTES, "define_asm_attributes", "V", RTX_EXTRA)
       relational operator.  Operands should have only one alternative.
    1: A C expression giving an additional condition for recognizing
       the generated pattern.
-   2: A template or C code to produce assembler output.  */
-DEF_RTL_EXPR(DEFINE_COND_EXEC, "define_cond_exec", "Ess", RTX_EXTRA)
+   2: A template or C code to produce assembler output.
+   3: A vector of attributes to append to the resulting cond_exec insn.  */
+DEF_RTL_EXPR(DEFINE_COND_EXEC, "define_cond_exec", "EssV", RTX_EXTRA)
 
 /* Definition of an operand predicate.  The difference between
    DEFINE_PREDICATE and DEFINE_SPECIAL_PREDICATE is that genrecog will

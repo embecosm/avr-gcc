@@ -1,5 +1,5 @@
 /* Prototypes for exported functions defined in cr16.c
-   Copyright (C) 2012-2013 Free Software Foundation, Inc.
+   Copyright (C) 2012-2014 Free Software Foundation, Inc.
    Contributed by KPIT Cummins Infosystems Limited.
 
    This file is part of GCC.
@@ -20,8 +20,6 @@
 
 #ifndef GCC_CR16_PROTOS_H
 #define GCC_CR16_PROTOS_H
-
-#include "target.h"
 
 /* Register usage.  */
 extern enum reg_class cr16_regno_reg_class (int);
@@ -70,7 +68,7 @@ enum cr16_addrtype
   CR16_ABSOLUTE
 };
 
-extern void notice_update_cc PARAMS ((rtx));
+extern void notice_update_cc (rtx);
 extern int cr16_operand_bit_pos (int val, int bitval);
 extern void cr16_decompose_const (rtx x, int *code,
 				  enum data_model_type *data,

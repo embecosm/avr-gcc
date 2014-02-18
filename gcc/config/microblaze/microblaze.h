@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler for Xilinx MicroBlaze.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
    Contributed by Michael Eager <eager@eagercon.com>.
 
@@ -193,7 +193,6 @@ extern enum pipeline_type microblaze_pipe;
 #define BITS_BIG_ENDIAN 0
 #define BYTES_BIG_ENDIAN (TARGET_LITTLE_ENDIAN == 0)
 #define WORDS_BIG_ENDIAN (BYTES_BIG_ENDIAN)
-#define BITS_PER_UNIT           8
 #define BITS_PER_WORD           32
 #define UNITS_PER_WORD          4
 #define MIN_UNITS_PER_WORD      4
@@ -212,6 +211,12 @@ extern enum pipeline_type microblaze_pipe;
 #define BIGGEST_ALIGNMENT       32
 #define STRICT_ALIGNMENT        1
 #define PCC_BITFIELD_TYPE_MATTERS 1
+
+#undef SIZE_TYPE
+#define SIZE_TYPE "unsigned int"
+
+#undef PTRDIFF_TYPE
+#define PTRDIFF_TYPE "int"
 
 #define CONSTANT_ALIGNMENT(EXP, ALIGN)					\
   ((TREE_CODE (EXP) == STRING_CST  || TREE_CODE (EXP) == CONSTRUCTOR)	\
@@ -891,6 +896,10 @@ do {									 \
 "%{!nostdlib: \
 %{pg:-start-group -lxilprofile -lgloss -lxil -lc -lm -end-group } \
 %{!pg:-start-group -lgloss -lxil -lc -lm -end-group }} "
+
+/* microblaze-unknown-elf target has no support of C99 runtime */
+#undef TARGET_LIBC_HAS_FUNCTION
+#define TARGET_LIBC_HAS_FUNCTION no_c99_libc_has_function
 
 #undef  ENDFILE_SPEC
 #define ENDFILE_SPEC "crtend.o%s crtn.o%s"

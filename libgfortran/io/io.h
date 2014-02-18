@@ -1,4 +1,4 @@
-/* Copyright (C) 2002-2013 Free Software Foundation, Inc.
+/* Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
    F2003 I/O support contributed by Jerry DeLisle
 
@@ -186,8 +186,14 @@ typedef enum
 unit_encoding;
 
 typedef enum
-{ ROUND_UP, ROUND_DOWN, ROUND_ZERO, ROUND_NEAREST, ROUND_COMPATIBLE,
-  ROUND_PROCDEFINED, ROUND_UNSPECIFIED }
+{ ROUND_UP = GFC_FPE_UPWARD,
+  ROUND_DOWN = GFC_FPE_DOWNWARD,
+  ROUND_ZERO = GFC_FPE_TOWARDZERO,
+  ROUND_NEAREST = GFC_FPE_TONEAREST,
+  ROUND_COMPATIBLE = 10, /* round away from zero.  */
+  ROUND_PROCDEFINED, /* Here as ROUND_NEAREST. */
+  ROUND_UNSPECIFIED /* Should never occur. */
+}
 unit_round;
 
 /* NOTE: unit_sign must correspond with the sign_status enumerator in
@@ -424,7 +430,10 @@ typedef struct st_parameter_dt
 	  unsigned g0_no_blanks : 1;
 	  /* Used to signal use of free_format_data.  */
 	  unsigned format_not_saved : 1;
-	  /* 14 unused bits.  */
+	  /* A flag used to identify when a non-standard expanded namelist read
+	     has occurred.  */
+	  unsigned expanded_read : 1;
+	  /* 13 unused bits.  */
 
 	  /* Used for ungetc() style functionality. Possible values
 	     are an unsigned char, EOF, or EOF - 1 used to mark the
@@ -441,9 +450,8 @@ typedef struct st_parameter_dt
 	  char *line_buffer;
 	  struct format_data *fmt;
 	  namelist_info *ionml;
-	  /* A flag used to identify when a non-standard expanded namelist read
-	     has occurred.  */
-	  int expanded_read;
+	  /* Current position within the look-ahead line buffer.  */
+	  int line_buffer_pos;
 	  /* Storage area for values except for strings.  Must be
 	     large enough to hold a complex value (two reals) of the
 	     largest kind.  */

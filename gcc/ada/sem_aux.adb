@@ -76,28 +76,37 @@ package body Sem_Aux is
    -- Available_View --
    --------------------
 
-   function Available_View (Typ : Entity_Id) return Entity_Id is
+   function Available_View (Ent : Entity_Id) return Entity_Id is
    begin
-      if Is_Incomplete_Type (Typ)
-        and then Present (Non_Limited_View (Typ))
+      --  Obtain the non-limited (non-abstract) view of a state or variable
+
+      if Ekind (Ent) = E_Abstract_State
+        and then Present (Non_Limited_View (Ent))
       then
-         --  The non-limited view may itself be an incomplete type, in which
-         --  case get its full view.
+         return Non_Limited_View (Ent);
 
-         return Get_Full_View (Non_Limited_View (Typ));
+      --  The non-limited view of an incomplete type may itself be incomplete
+      --  in which case obtain its full view.
 
-      --  If it is class_wide, check whether the specific type comes from
-      --  A limited_with.
-
-      elsif Is_Class_Wide_Type (Typ)
-        and then Is_Incomplete_Type (Etype (Typ))
-        and then From_With_Type (Etype (Typ))
-        and then Present (Non_Limited_View (Etype (Typ)))
+      elsif Is_Incomplete_Type (Ent)
+        and then Present (Non_Limited_View (Ent))
       then
-         return Class_Wide_Type (Non_Limited_View (Etype (Typ)));
+         return Get_Full_View (Non_Limited_View (Ent));
+
+      --  If it is class_wide, check whether the specific type comes from a
+      --  limited_with.
+
+      elsif Is_Class_Wide_Type (Ent)
+        and then Is_Incomplete_Type (Etype (Ent))
+        and then From_Limited_With (Etype (Ent))
+        and then Present (Non_Limited_View (Etype (Ent)))
+      then
+         return Class_Wide_Type (Non_Limited_View (Etype (Ent)));
+
+      --  In all other cases, return entity unchanged
 
       else
-         return Typ;
+         return Ent;
       end if;
    end Available_View;
 
@@ -615,6 +624,24 @@ package body Sem_Aux is
       return Present (Get_Rep_Pragma (E, Nam1, Nam2, Check_Parents));
    end Has_Rep_Pragma;
 
+   --------------------------------
+   -- Has_Unconstrained_Elements --
+   --------------------------------
+
+   function Has_Unconstrained_Elements (T : Entity_Id) return Boolean is
+      U_T : constant Entity_Id := Underlying_Type (T);
+   begin
+      if No (U_T) then
+         return False;
+      elsif Is_Record_Type (U_T) then
+         return Has_Discriminants (U_T) and then not Is_Constrained (U_T);
+      elsif Is_Array_Type (U_T) then
+         return Has_Unconstrained_Elements (Component_Type (U_T));
+      else
+         return False;
+      end if;
+   end Has_Unconstrained_Elements;
+
    ---------------------
    -- In_Generic_Body --
    ---------------------
@@ -670,6 +697,21 @@ package body Sem_Aux is
    begin
       Obsolescent_Warnings.Init;
    end Initialize;
+
+   -------------
+   -- Is_Body --
+   -------------
+
+   function Is_Body (N : Node_Id) return Boolean is
+   begin
+      return
+        Nkind (N) in N_Body_Stub
+          or else Nkind_In (N, N_Entry_Body,
+                               N_Package_Body,
+                               N_Protected_Body,
+                               N_Subprogram_Body,
+                               N_Task_Body);
+   end Is_Body;
 
    ---------------------
    -- Is_By_Copy_Type --
@@ -865,48 +907,6 @@ package body Sem_Aux is
       elsif Is_Concurrent_Type (Btype) then
          return True;
 
-      elsif Is_Record_Type (Btype) then
-
-         --  Note that we return True for all limited interfaces, even though
-         --  (unsynchronized) limited interfaces can have descendants that are
-         --  nonlimited, because this is a predicate on the type itself, and
-         --  things like functions with limited interface results need to be
-         --  handled as build in place even though they might return objects
-         --  of a type that is not inherently limited.
-
-         if Is_Class_Wide_Type (Btype) then
-            return Is_Immutably_Limited_Type (Root_Type (Btype));
-
-         else
-            declare
-               C : Entity_Id;
-
-            begin
-               C := First_Component (Btype);
-               while Present (C) loop
-
-                  --  Don't consider components with interface types (which can
-                  --  only occur in the case of a _parent component anyway).
-                  --  They don't have any components, plus it would cause this
-                  --  function to return true for nonlimited types derived from
-                  --  limited interfaces.
-
-                  if not Is_Interface (Etype (C))
-                    and then Is_Immutably_Limited_Type (Etype (C))
-                  then
-                     return True;
-                  end if;
-
-                  C := Next_Component (C);
-               end loop;
-            end;
-
-            return False;
-         end if;
-
-      elsif Is_Array_Type (Btype) then
-         return Is_Immutably_Limited_Type (Component_Type (Btype));
-
       else
          return False;
       end if;
@@ -977,7 +977,7 @@ package body Sem_Aux is
       --  Otherwise we will look around to see if there is some other reason
       --  for it to be limited, except that if an error was posted on the
       --  entity, then just assume it is non-limited, because it can cause
-      --  trouble to recurse into a murky erroneous entity!
+      --  trouble to recurse into a murky erroneous entity.
 
       elsif Error_Posted (Ent) then
          return False;
@@ -1023,6 +1023,105 @@ package body Sem_Aux is
          return False;
       end if;
    end Is_Limited_Type;
+
+   ---------------------
+   -- Is_Limited_View --
+   ---------------------
+
+   function Is_Limited_View (Ent : Entity_Id) return Boolean is
+      Btype : constant Entity_Id := Available_View (Base_Type (Ent));
+
+   begin
+      if Is_Limited_Record (Btype) then
+         return True;
+
+      elsif Ekind (Btype) = E_Limited_Private_Type
+        and then Nkind (Parent (Btype)) = N_Formal_Type_Declaration
+      then
+         return not In_Package_Body (Scope ((Btype)));
+
+      elsif Is_Private_Type (Btype) then
+
+         --  AI05-0063: A type derived from a limited private formal type is
+         --  not immutably limited in a generic body.
+
+         if Is_Derived_Type (Btype)
+           and then Is_Generic_Type (Etype (Btype))
+         then
+            if not Is_Limited_Type (Etype (Btype)) then
+               return False;
+
+            --  A descendant of a limited formal type is not immutably limited
+            --  in the generic body, or in the body of a generic child.
+
+            elsif Ekind (Scope (Etype (Btype))) = E_Generic_Package then
+               return not In_Package_Body (Scope (Btype));
+
+            else
+               return False;
+            end if;
+
+         else
+            declare
+               Utyp : constant Entity_Id := Underlying_Type (Btype);
+            begin
+               if No (Utyp) then
+                  return False;
+               else
+                  return Is_Limited_View (Utyp);
+               end if;
+            end;
+         end if;
+
+      elsif Is_Concurrent_Type (Btype) then
+         return True;
+
+      elsif Is_Record_Type (Btype) then
+
+         --  Note that we return True for all limited interfaces, even though
+         --  (unsynchronized) limited interfaces can have descendants that are
+         --  nonlimited, because this is a predicate on the type itself, and
+         --  things like functions with limited interface results need to be
+         --  handled as build in place even though they might return objects
+         --  of a type that is not inherently limited.
+
+         if Is_Class_Wide_Type (Btype) then
+            return Is_Limited_View (Root_Type (Btype));
+
+         else
+            declare
+               C : Entity_Id;
+
+            begin
+               C := First_Component (Btype);
+               while Present (C) loop
+
+                  --  Don't consider components with interface types (which can
+                  --  only occur in the case of a _parent component anyway).
+                  --  They don't have any components, plus it would cause this
+                  --  function to return true for nonlimited types derived from
+                  --  limited interfaces.
+
+                  if not Is_Interface (Etype (C))
+                    and then Is_Limited_View (Etype (C))
+                  then
+                     return True;
+                  end if;
+
+                  C := Next_Component (C);
+               end loop;
+            end;
+
+            return False;
+         end if;
+
+      elsif Is_Array_Type (Btype) then
+         return Is_Limited_View (Component_Type (Btype));
+
+      else
+         return False;
+      end if;
+   end Is_Limited_View;
 
    ----------------------
    -- Nearest_Ancestor --
@@ -1150,6 +1249,26 @@ package body Sem_Aux is
                                  and then not Is_Constrained (Typ))
                   and then Has_Discriminants (Typ));
    end Object_Type_Has_Constrained_Partial_View;
+
+   ---------------------------
+   -- Package_Specification --
+   ---------------------------
+
+   function Package_Specification (Pack_Id : Entity_Id) return Node_Id is
+      N : Node_Id;
+
+   begin
+      N := Parent (Pack_Id);
+      while Nkind (N) /= N_Package_Specification loop
+         N := Parent (N);
+
+         if No (N) then
+            raise Program_Error;
+         end if;
+      end loop;
+
+      return N;
+   end Package_Specification;
 
    ---------------
    -- Tree_Read --

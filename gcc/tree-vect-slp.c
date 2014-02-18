@@ -1,5 +1,5 @@
 /* SLP - Basic Block Vectorization
-   Copyright (C) 2007-2013 Free Software Foundation, Inc.
+   Copyright (C) 2007-2014 Free Software Foundation, Inc.
    Contributed by Dorit Naishlos <dorit@il.ibm.com>
    and Ira Rosen <irar@il.ibm.com>
 
@@ -24,12 +24,22 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "dumpfile.h"
 #include "tm.h"
-#include "ggc.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "target.h"
 #include "basic-block.h"
 #include "gimple-pretty-print.h"
-#include "tree-flow.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-ssa.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
 #include "tree-pass.h"
 #include "cfgloop.h"
 #include "expr.h"
@@ -41,23 +51,23 @@ along with GCC; see the file COPYING3.  If not see
 /* Extract the location of the basic block in the source code.
    Return the basic block location if succeed and NULL if not.  */
 
-LOC
+source_location
 find_bb_location (basic_block bb)
 {
   gimple stmt = NULL;
   gimple_stmt_iterator si;
 
   if (!bb)
-    return UNKNOWN_LOC;
+    return UNKNOWN_LOCATION;
 
   for (si = gsi_start_bb (bb); !gsi_end_p (si); gsi_next (&si))
     {
       stmt = gsi_stmt (si);
-      if (gimple_location (stmt) != UNKNOWN_LOC)
+      if (gimple_location (stmt) != UNKNOWN_LOCATION)
         return gimple_location (stmt);
     }
 
-  return UNKNOWN_LOC;
+  return UNKNOWN_LOCATION;
 }
 
 
@@ -257,6 +267,7 @@ vect_get_and_check_slp_defs (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 	      dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			       "Build SLP failed: can't find def for ");
 	      dump_generic_expr (MSG_MISSED_OPTIMIZATION, TDF_SLIM, oprnd);
+              dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 	    }
 
 	  return false;
@@ -283,6 +294,7 @@ vect_get_and_check_slp_defs (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				   "Build SLP failed: some of the stmts"
 				   " are in a pattern, and others are not ");
 		  dump_generic_expr (MSG_MISSED_OPTIMIZATION, TDF_SLIM, oprnd);
+                  dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		}
 
 	      return false;
@@ -295,7 +307,7 @@ vect_get_and_check_slp_defs (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
             {
               if (dump_enabled_p ())
                 dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-				 "Unsupported pattern.");
+				 "Unsupported pattern.\n");
               return false;
             }
 
@@ -312,7 +324,7 @@ vect_get_and_check_slp_defs (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
               default:
                 if (dump_enabled_p ())
                   dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-				   "unsupported defining stmt: ");
+				   "unsupported defining stmt:\n");
                 return false;
             }
         }
@@ -342,7 +354,7 @@ vect_get_and_check_slp_defs (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 	    {
 	      if (dump_enabled_p ())
 		dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-				 "Build SLP failed: different types ");
+				 "Build SLP failed: different types\n");
 
 	      return false;
 	    }
@@ -367,6 +379,7 @@ vect_get_and_check_slp_defs (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 	      dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			       "Build SLP failed: illegal type of def ");
 	      dump_generic_expr (MSG_MISSED_OPTIMIZATION, TDF_SLIM, def);
+              dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 	    }
 
 	  return false;
@@ -415,6 +428,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 	{
 	  dump_printf_loc (MSG_NOTE, vect_location, "Build SLP for ");
 	  dump_gimple_stmt (MSG_NOTE, TDF_SLIM, stmt, 0);
+          dump_printf (MSG_NOTE, "\n");
 	}
 
       /* Fail to vectorize statements marked as unvectorizable.  */
@@ -425,6 +439,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
               dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			       "Build SLP failed: unvectorizable statement ");
               dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+              dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
             }
 	  /* Fatal mismatch.  */
 	  matches[0] = false;
@@ -440,6 +455,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 			       "Build SLP failed: not GIMPLE_ASSIGN nor "
 			       "GIMPLE_CALL ");
 	      dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+              dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 	    }
 	  /* Fatal mismatch.  */
 	  matches[0] = false;
@@ -457,6 +473,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 			       "Build SLP failed: condition is not "
 			       "comparison ");
               dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+              dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
             }
 	  /* Fatal mismatch.  */
 	  matches[0] = false;
@@ -473,6 +490,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 			       "Build SLP failed: unsupported data-type ");
               dump_generic_expr (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 				 scalar_type);
+              dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
             }
 	  /* Fatal mismatch.  */
 	  matches[0] = false;
@@ -501,6 +519,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 		  dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location, 
 				   "Build SLP failed: unsupported call type ");
 		  dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+                  dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		}
 	      /* Fatal mismatch.  */
 	      matches[0] = false;
@@ -538,7 +557,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 		    {
 		      if (dump_enabled_p ())
 			dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-					 "Build SLP failed: no optab.");
+					 "Build SLP failed: no optab.\n");
 		      /* Fatal mismatch.  */
 		      matches[0] = false;
 		      return false;
@@ -549,7 +568,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 		      if (dump_enabled_p ())
 			dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 					 "Build SLP failed: "
-					 "op not supported by target.");
+					 "op not supported by target.\n");
 		      /* Fatal mismatch.  */
 		      matches[0] = false;
 		      return false;
@@ -588,6 +607,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				   "Build SLP failed: different operation "
 				   "in stmt ");
 		  dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+                  dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		}
 	      /* Mismatch.  */
 	      continue;
@@ -602,6 +622,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				   "Build SLP failed: different shift "
 				   "arguments in ");
 		  dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+                  dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		}
 	      /* Mismatch.  */
 	      continue;
@@ -622,6 +643,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				       "Build SLP failed: different calls in ");
 		      dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 					stmt, 0);
+                      dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		    }
 		  /* Mismatch.  */
 		  continue;
@@ -661,6 +683,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				       "loads have gaps ");
                       dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 					stmt, 0);
+                      dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
                     }
 		  /* Fatal mismatch.  */
 		  matches[0] = false;
@@ -685,6 +708,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				       "the SLP group size ");
                       dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 					stmt, 0);
+                      dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
                     }
 		  /* Fatal mismatch.  */
 		  matches[0] = false;
@@ -707,6 +731,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 					   "interleaving chains in one node ");
                           dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 					    stmt, 0);
+                          dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
                         }
 		      /* Mismatch.  */
 		      continue;
@@ -731,6 +756,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 					   "unaligned load ");
                           dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 					    stmt, 0);
+                          dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
                         }
 		      /* Fatal mismatch.  */
 		      matches[0] = false;
@@ -749,6 +775,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 		  dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location, 
 				   "Build SLP failed: not grouped load ");
 		  dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+                  dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		}
 
 	      /* FORNOW: Not grouped loads are not supported.  */
@@ -769,6 +796,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				   "Build SLP failed: operation");
 		  dump_printf (MSG_MISSED_OPTIMIZATION, " unsupported ");
 		  dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+                  dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		}
 	      /* Fatal mismatch.  */
 	      matches[0] = false;
@@ -790,6 +818,7 @@ vect_build_slp_tree_1 (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
 				       " operation");
                       dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 					stmt, 0);
+                      dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
                     }
 		  /* Mismatch.  */
 		  continue;
@@ -1074,8 +1103,9 @@ vect_supported_load_permutation_p (slp_instance slp_instn)
 	  FOR_EACH_VEC_ELT (node->load_permutation, j, next)
 	    dump_printf (MSG_NOTE, "%d ", next);
 	else
-	  for (i = 0; i < group_size; ++i)
-	    dump_printf (MSG_NOTE, "%d ", i);
+	  for (k = 0; k < group_size; ++k)
+	    dump_printf (MSG_NOTE, "%d ", k);
+      dump_printf (MSG_NOTE, "\n");
     }
 
   /* In case of reduction every load permutation is allowed, since the order
@@ -1187,6 +1217,7 @@ vect_supported_load_permutation_p (slp_instance slp_instn)
 				       "unsupported unaligned load ");
 		      dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM,
 					first_load, 0);
+                      dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
 		    }
 		  return false;
 		}
@@ -1449,6 +1480,7 @@ vect_analyze_slp_instance (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
           dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			   "Build SLP failed: unsupported data-type ");
           dump_generic_expr (MSG_MISSED_OPTIMIZATION, TDF_SLIM, scalar_type);
+          dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
         }
 
       return false;
@@ -1465,9 +1497,9 @@ vect_analyze_slp_instance (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
   if (unrolling_factor != 1 && !loop_vinfo)
     {
       if (dump_enabled_p ())
-        dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location, 
+        dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			 "Build SLP failed: unrolling required in basic"
-			 " block SLP");
+			 " block SLP\n");
 
       return false;
     }
@@ -1514,9 +1546,9 @@ vect_analyze_slp_instance (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
       if (unrolling_factor != 1 && !loop_vinfo)
         {
           if (dump_enabled_p ())
-            dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location, 
+            dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			     "Build SLP failed: unrolling required in basic"
-			     " block SLP");
+			     " block SLP\n");
 	  vect_free_slp_tree (node);
 	  loads.release ();
           return false;
@@ -1567,10 +1599,11 @@ vect_analyze_slp_instance (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo,
             {
               if (dump_enabled_p ())
                 {
-                  dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location, 
+                  dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 				   "Build SLP failed: unsupported load "
 				   "permutation ");
                   dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+                  dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
                 }
               vect_free_slp_instance (new_instance);
               return false;
@@ -1618,7 +1651,7 @@ vect_analyze_slp (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo)
   bool ok = false;
 
   if (dump_enabled_p ())
-    dump_printf_loc (MSG_NOTE, vect_location, "=== vect_analyze_slp ===");
+    dump_printf_loc (MSG_NOTE, vect_location, "=== vect_analyze_slp ===\n");
 
   if (loop_vinfo)
     {
@@ -1638,7 +1671,7 @@ vect_analyze_slp (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo)
     {
       if (dump_enabled_p ())
         dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-			 "Failed to SLP the basic block.");
+			 "Failed to SLP the basic block.\n");
 
       return false;
     }
@@ -1680,7 +1713,8 @@ vect_make_slp_decision (loop_vec_info loop_vinfo)
   int decided_to_slp = 0;
 
   if (dump_enabled_p ())
-    dump_printf_loc (MSG_NOTE, vect_location, "=== vect_make_slp_decision ===");
+    dump_printf_loc (MSG_NOTE, vect_location, "=== vect_make_slp_decision ==="
+                     "\n");
 
   FOR_EACH_VEC_ELT (slp_instances, i, instance)
     {
@@ -1698,8 +1732,8 @@ vect_make_slp_decision (loop_vec_info loop_vinfo)
   LOOP_VINFO_SLP_UNROLLING_FACTOR (loop_vinfo) = unrolling_factor;
 
   if (decided_to_slp && dump_enabled_p ())
-    dump_printf_loc (MSG_OPTIMIZED_LOCATIONS, vect_location,
-		     "Decided to SLP %d instances. Unrolling factor %d",
+    dump_printf_loc (MSG_NOTE, vect_location,
+		     "Decided to SLP %d instances. Unrolling factor %d\n",
 		     decided_to_slp, unrolling_factor);
 
   return (decided_to_slp > 0);
@@ -1763,7 +1797,8 @@ vect_detect_hybrid_slp (loop_vec_info loop_vinfo)
   slp_instance instance;
 
   if (dump_enabled_p ())
-    dump_printf_loc (MSG_NOTE, vect_location, "=== vect_detect_hybrid_slp ===");
+    dump_printf_loc (MSG_NOTE, vect_location, "=== vect_detect_hybrid_slp ==="
+                     "\n");
 
   FOR_EACH_VEC_ELT (slp_instances, i, instance)
     vect_detect_hybrid_slp_stmts (SLP_INSTANCE_TREE (instance));
@@ -1825,7 +1860,7 @@ destroy_bb_vec_info (bb_vec_info bb_vinfo)
         free_stmt_vec_info (stmt);
     }
 
-  free_data_refs (BB_VINFO_DATAREFS (bb_vinfo));
+  vect_destroy_datarefs (NULL, bb_vinfo);
   free_dependence_relations (BB_VINFO_DDRS (bb_vinfo));
   BB_VINFO_GROUPED_STORES (bb_vinfo).release ();
   slp_instances = BB_VINFO_SLP_INSTANCES (bb_vinfo);
@@ -1898,6 +1933,72 @@ vect_slp_analyze_operations (bb_vec_info bb_vinfo)
   return true;
 }
 
+
+/* Compute the scalar cost of the SLP node NODE and its children
+   and return it.  Do not account defs that are marked in LIFE and
+   update LIFE according to uses of NODE.  */
+
+static unsigned
+vect_bb_slp_scalar_cost (basic_block bb,
+			 slp_tree node, vec<bool, va_heap> *life)
+{
+  unsigned scalar_cost = 0;
+  unsigned i;
+  gimple stmt;
+  slp_tree child;
+
+  FOR_EACH_VEC_ELT (SLP_TREE_SCALAR_STMTS (node), i, stmt)
+    {
+      unsigned stmt_cost;
+      ssa_op_iter op_iter;
+      def_operand_p def_p;
+      stmt_vec_info stmt_info;
+
+      if ((*life)[i])
+	continue;
+
+      /* If there is a non-vectorized use of the defs then the scalar
+         stmt is kept live in which case we do not account it or any
+	 required defs in the SLP children in the scalar cost.  This
+	 way we make the vectorization more costly when compared to
+	 the scalar cost.  */
+      FOR_EACH_SSA_DEF_OPERAND (def_p, stmt, op_iter, SSA_OP_DEF)
+	{
+	  imm_use_iterator use_iter;
+	  gimple use_stmt;
+	  FOR_EACH_IMM_USE_STMT (use_stmt, use_iter, DEF_FROM_PTR (def_p))
+	    if (!is_gimple_debug (use_stmt)
+		&& (gimple_code (use_stmt) == GIMPLE_PHI
+		    || gimple_bb (use_stmt) != bb
+		    || !STMT_VINFO_VECTORIZABLE (vinfo_for_stmt (use_stmt))))
+	      {
+		(*life)[i] = true;
+		BREAK_FROM_IMM_USE_STMT (use_iter);
+	      }
+	}
+      if ((*life)[i])
+	continue;
+
+      stmt_info = vinfo_for_stmt (stmt);
+      if (STMT_VINFO_DATA_REF (stmt_info))
+        {
+          if (DR_IS_READ (STMT_VINFO_DATA_REF (stmt_info)))
+            stmt_cost = vect_get_stmt_cost (scalar_load);
+          else
+            stmt_cost = vect_get_stmt_cost (scalar_store);
+        }
+      else
+        stmt_cost = vect_get_stmt_cost (scalar_stmt);
+
+      scalar_cost += stmt_cost;
+    }
+
+  FOR_EACH_VEC_ELT (SLP_TREE_CHILDREN (node), i, child)
+    scalar_cost += vect_bb_slp_scalar_cost (bb, child, life);
+
+  return scalar_cost;
+}
+
 /* Check if vectorization of the basic block is profitable.  */
 
 static bool
@@ -1908,10 +2009,6 @@ vect_bb_vectorization_profitable_p (bb_vec_info bb_vinfo)
   int i, j;
   unsigned int vec_inside_cost = 0, vec_outside_cost = 0, scalar_cost = 0;
   unsigned int vec_prologue_cost = 0, vec_epilogue_cost = 0;
-  unsigned int stmt_cost;
-  gimple stmt;
-  gimple_stmt_iterator si;
-  basic_block bb = BB_VINFO_BB (bb_vinfo);
   void *target_cost_data = BB_VINFO_TARGET_COST_DATA (bb_vinfo);
   stmt_vec_info stmt_info = NULL;
   stmt_vector_for_cost body_cost_vec;
@@ -1931,26 +2028,13 @@ vect_bb_vectorization_profitable_p (bb_vec_info bb_vinfo)
     }
 
   /* Calculate scalar cost.  */
-  for (si = gsi_start_bb (bb); !gsi_end_p (si); gsi_next (&si))
+  FOR_EACH_VEC_ELT (slp_instances, i, instance)
     {
-      stmt = gsi_stmt (si);
-      stmt_info = vinfo_for_stmt (stmt);
-
-      if (!stmt_info || !STMT_VINFO_VECTORIZABLE (stmt_info)
-          || !PURE_SLP_STMT (stmt_info))
-        continue;
-
-      if (STMT_VINFO_DATA_REF (stmt_info))
-        {
-          if (DR_IS_READ (STMT_VINFO_DATA_REF (stmt_info)))
-            stmt_cost = vect_get_stmt_cost (scalar_load);
-          else
-            stmt_cost = vect_get_stmt_cost (scalar_store);
-        }
-      else
-        stmt_cost = vect_get_stmt_cost (scalar_stmt);
-
-      scalar_cost += stmt_cost;
+      auto_vec<bool, 20> life;
+      life.safe_grow_cleared (SLP_INSTANCE_GROUP_SIZE (instance));
+      scalar_cost += vect_bb_slp_scalar_cost (BB_VINFO_BB (bb_vinfo),
+					      SLP_INSTANCE_TREE (instance),
+					      &life);
     }
 
   /* Complete the target-specific cost calculation.  */
@@ -1966,7 +2050,7 @@ vect_bb_vectorization_profitable_p (bb_vec_info bb_vinfo)
 		   vec_inside_cost);
       dump_printf (MSG_NOTE, "  Vector prologue cost: %d\n", vec_prologue_cost);
       dump_printf (MSG_NOTE, "  Vector epilogue cost: %d\n", vec_epilogue_cost);
-      dump_printf (MSG_NOTE, "  Scalar cost of basic block: %d", scalar_cost);
+      dump_printf (MSG_NOTE, "  Scalar cost of basic block: %d\n", scalar_cost);
     }
 
   /* Vectorization is profitable if its cost is less than the cost of scalar
@@ -2027,17 +2111,6 @@ vect_slp_analyze_bb_1 (basic_block bb)
 
   vect_pattern_recog (NULL, bb_vinfo);
 
-  if (!vect_slp_analyze_data_ref_dependences (bb_vinfo))
-     {
-       if (dump_enabled_p ())
-	 dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-			  "not vectorized: unhandled data dependence "
-			  "in basic block.\n");
-
-       destroy_bb_vec_info (bb_vinfo);
-       return NULL;
-     }
-
   if (!vect_analyze_data_refs_alignment (NULL, bb_vinfo))
     {
       if (dump_enabled_p ())
@@ -2072,6 +2145,29 @@ vect_slp_analyze_bb_1 (basic_block bb)
       vect_mark_slp_stmts_relevant (SLP_INSTANCE_TREE (instance));
     }
 
+  /* Mark all the statements that we do not want to vectorize.  */
+  for (gimple_stmt_iterator gsi = gsi_start_bb (BB_VINFO_BB (bb_vinfo));
+       !gsi_end_p (gsi); gsi_next (&gsi))
+    {
+      stmt_vec_info vinfo = vinfo_for_stmt (gsi_stmt (gsi));
+      if (STMT_SLP_TYPE (vinfo) != pure_slp)
+	STMT_VINFO_VECTORIZABLE (vinfo) = false;
+    }
+
+  /* Analyze dependences.  At this point all stmts not participating in
+     vectorization have to be marked.  Dependence analysis assumes
+     that we either vectorize all SLP instances or none at all.  */
+  if (!vect_slp_analyze_data_ref_dependences (bb_vinfo))
+     {
+       if (dump_enabled_p ())
+	 dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			  "not vectorized: unhandled data dependence "
+			  "in basic block.\n");
+
+       destroy_bb_vec_info (bb_vinfo);
+       return NULL;
+     }
+
   if (!vect_verify_datarefs_alignment (NULL, bb_vinfo))
     {
       if (dump_enabled_p ())
@@ -2085,7 +2181,7 @@ vect_slp_analyze_bb_1 (basic_block bb)
   if (!vect_slp_analyze_operations (bb_vinfo))
     {
       if (dump_enabled_p ())
-        dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location, 
+        dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			 "not vectorized: bad operation in basic block.\n");
 
       destroy_bb_vec_info (bb_vinfo);
@@ -2093,7 +2189,7 @@ vect_slp_analyze_bb_1 (basic_block bb)
     }
 
   /* Cost model: check if the vectorization is worthwhile.  */
-  if (flag_vect_cost_model
+  if (!unlimited_cost_model (NULL)
       && !vect_bb_vectorization_profitable_p (bb_vinfo))
     {
       if (dump_enabled_p ())
@@ -2189,7 +2285,7 @@ vect_update_slp_costs_according_to_vf (loop_vec_info loop_vinfo)
 
   if (dump_enabled_p ())
     dump_printf_loc (MSG_NOTE, vect_location,
-		     "=== vect_update_slp_costs_according_to_vf ===");
+		     "=== vect_update_slp_costs_according_to_vf ===\n");
 
   FOR_EACH_VEC_ELT (slp_instances, i, instance)
     {
@@ -2689,9 +2785,10 @@ vect_get_mask_element (gimple stmt, int first_mask_element, int m,
     {
       if (dump_enabled_p ())
         {
-          dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location, 
+          dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			   "permutation requires at least two vectors ");
           dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+          dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
         }
 
       return false;
@@ -2711,6 +2808,7 @@ vect_get_mask_element (gimple stmt, int first_mask_element, int m,
 			       "permutation requires at "
 			       "least three vectors ");
               dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+              dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
             }
 
           return false;
@@ -2778,6 +2876,7 @@ vect_transform_slp_perm_load (slp_tree node, vec<tree> dr_chain,
           dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
 			   "no vect permute for ");
           dump_gimple_stmt (MSG_MISSED_OPTIMIZATION, TDF_SLIM, stmt, 0);
+          dump_printf (MSG_MISSED_OPTIMIZATION, "\n");
         }
       return false;
     }
@@ -2948,6 +3047,7 @@ vect_schedule_slp_instance (slp_tree node, slp_instance instance,
       dump_printf_loc (MSG_NOTE,vect_location,
 		       "------>vectorizing SLP node starting from: ");
       dump_gimple_stmt (MSG_NOTE, TDF_SLIM, stmt, 0);
+      dump_printf (MSG_NOTE, "\n");
     }
 
   /* Loads should be inserted before the first load.  */
@@ -3054,7 +3154,7 @@ vect_schedule_slp (loop_vec_info loop_vinfo, bb_vec_info bb_vinfo)
                                              instance, vf);
       if (dump_enabled_p ())
 	dump_printf_loc (MSG_NOTE, vect_location,
-                         "vectorizing stmts using SLP.");
+                         "vectorizing stmts using SLP.\n");
     }
 
   FOR_EACH_VEC_ELT (slp_instances, i, instance)
@@ -3118,6 +3218,7 @@ vect_slp_transform_bb (basic_block bb)
           dump_printf_loc (MSG_NOTE, vect_location,
                            "------>SLPing statement: ");
           dump_gimple_stmt (MSG_NOTE, TDF_SLIM, stmt, 0);
+          dump_printf (MSG_NOTE, "\n");
         }
 
       stmt_info = vinfo_for_stmt (stmt);
@@ -3132,7 +3233,8 @@ vect_slp_transform_bb (basic_block bb)
     }
 
   if (dump_enabled_p ())
-    dump_printf (MSG_OPTIMIZED_LOCATIONS, "BASIC BLOCK VECTORIZED\n");
+    dump_printf_loc (MSG_NOTE, vect_location,
+		     "BASIC BLOCK VECTORIZED\n");
 
   destroy_bb_vec_info (bb_vinfo);
 }

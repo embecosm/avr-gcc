@@ -1,5 +1,5 @@
 /* Nested function decomposition for GIMPLE.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -22,17 +22,29 @@
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "stor-layout.h"
 #include "tm_p.h"
 #include "function.h"
 #include "tree-dump.h"
 #include "tree-inline.h"
+#include "pointer-set.h"
+#include "basic-block.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
 #include "gimple.h"
+#include "gimplify.h"
+#include "gimple-iterator.h"
+#include "gimple-walk.h"
 #include "tree-iterator.h"
-#include "tree-flow.h"
+#include "bitmap.h"
 #include "cgraph.h"
+#include "tree-cfg.h"
 #include "expr.h"	/* FIXME: For STACK_SAVEAREA_MODE and SAVE_NONLOCAL.  */
 #include "langhooks.h"
-#include "pointer-set.h"
+#include "gimple-low.h"
 
 
 /* The object of this pass is to lower the representation of a set of nested
@@ -699,11 +711,11 @@ check_for_nested_with_variably_modified (tree fndecl, tree orig_fndecl)
 
   for (cgn = cgn->nested; cgn ; cgn = cgn->next_nested)
     {
-      for (arg = DECL_ARGUMENTS (cgn->symbol.decl); arg; arg = DECL_CHAIN (arg))
+      for (arg = DECL_ARGUMENTS (cgn->decl); arg; arg = DECL_CHAIN (arg))
 	if (variably_modified_type_p (TREE_TYPE (arg), orig_fndecl))
 	  return true;
 
-      if (check_for_nested_with_variably_modified (cgn->symbol.decl,
+      if (check_for_nested_with_variably_modified (cgn->decl,
 						   orig_fndecl))
 	return true;
     }
@@ -722,7 +734,7 @@ create_nesting_tree (struct cgraph_node *cgn)
   info->var_map = pointer_map_create ();
   info->mem_refs = pointer_set_create ();
   info->suppress_expansion = BITMAP_ALLOC (&nesting_info_bitmap_obstack);
-  info->context = cgn->symbol.decl;
+  info->context = cgn->decl;
 
   for (cgn = cgn->nested; cgn ; cgn = cgn->next_nested)
     {
@@ -1291,8 +1303,25 @@ convert_nonlocal_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
       info->suppress_expansion = save_suppress;
       break;
 
+    case GIMPLE_OMP_TARGET:
+      save_suppress = info->suppress_expansion;
+      convert_nonlocal_omp_clauses (gimple_omp_target_clauses_ptr (stmt), wi);
+      walk_body (convert_nonlocal_reference_stmt, convert_nonlocal_reference_op,
+		 info, gimple_omp_body_ptr (stmt));
+      info->suppress_expansion = save_suppress;
+      break;
+
+    case GIMPLE_OMP_TEAMS:
+      save_suppress = info->suppress_expansion;
+      convert_nonlocal_omp_clauses (gimple_omp_teams_clauses_ptr (stmt), wi);
+      walk_body (convert_nonlocal_reference_stmt, convert_nonlocal_reference_op,
+		 info, gimple_omp_body_ptr (stmt));
+      info->suppress_expansion = save_suppress;
+      break;
+
     case GIMPLE_OMP_SECTION:
     case GIMPLE_OMP_MASTER:
+    case GIMPLE_OMP_TASKGROUP:
     case GIMPLE_OMP_ORDERED:
       walk_body (convert_nonlocal_reference_stmt, convert_nonlocal_reference_op,
 	         info, gimple_omp_body_ptr (stmt));
@@ -1301,6 +1330,25 @@ convert_nonlocal_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
     case GIMPLE_BIND:
       if (!optimize && gimple_bind_block (stmt))
 	note_nonlocal_block_vlas (info, gimple_bind_block (stmt));
+
+      for (tree var = gimple_bind_vars (stmt); var; var = DECL_CHAIN (var))
+	if (TREE_CODE (var) == NAMELIST_DECL)
+	  {
+	    /* Adjust decls mentioned in NAMELIST_DECL.  */
+	    tree decls = NAMELIST_DECL_ASSOCIATED_DECL (var);
+	    tree decl;
+	    unsigned int i;
+
+	    FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (decls), i, decl)
+	      {
+		if (TREE_CODE (decl) == VAR_DECL
+		    && (TREE_STATIC (decl) || DECL_EXTERNAL (decl)))
+		  continue;
+		if (decl_function_context (decl) != info->context)
+		  CONSTRUCTOR_ELT (decls, i)->value
+		    = get_nonlocal_debug_decl (info, decl);
+	      }
+	  }
 
       *handled_ops_p = false;
       return NULL_TREE;
@@ -1714,8 +1762,25 @@ convert_local_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
       info->suppress_expansion = save_suppress;
       break;
 
+    case GIMPLE_OMP_TARGET:
+      save_suppress = info->suppress_expansion;
+      convert_local_omp_clauses (gimple_omp_target_clauses_ptr (stmt), wi);
+      walk_body (convert_local_reference_stmt, convert_local_reference_op,
+		 info, gimple_omp_body_ptr (stmt));
+      info->suppress_expansion = save_suppress;
+      break;
+
+    case GIMPLE_OMP_TEAMS:
+      save_suppress = info->suppress_expansion;
+      convert_local_omp_clauses (gimple_omp_teams_clauses_ptr (stmt), wi);
+      walk_body (convert_local_reference_stmt, convert_local_reference_op,
+		 info, gimple_omp_body_ptr (stmt));
+      info->suppress_expansion = save_suppress;
+      break;
+
     case GIMPLE_OMP_SECTION:
     case GIMPLE_OMP_MASTER:
+    case GIMPLE_OMP_TASKGROUP:
     case GIMPLE_OMP_ORDERED:
       walk_body (convert_local_reference_stmt, convert_local_reference_op,
 		 info, gimple_omp_body_ptr (stmt));
@@ -1738,6 +1803,36 @@ convert_local_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
 	      break;
 	    }
 	}
+      *handled_ops_p = false;
+      return NULL_TREE;
+
+    case GIMPLE_BIND:
+      for (tree var = gimple_bind_vars (stmt); var; var = DECL_CHAIN (var))
+	if (TREE_CODE (var) == NAMELIST_DECL)
+	  {
+	    /* Adjust decls mentioned in NAMELIST_DECL.  */
+	    tree decls = NAMELIST_DECL_ASSOCIATED_DECL (var);
+	    tree decl;
+	    unsigned int i;
+
+	    FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (decls), i, decl)
+	      {
+		if (TREE_CODE (decl) == VAR_DECL
+		    && (TREE_STATIC (decl) || DECL_EXTERNAL (decl)))
+		  continue;
+		if (decl_function_context (decl) == info->context
+		    && !use_pointer_in_frame (decl))
+		  {
+		    tree field = lookup_field_for_decl (info, decl, NO_INSERT);
+		    if (field)
+		      {
+			CONSTRUCTOR_ELT (decls, i)->value
+			  = get_local_debug_decl (info, decl, field);
+		      }
+		  }
+	      }
+	  }
+
       *handled_ops_p = false;
       return NULL_TREE;
 
@@ -2071,7 +2166,10 @@ convert_gimple_call (gimple_stmt_iterator *gsi, bool *handled_ops_p,
     case GIMPLE_OMP_SECTIONS:
     case GIMPLE_OMP_SECTION:
     case GIMPLE_OMP_SINGLE:
+    case GIMPLE_OMP_TARGET:
+    case GIMPLE_OMP_TEAMS:
     case GIMPLE_OMP_MASTER:
+    case GIMPLE_OMP_TASKGROUP:
     case GIMPLE_OMP_ORDERED:
     case GIMPLE_OMP_CRITICAL:
       walk_body (convert_gimple_call, NULL, info, gimple_omp_body_ptr (stmt));
@@ -2304,7 +2402,7 @@ remap_vla_decls (tree block, struct nesting_info *root)
 static bool
 fold_mem_refs (const void *e, void *data ATTRIBUTE_UNUSED)
 {
-  tree *ref_p = CONST_CAST2(tree *, const tree *, (const tree *)e);
+  tree *ref_p = CONST_CAST2 (tree *, const tree *, (const tree *)e);
   *ref_p = fold (*ref_p);
   return true;
 }
@@ -2591,8 +2689,8 @@ static void
 gimplify_all_functions (struct cgraph_node *root)
 {
   struct cgraph_node *iter;
-  if (!gimple_body (root->symbol.decl))
-    gimplify_function_tree (root->symbol.decl);
+  if (!gimple_body (root->decl))
+    gimplify_function_tree (root->decl);
   for (iter = root->nested; iter; iter = iter->next_nested)
     gimplify_all_functions (iter);
 }

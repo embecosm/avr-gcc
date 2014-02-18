@@ -1,5 +1,5 @@
 /* Help friends in C++.
-   Copyright (C) 1997-2013 Free Software Foundation, Inc.
+   Copyright (C) 1997-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -230,8 +230,8 @@ make_friend_class (tree type, tree friend_type, bool complain)
 	 (possibly cv-qualified) class type, that class is declared as a
 	 friend; otherwise, the friend declaration is ignored.
 
-         So don't complain in C++0x mode.  */
-      if (cxx_dialect < cxx0x)
+         So don't complain in C++11 mode.  */
+      if (cxx_dialect < cxx11)
 	pedwarn (input_location, complain ? 0 : OPT_Wpedantic,
 		 "invalid type %qT declared %<friend%>", friend_type);
       return;
@@ -327,7 +327,7 @@ make_friend_class (tree type, tree friend_type, bool complain)
 		{
 		  error ("%qT is not a member class template of %qT",
 			 name, ctype);
-		  error ("%q+D declared here", decl);
+		  inform (input_location, "%q+D declared here", decl);
 		  return;
 		}
 	      if (!template_member_p && (TREE_CODE (decl) != TYPE_DECL
@@ -335,7 +335,7 @@ make_friend_class (tree type, tree friend_type, bool complain)
 		{
 		  error ("%qT is not a nested class of %qT",
 			 name, ctype);
-		  error ("%q+D declared here", decl);
+		  inform (input_location, "%q+D declared here", decl);
 		  return;
 		}
 
@@ -501,7 +501,13 @@ do_friend (tree ctype, tree declarator, tree decl,
 				  ? current_template_parms
 				  : NULL_TREE);
 
-	  if (template_member_p && decl && TREE_CODE (decl) == FUNCTION_DECL)
+	  if ((template_member_p
+	       /* Always pull out the TEMPLATE_DECL if we have a friend
+		  template in a class template so that it gets tsubsted
+		  properly later on (59956).  tsubst_friend_function knows
+		  how to tell this apart from a member template.  */
+	       || (class_template_depth && friend_depth))
+	      && decl && TREE_CODE (decl) == FUNCTION_DECL)
 	    decl = DECL_TI_TEMPLATE (decl);
 
 	  if (decl)

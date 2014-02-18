@@ -1,5 +1,5 @@
 /* Header file to the Fortran front-end and runtime library
-   Copyright (C) 2007-2013 Free Software Foundation, Inc.
+   Copyright (C) 2007-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -42,6 +42,12 @@ along with GCC; see the file COPYING3.  If not see
 #define GFC_FPE_OVERFLOW   (1<<3)
 #define GFC_FPE_UNDERFLOW  (1<<4)
 #define GFC_FPE_INEXACT    (1<<5)
+
+/* Defines for floating-point rounding modes.  */
+#define GFC_FPE_DOWNWARD   1
+#define GFC_FPE_TONEAREST  2
+#define GFC_FPE_TOWARDZERO 3
+#define GFC_FPE_UPWARD     4
 
 
 /* Bitmasks for the various runtime checks that can be enabled.  */

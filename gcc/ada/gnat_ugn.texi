@@ -7,14 +7,14 @@
 @c                                                                            o
 @c                             G N A T _ U G N                                o
 @c                                                                            o
-@c           Copyright (C) 1992-2013, Free Software Foundation, Inc.          o
+@c           Copyright (C) 1992-2014, Free Software Foundation, Inc.          o
 @c                                                                            o
 @c oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
 
 @setfilename gnat_ugn.info
 
 @copying
-Copyright @copyright{} 1995-2009 Free Software Foundation,
+Copyright @copyright{} 1995-2014 Free Software Foundation,
 Inc.
 
 Permission is granted to copy, distribute and/or modify this document
@@ -179,6 +179,9 @@ AdaCore@*
 * Tools Supporting Project Files::
 * The Cross-Referencing Tools gnatxref and gnatfind::
 * The GNAT Pretty-Printer gnatpp::
+@ifclear vms
+* The Ada-to-XML converter gnat2xml::
+@end ifclear
 * The GNAT Metrics Tool gnatmetric::
 * File Name Krunching with gnatkr::
 * Preprocessing with gnatprep::
@@ -241,7 +244,7 @@ By default, @value{EDITION} assumes Ada 2012, but you can override with a
 compiler switch (@pxref{Compiling Different Versions of Ada})
 to explicitly specify the language version.
 Throughout this manual, references to ``Ada'' without a year suffix
-apply to both all Ada 95/2005/2012 versions of the language.
+apply to all Ada 95/2005/2012 versions of the language.
 
 @ifclear FSFEDITION
 For ease of exposition, ``@value{EDITION}'' will be referred to simply as
@@ -327,6 +330,12 @@ way to navigate through sources.
 @ref{The GNAT Pretty-Printer gnatpp}, shows how to produce a reformatted
 version of an Ada source file with control over casing, indentation,
 comment placement, and other elements of program presentation style.
+
+@ifclear vms
+@item
+@ref{The Ada-to-XML converter gnat2xml}, shows how to convert Ada
+source code into XML.
+@end ifclear
 
 @item
 @ref{The GNAT Metrics Tool gnatmetric}, shows how to compute various
@@ -2316,7 +2325,7 @@ are unlikely to be able to be passed.
 
 Note that in the case of GNAT running
 on a platform that supports HP Ada 83, a higher degree of compatibility
-can be guaranteed, and in particular records are layed out in an identical
+can be guaranteed, and in particular records are laid out in an identical
 manner in the two compilers. Note also that if output from two different
 compilers is mixed, the program is responsible for dealing with elaboration
 issues. Probably the safest approach is to write the main program in the
@@ -3562,6 +3571,13 @@ This information is used by advanced coverage tools. See unit @file{SCOs}
 in the compiler sources for details in files @file{scos.ads} and
 @file{scos.adb}.
 
+@item -fdump-xref
+@cindex @option{-fdump-xref} (@command{gcc})
+Generates cross reference information in GLI files for C and C++ sources.
+The GLI files have the same syntax as the ALI files for Ada, and can be used
+for source navigation in IDEs and on the command line using e.g. gnatxref
+and the @option{--ext=gli} switch.
+
 @item -flto@r{[}=n@r{]}
 @cindex @option{-flto} (@command{gcc})
 Enables Link Time Optimization. This switch must be used in conjunction
@@ -3697,7 +3713,9 @@ object file after compilation. If @command{gnatmake} is called with
 @option{-gnatc} as a builder switch (before @option{-cargs} or in package
 Builder of the project file) then @command{gnatmake} will not fail because
 it will not look for the object files after compilation, and it will not try
-to build and link.
+to build and link. This switch may not be given if a previous @code{-gnatR}
+switch has been given, since @code{-gnatR} requires that the code generator
+be called to complete determination of representation information.
 
 @item -gnatC
 @cindex @option{-gnatC} (@command{gcc})
@@ -3726,7 +3744,8 @@ users guide.
 @end ifset
 Create expanded source files for source level debugging. This switch
 also suppress generation of cross-reference information
-(see @option{-gnatx}).
+(see @option{-gnatx}). Note that this switch is not allowed if a previous
+-gnatR switch has been given, since these two switches are not compatible.
 
 @item ^-gnateA^/ALIASING_CHECK^
 @cindex @option{-gnateA} (@command{gcc})
@@ -3811,11 +3830,123 @@ temporary use of special test software.
 
 @item -gnateS
 @cindex @option{-gnateS} (@command{gcc})
-Synonym of @option{-fdump-scos}, kept for backards compatibility.
+Synonym of @option{-fdump-scos}, kept for backwards compatibility.
 
-@item ^-gnatet^/TARGET_DEPENDENT_INFO^
-@cindex @option{-gnatet} (@command{gcc})
-Generate target dependent information.
+@item -gnatet=@var{path}
+@cindex @option{-gnatet=file} (@command{gcc})
+Generate target dependent information. The format of the output file is
+described in the section about switch @option{-gnateT}.
+
+@item -gnateT=@var{path}
+@cindex @option{-gnateT} (@command{gcc})
+Read target dependent information, such as endianness or sizes and alignments
+of base type. If this switch is passed, the default target dependent
+information of the compiler is replaced by the one read from the input file.
+This is used by tools other than the compiler, e.g. to do
+semantic analysis of programs that will run on some other target than
+the machine on which the tool is run.
+
+The following target dependent values should be defined,
+where @code{Nat} denotes a natural integer value, @code{Pos} denotes a
+positive integer value, and fields marked with a question mark are
+boolean fields, where a value of 0 is False, and a value of 1 is True:
+
+@smallexample
+Bits_BE                    : Nat; -- Bits stored big-endian?
+Bits_Per_Unit              : Pos; -- Bits in a storage unit
+Bits_Per_Word              : Pos; -- Bits in a word
+Bytes_BE                   : Nat; -- Bytes stored big-endian?
+Char_Size                  : Pos; -- Standard.Character'Size
+Double_Float_Alignment     : Nat; -- Alignment of double float
+Double_Scalar_Alignment    : Nat; -- Alignment of double length scalar
+Double_Size                : Pos; -- Standard.Long_Float'Size
+Float_Size                 : Pos; -- Standard.Float'Size
+Float_Words_BE             : Nat; -- Float words stored big-endian?
+Int_Size                   : Pos; -- Standard.Integer'Size
+Long_Double_Size           : Pos; -- Standard.Long_Long_Float'Size
+Long_Long_Size             : Pos; -- Standard.Long_Long_Integer'Size
+Long_Size                  : Pos; -- Standard.Long_Integer'Size
+Maximum_Alignment          : Pos; -- Maximum permitted alignment
+Max_Unaligned_Field        : Pos; -- Maximum size for unaligned bit field
+Pointer_Size               : Pos; -- System.Address'Size
+Short_Enums                : Nat; -- Short foreign convention enums?
+Short_Size                 : Pos; -- Standard.Short_Integer'Size
+Strict_Alignment           : Nat; -- Strict alignment?
+System_Allocator_Alignment : Nat; -- Alignment for malloc calls
+Wchar_T_Size               : Pos; -- Interfaces.C.wchar_t'Size
+Words_BE                   : Nat; -- Words stored big-endian?
+@end smallexample
+
+The format of the input file is as follows. First come the values of
+the variables defined above, with one line per value:
+
+@smallexample
+name  value
+@end smallexample
+
+where @code{name} is the name of the parameter, spelled out in full,
+and cased as in the above list, and @code{value} is an unsigned decimal
+integer. Two or more blanks separates the name from the value.
+
+All the variables must be present, in alphabetical order (i.e. the
+same order as the list above).
+
+Then there is a blank line to separate the two parts of the file. Then
+come the lines showing the floating-point types to be registered, with
+one line per registered mode:
+
+@smallexample
+name  digs float_rep size alignment
+@end smallexample
+
+where @code{name} is the string name of the type (which can have
+single spaces embedded in the name (e.g. long double), @code{digs} is
+the number of digits for the floating-point type, @code{float_rep} is
+the float representation (I/V/A for IEEE-754-Binary, Vax_Native,
+AAMP), @code{size} is the size in bits, @code{alignment} is the
+alignment in bits. The name is followed by at least two blanks, fields
+are separated by at least one blank, and a LF character immediately
+follows the alignment field.
+
+Here is an example of target parametrization file:
+
+@smallexample
+Bits_BE                       0
+Bits_Per_Unit                 8
+Bits_Per_Word                64
+Bytes_BE                      0
+Char_Size                     8
+Double_Float_Alignment        0
+Double_Scalar_Alignment       0
+Double_Size                  64
+Float_Size                   32
+Float_Words_BE                0
+Int_Size                     64
+Long_Double_Size            128
+Long_Long_Size               64
+Long_Size                    64
+Maximum_Alignment            16
+Max_Unaligned_Field          64
+Pointer_Size                 64
+Short_Size                   16
+Strict_Alignment              0
+System_Allocator_Alignment   16
+Wchar_T_Size                 32
+Words_BE                      0
+
+float         15  I  64  64
+double        15  I  64  64
+long double   18  I  80 128
+TF            33  I 128 128
+@end smallexample
+
+@item -gnateu
+@cindex @option{-gnateu} (@command{gcc})
+Ignore unrecognized validity, warning, and style switches that
+appear after this switch is given. This may be useful when
+compiling sources developed on a later version of the compiler
+with an earlier version. Of course the earlier version must
+support this switch.
 
 @item ^-gnateV^/PARAMETER_VALIDITY_CHECK^
 @cindex @option{-gnateV} (@command{gcc})
@@ -4005,6 +4136,14 @@ Treat pragma Restrictions as Restriction_Warnings.
 @item ^-gnatR@r{[}0@r{/}1@r{/}2@r{/}3@r{[}s@r{]]}^/REPRESENTATION_INFO^
 @cindex @option{-gnatR} (@command{gcc})
 Output representation information for declared types and objects.
+Note that this switch is not allowed if a previous @code{-gnatD} switch has
+been given, since these two switches are not compatible. It is also not allowed
+if a previous @code{-gnatc} switch has been given, since we must be generating
+code to be able to determine representation information.
+
+@item ^-gnatRm[s]^/REPRESENTATION_INFO^
+Output convention and parameter passing mechanisms for all subprograms.
+This form is also incompatible with the use of @code{-gnatc}.
 
 @item -gnats
 @cindex @option{-gnats} (@command{gcc})
@@ -4762,9 +4901,7 @@ individually controlled.  The warnings that are not turned on by this
 switch are
 @option{-gnatwd} (implicit dereferencing),
 @option{-gnatwh} (hiding),
-@ifclear vms
 @option{-gnatw.d} (tag warnings with -gnatw switch)
-@end ifclear
 @option{-gnatw.h} (holes (gaps) in record layouts)
 @option{-gnatw.i} (overlapping actuals),
 @option{-gnatw.k} (redefinition of names in standard),
@@ -4913,7 +5050,6 @@ this warning option.
 This switch suppresses warnings for implicit dereferences in
 indexed components, slices, and selected components.
 
-@ifclear vms
 @item -gnatw.d
 @emph{Activate tagging of warning messages.}
 @cindex @option{-gnatw.d} (@command{gcc})
@@ -4929,7 +5065,6 @@ affected by the use of @code{-gnatwa}.
 If this switch is set, then warning messages return to the default
 mode in which warnings are not tagged as described above for
 @code{-gnatw.d}.
-@end ifclear
 
 @item -gnatwe
 @emph{Treat warnings and style checks as errors.}
@@ -5204,6 +5339,22 @@ an explicit @option{-gnatws} or
 @option{-gnatwe}. It also cancels the effect of the
 implicit @option{-gnatwe} that is activated by the
 use of @option{-gnatg}.
+
+@item -gnatw.n
+@emph{Activate warnings on atomic synchronization.}
+@cindex @option{-gnatw.n} (@command{gcc})
+@cindex Atomic Synchronization, warnings
+This switch actives warnings when an access to an atomic variable
+requires the generation of atomic synchronization code. These
+warnings are off by default and this warning is not included
+in @code{-gnatwa}.
+
+@item -gnatw.N
+@emph{Suppress warnings on atomic synchronization.}
+@cindex @option{-gnatw.n} (@command{gcc})
+@cindex Atomic Synchronization, warnings
+This switch suppresses warnings when an access to an atomic variable
+requires the generation of atomic synchronization code.
 
 @item -gnatwo
 @emph{Activate warnings on address clause overlays.}
@@ -5539,7 +5690,7 @@ as shown in the following example.
 @end smallexample
 
 @item -gnatw.w
-@emph{Activate warnings on unnecessary Warnings Off pragmas}
+@emph{Activate warnings on Warnings Off pragmas}
 @cindex @option{-gnatw.w} (@command{gcc})
 @cindex Warnings Off control
 This switch activates warnings for use of @code{pragma Warnings (Off, entity)}
@@ -5547,12 +5698,14 @@ where either the pragma is entirely useless (because it suppresses no
 warnings), or it could be replaced by @code{pragma Unreferenced} or
 @code{pragma Unmodified}. The default is that these warnings are not given.
 Note that this warning is not included in -gnatwa, it must be
-activated explicitly.
+activated explicitly. Also activates warnings for the case of
+Warnings (Off, String), where either there is no matching
+Warnings (On, String), or the Warnings (Off) did not suppress any warning.
 
 @item -gnatw.W
 @emph{Suppress warnings on unnecessary Warnings Off pragmas}
 @cindex @option{-gnatw.W} (@command{gcc})
-This switch suppresses warnings for use of @code{pragma Warnings (Off, entity)}.
+This switch suppresses warnings for use of @code{pragma Warnings (Off, ...)}.
 
 @item -gnatwx
 @emph{Activate warnings on Export/Import pragmas.}
@@ -5610,6 +5763,25 @@ This warning can also be turned on using @option{-gnatwa}.
 @cindex Ada compatibility issues warnings
 This switch suppresses the warnings intended to help in identifying
 incompatibilities between Ada language versions.
+
+@item -gnatw.y
+@emph{Activate information messages for why package spec needs body}
+@cindex @option{-gnatw.y} (@command{gcc})
+@cindex Package spec needing body
+There are a number of cases in which a package spec needs a body.
+For example, the use of pragma Elaborate_Body, or the declaration
+of a procedure specification requiring a completion. This switch
+causes information messages to be output showing why a package
+specification requires a body. This can be useful in the case of
+a large package specification which is unexpectedly requiring a
+body. The default is that such information messages are not output.
+
+@item -gnatw.Y
+@emph{Disable information messages for why package spec needs body}
+@cindex @option{-gnatw.Y} (@command{gcc})
+@cindex No information messages for why package spec needs body
+This switch suppresses the output of information messages showing why
+a package specification needs a body.
 
 @item -gnatwz
 @emph{Activate warnings on unchecked conversions.}
@@ -6062,7 +6234,8 @@ the examples in the Ada Reference Manual. Full line comments must be
 aligned with the @code{--} starting on a column that is a multiple of
 the alignment level, or they may be aligned the same way as the following
 non-blank line (this is useful when full line comments appear in the middle
-of a statement.
+of a statement, or they may be aligned with the source line on the previous
+non-blank line.
 
 @item ^a^ATTRIBUTE^
 @emph{Check attribute casing.}
@@ -6324,7 +6497,8 @@ an inherited operation must carry an overriding indicator.
 @emph{Check pragma casing.}
 Pragma names must be written in mixed case, that is, the
 initial letter and any letter following an underscore must be uppercase.
-All other letters must be lowercase.
+All other letters must be lowercase. An exception is that SPARK_Mode is
+allowed as an alternative for Spark_Mode.
 
 @item ^r^REFERENCES^
 @emph{Check references.}
@@ -7260,7 +7434,12 @@ the @option{-gnatR} switch). For @option{-gnatR1} (which is the default,
 so @option{-gnatR} with no parameter has the same effect), size and alignment
 information is listed for declared array and record types. For
 @option{-gnatR2}, size and alignment information is listed for all
-declared types and objects. Finally @option{-gnatR3} includes symbolic
+declared types and objects. The @code{Linker_Section} is also listed for any
+entity for which the @code{Linker_Section} is set explicitly or implicitly (the
+latter case occurs for objects of a type for which a @code{Linker_Section}
+is set).
+
+Finally @option{-gnatR3} includes symbolic
 expressions for values that are computed at run time for
 variant records. These symbolic expressions have a mostly obvious
 format with #n being used to represent the value of the n'th
@@ -7269,6 +7448,11 @@ discriminant. See source files @file{repinfo.ads/adb} in the
 output. If the switch is followed by an s (e.g.@: @option{-gnatR2s}), then
 the output is to a file with the name @file{^file.rep^file_REP^} where
 file is the name of the corresponding source file.
+
+@item -gnatRm[s]
+This form of the switch controls output of subprogram conventions
+and parameter passing mechanisms for all subprograms. A following
+@code{s} means output to a file as described above.
 @end ifclear
 @ifset vms
 @item /REPRESENTATION_INFO
@@ -7292,7 +7476,14 @@ If _FILE is added at the end of an option
 (e.g.@: @option{/REPRESENTATION_INFO=ARRAYS_FILE}),
 then the output is to a file with the name @file{file_REP} where
 file is the name of the corresponding source file.
+
+@item /REPRESENTATION_INFO=MECHANISMS
+This qualifier form controls output of subprogram conventions
+and parameter passing mechanisms for all subprograms. It is
+possible to append _FILE as described above to cause information
+to be written to a file.
 @end ifset
+
 Note that it is possible for record components to have zero size. In
 this case, the component clause uses an obvious extension of permitted
 Ada syntax, for example @code{at 0 range 0 .. -1}.
@@ -7565,10 +7756,22 @@ Examples of valid lines in a preprocessor data file:
 Define or redefine a preprocessing symbol, associated with value. If no value
 is given on the command line, then the value of the symbol is @code{True}.
 A symbol is an identifier, following normal Ada (case-insensitive)
-rules for its syntax, and value is any sequence (including an empty sequence)
-of characters from the set (letters, digits, period, underline).
+rules for its syntax, and value is either an arbitrary string between double
+quotes or any sequence (including an empty sequence) of characters from the
+set (letters, digits, period, underline).
 Ada reserved words may be used as symbols, with the exceptions of @code{if},
 @code{else}, @code{elsif}, @code{end}, @code{and}, @code{or} and @code{then}.
+
+@ifclear vms
+@noindent
+Examples:
+
+@smallexample
+   -gnateDToto=Titi
+   -gnateDFoo
+   -gnateDFoo=\"Foo-Bar\"
+@end smallexample
+@end ifclear
 
 @noindent
 A symbol declared with this ^switch^switch^ on the command line replaces a
@@ -9975,6 +10178,9 @@ some guidelines on debugging optimized code.
 * Vectorization of loops::
 * Other Optimization Switches::
 * Optimization and Strict Aliasing::
+* Aliased Variables and Optimization::
+* Atomic Variables and Optimization::
+* Passive Task Optimization::
 
 @ifset vms
 * Coverage Analysis::
@@ -10524,11 +10730,6 @@ preferably to other optimizations by means of pragma @code{Loop_Optimize}:
 placed immediately within the loop will convey the appropriate hint to the
 compiler for this loop.
 
-You can obtain information about the vectorization performed by the compiler
-by specifying @option{-ftree-vectorizer-verbose=N}.  For more details of
-this switch, see @ref{Debugging Options,,Options for Debugging Your Program
-or GCC, gcc, Using the GNU Compiler Collection (GCC)}.
-
 @node Other Optimization Switches
 @subsection Other Optimization Switches
 @cindex Optimization Switches
@@ -10773,6 +10974,174 @@ has on size and speed of the code. If you really need to use
 review any uses of unchecked conversion of access types,
 particularly if you are getting the warnings described above.
 
+@node Aliased Variables and Optimization
+@subsection Aliased Variables and Optimization
+@cindex Aliasing
+There are scenarios in which programs may
+use low level techniques to modify variables
+that otherwise might be considered to be unassigned. For example,
+a variable can be passed to a procedure by reference, which takes
+the address of the parameter and uses the address to modify the
+variable's value, even though it is passed as an IN parameter.
+Consider the following example:
+
+@smallexample @c ada
+procedure P is
+   Max_Length : constant Natural := 16;
+   type Char_Ptr is access all Character;
+
+   procedure Get_String(Buffer: Char_Ptr; Size : Integer);
+   pragma Import (C, Get_String, "get_string");
+
+   Name : aliased String (1 .. Max_Length) := (others => ' ');
+   Temp : Char_Ptr;
+
+   function Addr (S : String) return Char_Ptr is
+      function To_Char_Ptr is
+        new Ada.Unchecked_Conversion (System.Address, Char_Ptr);
+   begin
+      return To_Char_Ptr (S (S'First)'Address);
+   end;
+
+begin
+   Temp := Addr (Name);
+   Get_String (Temp, Max_Length);
+end;
+@end smallexample
+
+@noindent
+where Get_String is a C function that uses the address in Temp to
+modify the variable @code{Name}. This code is dubious, and arguably
+erroneous, and the compiler would be entitled to assume that
+@code{Name} is never modified, and generate code accordingly.
+
+However, in practice, this would cause some existing code that
+seems to work with no optimization to start failing at high
+levels of optimzization.
+
+What the compiler does for such cases is to assume that marking
+a variable as aliased indicates that some "funny business" may
+be going on. The optimizer recognizes the aliased keyword and
+inhibits optimizations that assume the value cannot be assigned.
+This means that the above example will in fact "work" reliably,
+that is, it will produce the expected results.
+
+@node Atomic Variables and Optimization
+@subsection Atomic Variables and Optimization
+@cindex Atomic
+There are two considerations with regard to performance when
+atomic variables are used.
+
+First, the RM only guarantees that access to atomic variables
+be atomic, it has nothing to say about how this is achieved,
+though there is a strong implication that this should not be
+achieved by explicit locking code. Indeed GNAT will never
+generate any locking code for atomic variable access (it will
+simply reject any attempt to make a variable or type atomic
+if the atomic access cannot be achieved without such locking code).
+
+That being said, it is important to understand that you cannot
+assume that the entire variable will always be accessed. Consider
+this example:
+
+@smallexample @c ada
+type R is record
+   A,B,C,D : Character;
+end record;
+for R'Size use 32;
+for R'Alignment use 4;
+
+RV : R;
+pragma Atomic (RV);
+X : Character;
+...
+X := RV.B;
+@end smallexample
+
+@noindent
+You cannot assume that the reference to @code{RV.B}
+will read the entire 32-bit
+variable with a single load instruction. It is perfectly legitimate if
+the hardware allows it to do a byte read of just the B field. This read
+is still atomic, which is all the RM requires. GNAT can and does take
+advantage of this, depending on the architecture and optimization level.
+Any assumption to the contrary is non-portable and risky. Even if you
+examine the assembly language and see a full 32-bit load, this might
+change in a future version of the compiler.
+
+If your application requires that all accesses to @code{RV} in this
+example be full 32-bit loads, you need to make a copy for the access
+as in:
+
+@smallexample @c ada
+declare
+   RV_Copy : constant R := RV;
+begin
+   X := RV_Copy.B;
+end;
+@end smallexample
+
+
+@noindent
+Now the reference to RV must read the whole variable.
+Actually one can imagine some compiler which figures
+out that the whole copy is not required (because only
+the B field is actually accessed), but GNAT
+certainly won't do that, and we don't know of any
+compiler that would not handle this right, and the
+above code will in practice work portably across
+all architectures (that permit the Atomic declaration).
+
+The second issue with atomic variables has to do with
+the possible requirement of generating synchronization
+code. For more details on this, consult the sections on
+the pragmas Enable/Disable_Atomic_Synchronization in the
+GNAT Reference Manual. If performance is critical, and
+such synchronization code is not required, it may be
+useful to disable it.
+
+@node Passive Task Optimization
+@subsection Passive Task Optimization
+@cindex Passive Task
+
+A passive task is one which is sufficiently simple that
+in theory a compiler could recognize it an implement it
+efficiently without creating a new thread. The original design
+of Ada 83 had in mind this kind of passive task optimization, but
+only a few Ada 83 compilers attempted it. The problem was that
+it was difficult to determine the exact conditions under which
+the optimization was possible. The result is a very fragile
+optimization where a very minor change in the program can
+suddenly silently make a task non-optimizable.
+
+With the revisiting of this issue in Ada 95, there was general
+agreement that this approach was fundamentally flawed, and the
+notion of protected types was introduced. When using protected
+types, the restrictions are well defined, and you KNOW that the
+operations will be optimized, and furthermore this optimized
+performance is fully portable.
+
+Although it would theoretically be possible for GNAT to attempt to
+do this optimization, but it really doesn't make sense in the
+context of Ada 95, and none of the Ada 95 compilers implement
+this optimization as far as we know. In particular GNAT never
+attempts to perform this optimization.
+
+In any new Ada 95 code that is written, you should always
+use protected types in place of tasks that might be able to
+be optimized in this manner.
+Of course this does not help if you have legacy Ada 83 code
+that depends on this optimization, but it is unusual to encounter
+a case where the performance gains from this optimization
+are significant.
+
+Your program should work correctly without this optimization. If
+you have performance problems, then the most practical
+approach is to figure out exactly where these performance problems
+arise, and update those particular tasks to be protected types. Note
+that typically clients of the tasks who call entries, will not have
+to be modified, only the task definition itself.
+
 @ifset vms
 @node Coverage Analysis
 @subsection Coverage Analysis
@@ -10931,6 +11300,13 @@ listed in a specified file
 Put @command{gnatelim} output into a specified file. If this file already exists,
 it is overridden. If this switch is not used, @command{gnatelim} outputs its results
 into @file{stderr}
+
+@item ^-j^/PROCESSES=^@var{n}
+@cindex @option{^-j^/PROCESSES^} (@command{gnatelim})
+Use @var{n} processes to carry out the tree creations (internal representations
+of the argument sources). On a multiprocessor machine this speeds up processing
+of big sets of argument sources. If @var{n} is 0, then the maximum number of
+parallel tree creations is the number of core processors on the platform.
 
 @item ^-q^/QUIET^
 @cindex @option{^-q^/QUIET^} (@command{gnatelim})
@@ -11559,6 +11935,7 @@ recognized by GNAT:
    Ada_2005
    Ada_12
    Ada_2012
+   Allow_Integer_Address
    Annotate
    Assertion_Policy
    Assume_No_Invalid_Values
@@ -11607,6 +11984,7 @@ recognized by GNAT:
    Short_Circuit_And_Or
    Source_File_Name
    Source_File_Name_Project
+   SPARK_Mode
    Style_Checks
    Suppress
    Suppress_Exception_Locations
@@ -12956,9 +13334,9 @@ Do not look for library files in the system default directory.
 @item --ext=@var{extension}
 @cindex @option{--ext} (@command{gnatxref})
 Specify an alternate ali file extension. The default is @code{ali} and other
-extensions (e.g. @code{sli} for SPARK library files) may be specified via this
-switch. Note that if this switch overrides the default, which means that only
-the new extension will be considered.
+extensions (e.g. @code{gli} for C/C++ sources when using @option{-fdump-xref})
+may be specified via this switch. Note that if this switch overrides the
+default, which means that only the new extension will be considered.
 
 @item --RTS=@var{rts-path}
 @cindex @option{--RTS} (@command{gnatxref})
@@ -13133,9 +13511,9 @@ Do not look for library files in the system default directory.
 @item --ext=@var{extension}
 @cindex @option{--ext} (@command{gnatfind})
 Specify an alternate ali file extension. The default is @code{ali} and other
-extensions (e.g. @code{sli} for SPARK library files) may be specified via this
-switch. Note that if this switch overrides the default, which means that only
-the new extension will be considered.
+extensions (e.g. @code{gli} for C/C++ sources when using @option{-fdump-xref})
+may be specified via this switch. Note that if this switch overrides the
+default, which means that only the new extension will be considered.
 
 @item --RTS=@var{rts-path}
 @cindex @option{--RTS} (@command{gnatfind})
@@ -13597,6 +13975,11 @@ version as output.
 You can specify various style directives via switches; e.g.,
 identifier case conventions, rules of indentation, and comment layout.
 
+Note: A newly-redesigned set of formatting algorithms used by gnatpp
+is now available.
+To invoke the old formatting algorithms, use the @option{--pp-old} switch.
+Support for @option{--pp-old} will be removed in some future version.
+
 To produce a reformatted file, @command{gnatpp} generates and uses the ASIS
 tree for the input source and thus requires the input to be syntactically and
 semantically legal.
@@ -13919,6 +14302,10 @@ Reformat comment blocks
 @item ^-c5^/COMMENTS_LAYOUT=KEEP_SPECIAL^
 Keep unchanged special form comments
 
+@item --comments-only
+@cindex @option{--comments-only} @command{gnatpp}
+Format just the comments.
+
 @cindex @option{^-l@var{n}^/CONSTRUCT_LAYOUT^} (@command{gnatpp})
 @item ^-l1^/CONSTRUCT_LAYOUT=GNAT^
 GNAT-style layout (this is the default)
@@ -13964,6 +14351,16 @@ Start each USE clause in a context clause from a separate line.
 @item ^--separate-stmt-name^/STMT_NAME_ON_NEW_LINE^
 Use a separate line for a loop or block statement name, but do not use an extra
 indentation level for the statement itself.
+
+@cindex @option{^--insert-blank-lines^/INSERT_BLANK_LINES^} (@command{gnatpp})
+@item ^--insert-blank-lines^/INSERT_BLANK_LINES^
+Insert blank lines where appropriate (between bodies and other large
+constructs).
+
+@cindex @option{^--preserve-blank-lines^/PRESERVE_BLANK_LINES^} (@command{gnatpp})
+@item ^--preserve-blank-lines^/PRESERVE_BLANK_LINES^
+Preserve blank lines in the input. By default, gnatpp will squeeze
+multiple blank lines down to one.
 
 @end table
 
@@ -14023,9 +14420,23 @@ line indentation is also 1)
 
 @noindent
 These switches control the inclusion of missing end/exit labels, and
-the indentation level in @b{case} statements.
+the indentation level in @b{case} statements, etc.
 
 @table @option
+@item --decimal-grouping=@var{n}
+@cindex @option{--decimal-grouping} @command{gnatpp}
+Put underscores in decimal literals (numeric literals without a base)
+every @var{n} characters. If a literal already has one or more
+underscores, it is not modified. For example, with
+@code{--decimal-grouping=3}, @code{1000000} will be changed to
+@code{1_000_000}.
+
+@item --based-grouping=@var{n}
+@cindex @option{--based-grouping} @command{gnatpp}
+Same as @code{--decimal-grouping}, but for based literals. For
+example, with @code{--based-grouping=4}, @code{16#0001FFFE#} will be
+changed to @code{16#0001_FFFE#}.
+
 @item ^-e^/NO_MISSED_LABELS^
 @cindex @option{^-e^/NO_MISSED_LABELS^} (@command{gnatpp})
 Do not insert missing end/exit labels. An end label is the name of
@@ -14205,6 +14616,20 @@ Display Copyright and version, then exit disregarding all other options.
 @cindex @option{--help} @command{gnatpp}
 Display usage, then exit disregarding all other options.
 
+@item --pp-off=@var{xxx}
+@cindex @option{--pp-off} @command{gnatpp}
+Use @code{--xxx} as the command to turn off pretty printing, instead
+of the default @code{--!pp off}.
+
+@item --pp-on=@var{xxx}
+@cindex @option{--pp-on} @command{gnatpp}
+Use @code{--xxx} as the command to turn pretty printing back on, instead
+of the default @code{--!pp on}.
+
+@item --pp-old
+@cindex @option{--pp-old} @command{gnatpp}
+Use the old formatting algorithms.
+
 @item ^-files @var{filename}^/FILES=@var{filename}^
 @cindex @option{^-files^/FILES^} (@code{gnatpp})
 Take the argument source files from the specified file. This file should be an
@@ -14212,6 +14637,17 @@ ordinary text file containing file names separated by spaces or
 line breaks. You can use this switch more than once in the same call to
 @command{gnatpp}. You also can combine this switch with an explicit list of
 files.
+
+@item ^-j^/PROCESSES=^@var{n}
+@cindex @option{^-j^/PROCESSES^} (@command{gnatpp})
+Use @var{n} processes to carry out the tree creations (internal representations
+of the argument sources). On a multiprocessor machine this speeds up processing
+of big sets of argument sources. If @var{n} is 0, then the maximum number of
+parallel tree creations is the number of core processors on the platform.
+
+@cindex @option{^-t^/TIME^} (@command{gnatpp})
+@item ^-t^/TIME^
+Print out execution time.
 
 @item ^-v^/VERBOSE^
 @cindex @option{^-v^/VERBOSE^} (@code{gnatpp})
@@ -14235,11 +14671,52 @@ comments, program layout, and name casing.
 They provide the detailed descriptions of the switches shown above.
 
 @menu
+* Disabling Pretty Printing::
 * White Space and Empty Lines::
 * Formatting Comments::
 * Construct Layout::
 * Name Casing::
 @end menu
+
+@node Disabling Pretty Printing
+@subsection Disabling Pretty Printing
+
+@noindent
+Pretty printing is highly heuristic in nature, and sometimes doesn't
+do exactly what you want. If you wish to format a certain region of
+code by hand, you can turn off pretty printing in that region by
+surrounding it with special comments that start with @code{--!pp off}
+and @code{--!pp on}. The text in that region will then be reproduced
+verbatim in the output with no formatting.
+
+To disable pretty printing for the whole file, put @code{--!pp off} at
+the top, with no following @code{--!pp on}.
+
+The comments must appear on a line by themselves, with nothing
+preceding except spaces. The initial text of the comment must be
+exactly @code{--!pp off} or @code{--!pp on} (case sensitive), but may
+be followed by arbitrary additional text. For example:
+
+@smallexample @c ada
+@cartouche
+package Interrupts is
+   --!pp off -- turn off pretty printing so "Interrupt_Kind" lines up
+   type Interrupt_Kind is
+     (Asynchronous_Interrupt_Kind,
+       Synchronous_Interrupt_Kind,
+             Green_Interrupt_Kind);
+   --!pp on -- reenable pretty printing
+
+   ...
+@end cartouche
+@end smallexample
+
+You can specify different comment strings using the gnatpp
+@code{--pp-off} and @code{--pp-on} switches. For example, if you say
+@code{gnatpp --pp-off=' pp-' *.ad?} then gnatpp will recognize
+comments of the form @code{-- pp-} instead of @code{--!pp off} for
+disabling pretty printing. Note that the leading @code{--} of the
+comment is not included in the argument to these switches.
 
 @node White Space and Empty Lines
 @subsection White Space and Empty Lines
@@ -14424,6 +14901,17 @@ not white space nor line break immediately following the leading @code{--} of
 the comment) should be without any change moved from the argument source
 into reformatted source. This switch allows to preserve comments that are used
 as a special marks in the code (e.g.@: SPARK annotation).
+
+@noindent
+The @option{--comments-only} switch specifies that only the comments
+are formatted; the rest of the program text is left alone. The
+comments are formatted according to the -c3 and -c4 switches; other
+formatting switches are ignored. For example, @option{--comments-only
+-c4} means to fill comment paragraphs, and do nothing else. Likewise,
+@option{--comments-only -c3} ensures comments start with at least two
+spaces after @code{--}, and @option{--comments-only -c3 -c4} does
+both. If @option{--comments-only} is given without @option{-c3} or
+@option{-c4}, then gnatpp doesn't format anything.
 
 @node Construct Layout
 @subsection Construct Layout
@@ -14760,6 +15248,481 @@ begin
 end Test;
 @end cartouche
 @end smallexample
+
+@ifclear vms
+@c *********************************
+@node The Ada-to-XML converter gnat2xml
+@chapter The Ada-to-XML converter @command{gnat2xml}
+@findex gnat2xml
+@cindex XML generation
+
+@noindent
+The @command{gnat2xml} tool is an ASIS-based utility that converts
+Ada source code into XML.
+
+@menu
+* Switches for gnat2xml::
+* Driving gnat2xml with gnatmake or gprbuild::
+* Other Programs::
+* Structure of the XML::
+@end menu
+
+@node Switches for gnat2xml
+@section Switches for @command{gnat2xml}
+
+@noindent
+@command{gnat2xml} takes Ada source code as input, and produces XML
+that conforms to the schema.
+
+Usage:
+
+@smallexample
+gnat2xml [options] files
+@end smallexample
+
+``files'' are the Ada source file names.
+
+@noindent
+Options:
+@smallexample
+-h
+--help -- generate usage information and quit, ignoring all other options
+
+-mdir -- generate one .xml file for each Ada source file, in directory
+         @file{dir}. (Default is to generate the XML to standard output.)
+
+--compact -- debugging version, with interspersed source, and a more
+      compact representation of "sloc". This version does not conform
+      to any schema.
+
+-I <include-dir>
+    directories to search for dependencies
+    You can also set the ADA_INCLUDE_PATH environment variable for this.
+
+-q -- quiet
+
+-v -- verbose (print out the command line options, and the names of
+      output files as they are generated).
+
+-t -- do not delete tree files when done (they are deleted by default).
+
+-cargs ... -- options to pass to gcc
+@end smallexample
+
+@noindent
+You can generate the ``tree files'' ahead of time using the -gnatct switch:
+
+@smallexample
+gnatmake -gnat2012 -gnatct *.ad[sb]
+@end smallexample
+
+@noindent
+If tree files do not exist, @command{gnat2xml} will create them by running gcc.
+See the ASIS documentation for more information on tree files.
+
+Example:
+
+@smallexample
+mkdir xml-files
+gnat2xml -v -mxml-files *.ad[sb] -cargs -gnat2012
+@end smallexample
+
+@noindent
+The above will create *.xml files in the @file{xml-files} subdirectory.
+For example, if there is an Ada package Mumble.Dumble, whose spec and
+body source code lives in mumble-dumble.ads and mumble-dumble.adb,
+the above will produce xml-files/mumble-dumble.ads.xml and
+xml-files/mumble-dumble.adb.xml.
+
+@node Driving gnat2xml with gnatmake or gprbuild
+@section Driving @command{gnat2xml} with @command{gnatmake} or @command{gprbuild}
+
+@noindent
+You can use gnatmake or gprbuild to drive @command{gnat2xml} to get
+incremental updates of the XML files on a per-source-file basis. For
+example, if you already have a bunch of XML files, and then you change
+one source file, it will regenerate XML files only for that source
+file, and other source files that depend on it. Gnatmake and gprbuild
+take care of tracking inter-file dependencies. For example, if
+this.adb says @code{with That;}, then this.adb depends on that.ads.
+
+To do this, you tell gnatmake/gprbuild to pretend that
+@command{gnat2xml} is the Ada compiler (instead of using gcc as the
+Ada compiler, as is normal).
+
+To tell gnatmake to use @command{gnat2xml} instead of gcc as the
+``compiler'', for example:
+
+@smallexample
+gnatmake -gnatc *.adb --GCC="gnat2xml -t -mxml"
+@end smallexample
+
+@noindent
+The @option{--GCC=} switch tells gnatmake that the ``compiler'' to run
+is @command{gnat2xml -t -mxml}. The @option{-t} switch means to keep the tree
+files, so they can be reused on the next run. (@command{gnat2xml}
+deletes them by default.) As usual, @option{-mxml} means to put the
+XML files in the @file{xml} subdirectory.
+
+You must give the @option{-gnatc} switch to gnatmake, which means
+``compile only; do not generate object code''. Otherwise, gnatmake will
+complain about missing object (*.o) files; @command{gnat2xml} of
+course does not generate *.o files.
+
+Using gprbuild is similar: you tell it to use @command{gnat2xml}
+instead of gcc. First write a project file, such as my_project.gpr:
+
+@smallexample @c projectfile
+project My_Project is
+
+   package Compiler is
+      for Driver ("ada") use "gnat2xml";
+      --  Use gnat2xml instead of the usual gcc.
+
+      for Default_Switches ("ada") use ("-t", "-mxml");
+      --  Same switches as in the gnatmake case.
+   end Compiler;
+
+end My_Project;
+@end smallexample
+
+@noindent
+Then:
+
+@smallexample @c projectfile
+gprbuild --no-object-check -P my_project.gpr
+@end smallexample
+
+@noindent
+The @option{--no-object-check} switch serves the same purpose as
+@option{-gnatc} in the gnatmake case --- it tells gprbuild not to
+expect that the ``compiler'' (really @command{gnat2xml}) will produce
+*.o files.
+
+See the gprbuild documentation for information on many other things
+you can put in the project file, such as telling it where to find
+the source files.
+
+@node Other Programs
+@section Other Programs
+
+@noindent
+The distribution includes two other programs that are related to
+@command{gnat2xml}:
+
+@command{gnat2xsd} is the schema generator, which generates the schema
+to standard output, based on the structure of Ada as encoded by
+ASIS. You don't need to run @command{gnat2xsd} in order to use
+@command{gnat2xml}. To generate the schema, type:
+
+@smallexample
+gnat2xsd > ada-schema.xsd
+@end smallexample
+
+@noindent
+@command{gnat2xml} generates XML files that will validate against
+@file{ada-schema.xsd}.
+
+@command{xml2gnat} is a back-translator that translates the XML back
+into Ada source code. The Ada generated by @command{xml2gnat} has
+identical semantics to the original Ada code passed to
+@command{gnat2xml}. It is not textually identical, however --- for
+example, no attempt is made to preserve the original indentation.
+
+@node Structure of the XML
+@section Structure of the XML
+
+@noindent
+The primary documentation for the structure of the XML generated by
+@command{gnat2xml} is the schema (see @command{gnat2xsd} above). The
+following documentation gives additional details needed to understand
+the schema and therefore the XML.
+
+The elements listed under Defining Occurrences, Usage Occurrences, and
+Other Elements represent the syntactic structure of the Ada program.
+Element names are given in lower case, with the corresponding element
+type Capitalized_Like_This. The element and element type names are
+derived directly from the ASIS enumeration type Flat_Element_Kinds,
+declared in Asis.Extensions.Flat_Kinds, with the leading ``An_'' or ``A_''
+removed. For example, the ASIS enumeration literal
+An_Assignment_Statement corresponds to the XML element
+assignment_statement of XML type Assignment_Statement.
+
+To understand the details of the schema and the corresponding XML, it is
+necessary to understand the ASIS standard, as well as the GNAT-specific
+extension to ASIS.
+
+A defining occurrence is an identifier (or character literal or operator
+symbol) declared by a declaration. A usage occurrence is an identifier
+(or ...) that references such a declared entity. For example, in:
+
+@smallexample
+type T is range 1..10;
+X, Y : constant T := 1;
+@end smallexample
+
+@noindent
+The first ``T'' is the defining occurrence of a type. The ``X'' is the
+defining occurrence of a constant, as is the ``Y'', and the second ``T'' is
+a usage occurrence referring to the defining occurrence of T.
+
+Each element has a 'sloc' (source location), and subelements for each
+syntactic subtree, reflecting the Ada grammar as implemented by ASIS.
+The types of subelements are as defined in the ASIS standard. For
+example, for the right-hand side of an assignment_statement we have
+the following comment in asis-statements.ads:
+
+@smallexample
+------------------------------------------------------------------------------
+--  18.3  function Assignment_Expression
+------------------------------------------------------------------------------
+
+   function Assignment_Expression
+     (Statement : Asis.Statement)
+      return      Asis.Expression;
+
+------------------------------------------------------------------------------
+...
+--  Returns the expression from the right hand side of the assignment.
+...
+--  Returns Element_Kinds:
+--       An_Expression
+@end smallexample
+
+@noindent
+The corresponding sub-element of type Assignment_Statement is:
+
+@smallexample
+<xsd:element name="assignment_expression_q" type="Expression_Class"/>
+@end smallexample
+
+@noindent
+where Expression_Class is defined by an xsd:choice of all the
+various kinds of expression.
+
+The 'sloc' of each element indicates the starting and ending line and
+column numbers. Column numbers are character counts; that is, a tab
+counts as 1, not as however many spaces it might expand to.
+
+Subelements of type Element have names ending in ``_q'' (for ASIS
+``Query''), and those of type Element_List end in ``_ql'' (``Query returning
+List'').
+
+Some subelements are ``Boolean''. For example, Private_Type_Definition
+has has_abstract_q and has_limited_q, to indicate whether those
+keywords are present, as in @code{type T is abstract limited
+private;}. False is represented by a Nil_Element. True is represented
+by an element type specific to that query (for example, Abstract and
+Limited).
+
+The root of the tree is a Compilation_Unit, with attributes:
+
+@itemize @bullet
+@item
+unit_kind, unit_class, and unit_origin. These are strings that match the
+enumeration literals of types Unit_Kinds, Unit_Classes, and Unit_Origins
+in package Asis.
+
+@item
+unit_full_name is the full expanded name of the unit, starting from a
+root library unit. So for @code{package P.Q.R is ...},
+@code{unit_full_name="P.Q.R"}. Same for @code{separate (P.Q) package R is ...}.
+
+@item
+def_name is the same as unit_full_name for library units; for subunits,
+it is just the simple name.
+
+@item
+source_file is the name of the Ada source file. For example, for
+the spec of @code{P.Q.R}, @code{source_file="p-q-r.ads"}. This allows one to
+interpret the source locations --- the ``sloc'' of all elements
+within this Compilation_Unit refers to line and column numbers
+within the named file.
+@end itemize
+
+@noindent
+Defining occurrences have these attributes:
+
+@itemize @bullet
+@item
+def_name is the simple name of the declared entity, as written in the Ada
+source code.
+
+@item
+def is a unique URI of the form:
+
+ ada://kind/fully/qualified/name
+
+where:
+
+ kind indicates the kind of Ada entity being declared (see below), and
+
+ fully/qualified/name, is the fully qualified name of the Ada
+ entity, with each of ``fully'', ``qualified'', and ``name'' being
+ mangled for uniqueness. We do not document the mangling
+ algorithm, which is subject to change; we just guarantee that the
+ names are unique in the face of overloading.
+
+@item
+type is the type of the declared object, or @code{null} for
+declarations of things other than objects.
+@end itemize
+
+@noindent
+Usage occurrences have these attributes:
+
+@itemize @bullet
+@item
+ref_name is the same as the def_name of the corresponding defining
+occurrence. This attribute is not of much use, because of
+overloading; use ref for lookups, instead.
+
+@item
+ref is the same as the def of the corresponding defining
+occurrence.
+@end itemize
+
+@noindent
+In summary, @code{def_name} and @code{ref_name} are as in the source
+code of the declaration, possibly overloaded, whereas @code{def} and
+@code{ref} are unique-ified.
+
+Literal elements have this attribute:
+
+@itemize @bullet
+@item
+lit_val is the value of the literal as written in the source text,
+appropriately escaped (e.g. @code{"} ---> @code{&quot;}). This applies
+only to numeric and string literals. Enumeration literals in Ada are
+not really "literals" in the usual sense; they are usage occurrences,
+and have ref_name and ref as described above. Note also that string
+literals used as operator symbols are treated as defining or usage
+occurrences, not as literals.
+@end itemize
+
+@noindent
+Elements that can syntactically represent names and expressions (which
+includes usage occurrences, plus function calls and so forth) have this
+attribute:
+
+@itemize @bullet
+@item
+type. If the element represents an expression or the name of an object,
+'type' is the 'def' for the defining occurrence of the type of that
+expression or name. Names of other kinds of entities, such as package
+names and type names, do not have a type in Ada; these have type="null"
+in the XML.
+@end itemize
+
+@noindent
+Pragma elements have this attribute:
+
+@itemize @bullet
+@item
+pragma_name is the name of the pragma. For language-defined pragmas, the
+pragma name is redundant with the element kind (for example, an
+assert_pragma element necessarily has pragma_name="Assert"). However, all
+implementation-defined pragmas are lumped together in ASIS as a single
+element kind (for example, the GNAT-specific pragma Unreferenced is
+represented by an implementation_defined_pragma element with
+pragma_name="Unreferenced").
+@end itemize
+
+@noindent
+Defining occurrences of formal parameters and generic formal objects have this
+attribute:
+
+@itemize @bullet
+@item
+mode indicates that the parameter is of mode 'in', 'in out', or 'out'.
+@end itemize
+
+@noindent
+All elements other than Not_An_Element have this attribute:
+
+@itemize @bullet
+@item
+checks is a comma-separated list of run-time checks that are needed
+for that element. The possible checks are: do_accessibility_check,
+do_discriminant_check,do_division_check,do_length_check,
+do_overflow_check,do_range_check,do_storage_check,do_tag_check.
+@end itemize
+
+@noindent
+The "kind" part of the "def" and "ref" attributes is taken from the ASIS
+enumeration type Flat_Declaration_Kinds, declared in
+Asis.Extensions.Flat_Kinds, with the leading "An_" or "A_" removed, and
+any trailing "_Declaration" or "_Specification" removed. Thus, the
+possible kinds are as follows:
+
+@smallexample
+ordinary_type
+task_type
+protected_type
+incomplete_type
+tagged_incomplete_type
+private_type
+private_extension
+subtype
+variable
+constant
+deferred_constant
+single_task
+single_protected
+integer_number
+real_number
+enumeration_literal
+discriminant
+component
+loop_parameter
+generalized_iterator
+element_iterator
+procedure
+function
+parameter
+procedure_body
+function_body
+return_variable
+return_constant
+null_procedure
+expression_function
+package
+package_body
+object_renaming
+exception_renaming
+package_renaming
+procedure_renaming
+function_renaming
+generic_package_renaming
+generic_procedure_renaming
+generic_function_renaming
+task_body
+protected_body
+entry
+entry_body
+entry_index
+procedure_body_stub
+function_body_stub
+package_body_stub
+task_body_stub
+protected_body_stub
+exception
+choice_parameter
+generic_procedure
+generic_function
+generic_package
+package_instantiation
+procedure_instantiation
+function_instantiation
+formal_object
+formal_type
+formal_incomplete_type
+formal_procedure
+formal_function
+formal_package
+formal_package_declaration_with_box
+@end smallexample
+@end ifclear
 
 @c *********************************
 @node The GNAT Metrics Tool gnatmetric
@@ -15671,14 +16634,25 @@ line breaks. You can use this switch more than once in the same call to
 @command{gnatmetric}. You also can combine this switch with
 an explicit list of files.
 
+@item ^-j^/PROCESSES=^@var{n}
+@cindex @option{^-j^/PROCESSES^} (@command{gnatmetric})
+Use @var{n} processes to carry out the tree creations (internal representations
+of the argument sources). On a multiprocessor machine this speeds up processing
+of big sets of argument sources. If @var{n} is 0, then the maximum number of
+parallel tree creations is the number of core processors on the platform.
+
+@cindex @option{^-t^/TIME^} (@command{gnatmetric})
+@item ^-t^/TIME^
+Print out execution time.
+
 @item ^-v^/VERBOSE^
-@cindex @option{^-v^/VERBOSE^} (@code{gnatmetric})
+@cindex @option{^-v^/VERBOSE^} (@command{gnatmetric})
 Verbose mode;
 @command{gnatmetric} generates version information and then
 a trace of sources being processed.
 
 @item ^-q^/QUIET^
-@cindex @option{^-q^/QUIET^} (@code{gnatmetric})
+@cindex @option{^-q^/QUIET^} (@command{gnatmetric})
 Quiet mode.
 @end table
 
@@ -16129,6 +17103,11 @@ In this example, @i{expression} is defined by the following grammar:
 @i{expression} ::=  <symbol>
 @i{expression} ::=  <symbol> = "<value>"
 @i{expression} ::=  <symbol> = <symbol>
+@i{expression} ::=  <symbol> = <integer>
+@i{expression} ::=  <symbol> > <integer>
+@i{expression} ::=  <symbol> >= <integer>
+@i{expression} ::=  <symbol> < <integer>
+@i{expression} ::=  <symbol> <= <integer>
 @i{expression} ::=  <symbol> 'Defined
 @i{expression} ::=  not @i{expression}
 @i{expression} ::=  @i{expression} and @i{expression}
@@ -16160,6 +17139,11 @@ symbol definition must be one of the (case-insensitive) literals
 @code{True} or @code{False}. If the value is true, then the
 corresponding lines are included, and if the value is false, they are
 excluded.
+
+When comparing a symbol to an integer, the integer is any non negative
+literal integer as defined in the Ada Reference Manual, such as 3, 16#FF# or
+2#11#. The symbol value must also be a non negative integer. Integer values
+in the range 0 .. 2**31-1 are supported.
 
 The test (@i{expression} ::= <symbol> @code{'Defined}) is true only if
 the symbol has been defined in the definition file or by a @option{-D}
@@ -17246,6 +18230,7 @@ The pragmas listed below should be used with caution inside libraries,
 as they can create incompatibilities with other Ada libraries:
 @itemize @bullet
 @item pragma @code{Locking_Policy}
+@item pragma @code{Partition_Elaboration_Policy}
 @item pragma @code{Queuing_Policy}
 @item pragma @code{Task_Dispatching_Policy}
 @item pragma @code{Unreserve_All_Interrupts}
@@ -18539,8 +19524,8 @@ by @command{gnatstub} to compile an argument source file.
 
 @item ^-gnatyM^/MAX_LINE_LENGTH=^@var{n}
 @cindex @option{^-gnatyM^/MAX_LINE_LENGTH^} (@command{gnatstub})
-(@var{n} is a non-negative integer). Set the maximum line length in the
-body stub to @var{n}; the default is 79. The maximum value that can be
+(@var{n} is a non-negative integer). Set the maximum line length that is
+allowed in a source file. The default is 79. The maximum value that can be
 specified is 32767. Note that in the special case of configuration
 pragma files, the maximum is always 32767 regardless of whether or
 not this switch appears.
@@ -18777,6 +19762,12 @@ to check substitutability.
 @cindex @option{--skeleton-default} (@command{gnattest})
 Specifies the default behavior of generated skeletons. @var{val} can be either
 "fail" or "pass", "fail" being the default.
+
+@item --passed-tests=@var{val}
+@cindex @option{--skeleton-default} (@command{gnattest})
+Specifies whether or not passed tests should be shown. @var{val} can be either
+"show" or "hide", "show" being the default.
+
 
 @item --tests-root=@var{dirname}
 @cindex @option{--tests-root} (@command{gnattest})
@@ -21241,7 +22232,7 @@ end STB;
 @end smallexample
 
 @smallexample
-$ gnatmake -g .\stb -bargs -E -largs -lgnat -laddr2line -lintl
+$ gnatmake -g .\stb -bargs -E
 $ stb
 
 0040149F in stb.p1 at stb.adb:8
@@ -22111,6 +23102,8 @@ following:
 @item  @code{Ada_12}
 
 @item  @code{Ada_2012}
+
+@item  @code{ALLOW_INTEGER_ADDRESS}
 
 @item  @code{ANNOTATE}
 
@@ -26165,7 +27158,7 @@ would prefer this precondition to be considered True at run time).
 
 @noindent
 To deal with the portability issue, and with the problem of
-mathematical versus run-time intepretation of the expressions in
+mathematical versus run-time interpretation of the expressions in
 assertions, GNAT provides comprehensive control over the handling
 of intermediate overflow. GNAT can operate in three modes, and
 furthemore, permits separate selection of operating modes for
@@ -26893,7 +27886,7 @@ The preprocessing language allows such constructs as
 
 @smallexample
 @group
-#if DEBUG or PRIORITY > 4 then
+#if DEBUG or else (PRIORITY > 4) then
    bunch of declarations
 #else
    completely different bunch of declarations

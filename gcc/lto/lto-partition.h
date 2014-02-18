@@ -1,5 +1,5 @@
 /* LTO partitioning logic routines.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -37,3 +37,4 @@ void lto_max_map (void);
 void lto_balanced_map (void);
 void lto_promote_cross_file_statics (void);
 void free_ltrans_partitions (void);
+void lto_promote_statics_nonwpa (void);

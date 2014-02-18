@@ -1,5 +1,5 @@
 /* Primary expression subroutines
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -2039,9 +2039,8 @@ gfc_match_varspec (gfc_expr *primary, int equiv_flag, bool sub_flag,
 	  if (m != MATCH_YES)
 	    return m;
 	}
-      else if (component->ts.type == BT_CLASS
-	       && CLASS_DATA (component)->as != NULL
-	       && !component->attr.proc_pointer)
+      else if (component->ts.type == BT_CLASS && component->attr.class_ok
+	       && CLASS_DATA (component)->as && !component->attr.proc_pointer)
 	{
 	  tail = extend_ref (primary, tail);
 	  tail->type = REF_ARRAY;
@@ -2134,7 +2133,7 @@ check_substring:
 symbol_attribute
 gfc_variable_attr (gfc_expr *expr, gfc_typespec *ts)
 {
-  int dimension, pointer, allocatable, target;
+  int dimension, codimension, pointer, allocatable, target;
   symbol_attribute attr;
   gfc_ref *ref;
   gfc_symbol *sym;
@@ -2149,12 +2148,14 @@ gfc_variable_attr (gfc_expr *expr, gfc_typespec *ts)
   if (sym->ts.type == BT_CLASS && sym->attr.class_ok)
     {
       dimension = CLASS_DATA (sym)->attr.dimension;
+      codimension = CLASS_DATA (sym)->attr.codimension;
       pointer = CLASS_DATA (sym)->attr.class_pointer;
       allocatable = CLASS_DATA (sym)->attr.allocatable;
     }
   else
     {
       dimension = attr.dimension;
+      codimension = attr.codimension;
       pointer = attr.pointer;
       allocatable = attr.allocatable;
     }
@@ -2209,11 +2210,13 @@ gfc_variable_attr (gfc_expr *expr, gfc_typespec *ts)
 
 	if (comp->ts.type == BT_CLASS)
 	  {
+	    codimension = CLASS_DATA (comp)->attr.codimension;
 	    pointer = CLASS_DATA (comp)->attr.class_pointer;
 	    allocatable = CLASS_DATA (comp)->attr.allocatable;
 	  }
 	else
 	  {
+	    codimension = comp->attr.codimension;
 	    pointer = comp->attr.pointer;
 	    allocatable = comp->attr.allocatable;
 	  }
@@ -2228,6 +2231,7 @@ gfc_variable_attr (gfc_expr *expr, gfc_typespec *ts)
       }
 
   attr.dimension = dimension;
+  attr.codimension = codimension;
   attr.pointer = pointer;
   attr.allocatable = allocatable;
   attr.target = target;
@@ -2253,7 +2257,7 @@ gfc_expr_attr (gfc_expr *e)
     case EXPR_FUNCTION:
       gfc_clear_attr (&attr);
 
-      if (e->value.function.esym != NULL)
+      if (e->value.function.esym && e->value.function.esym->result)
 	{
 	  gfc_symbol *sym = e->value.function.esym->result;
 	  attr = sym->attr;
@@ -2540,7 +2544,8 @@ gfc_convert_to_structure_constructor (gfc_expr *e, gfc_symbol *sym, gfc_expr **c
       if (parent && !comp)
 	break;
 
-      actual = actual->next;
+      if (actual)
+	actual = actual->next;
     }
 
   if (!build_actual_constructor (&comp_head, &ctor_head, sym))

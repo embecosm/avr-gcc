@@ -1,5 +1,5 @@
 /* Register renaming for the GNU compiler.
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -668,13 +668,13 @@ regrename_analyze (bitmap bb_mask)
   int n_bbs;
   int *inverse_postorder;
 
-  inverse_postorder = XNEWVEC (int, last_basic_block);
+  inverse_postorder = XNEWVEC (int, last_basic_block_for_fn (cfun));
   n_bbs = pre_and_rev_post_order_compute (NULL, inverse_postorder, false);
 
   /* Gather some information about the blocks in this function.  */
-  rename_info = XCNEWVEC (struct bb_rename_info, n_basic_blocks);
+  rename_info = XCNEWVEC (struct bb_rename_info, n_basic_blocks_for_fn (cfun));
   i = 0;
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       struct bb_rename_info *ri = rename_info + i;
       ri->bb = bb;
@@ -696,7 +696,7 @@ regrename_analyze (bitmap bb_mask)
 
   for (i = 0; i < n_bbs; i++)
     {
-      basic_block bb1 = BASIC_BLOCK (inverse_postorder[i]);
+      basic_block bb1 = BASIC_BLOCK_FOR_FN (cfun, inverse_postorder[i]);
       struct bb_rename_info *this_info;
       bool success;
       edge e;
@@ -778,7 +778,7 @@ regrename_analyze (bitmap bb_mask)
      We perform the analysis for both incoming and outgoing edges, but we
      only need to merge once (in the second part, after verifying outgoing
      edges).  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       struct bb_rename_info *bb_ri = (struct bb_rename_info *) bb->aux;
       unsigned j;
@@ -843,7 +843,7 @@ regrename_analyze (bitmap bb_mask)
 	    }
 	}
     }
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       struct bb_rename_info *bb_ri = (struct bb_rename_info *) bb->aux;
       unsigned j;
@@ -920,7 +920,7 @@ regrename_analyze (bitmap bb_mask)
 
   free (rename_info);
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     bb->aux = NULL;
 }
 
@@ -1842,23 +1842,40 @@ gate_handle_regrename (void)
   return (optimize > 0 && (flag_rename_registers));
 }
 
-struct rtl_opt_pass pass_regrename =
+namespace {
+
+const pass_data pass_data_regrename =
 {
- {
-  RTL_PASS,
-  "rnreg",                              /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_handle_regrename,                /* gate */
-  regrename_optimize,                   /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_RENAME_REGISTERS,                  /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing |
-  0                                     /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "rnreg", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_RENAME_REGISTERS, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing | 0 ), /* todo_flags_finish */
 };
+
+class pass_regrename : public rtl_opt_pass
+{
+public:
+  pass_regrename (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_regrename, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_handle_regrename (); }
+  unsigned int execute () { return regrename_optimize (); }
+
+}; // class pass_regrename
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_regrename (gcc::context *ctxt)
+{
+  return new pass_regrename (ctxt);
+}

@@ -1,5 +1,5 @@
 /* Mode switching cleanup pass for the EPIPHANY cpu.
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Embecosm on behalf of Adapteva, Inc.
 
 This file is part of GCC.
@@ -61,15 +61,15 @@ resolve_sw_modes (void)
   bool need_commit = false;
   bool finalize_fp_sets = (MACHINE_FUNCTION (cfun)->unknown_mode_sets == 0);
 
-  todo.create (last_basic_block);
-  pushed = sbitmap_alloc (last_basic_block);
+  todo.create (last_basic_block_for_fn (cfun));
+  pushed = sbitmap_alloc (last_basic_block_for_fn (cfun));
   bitmap_clear (pushed);
   if (!finalize_fp_sets)
     {
       df_note_add_problem ();
       df_analyze ();
     }
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     FOR_BB_INSNS (bb, insn)
       {
 	enum attr_fp_mode selected_mode;
@@ -161,23 +161,40 @@ resolve_sw_modes (void)
   return 0;
 }
 
-struct rtl_opt_pass pass_resolve_sw_modes =
+namespace {
+
+const pass_data pass_data_resolve_sw_modes =
 {
- {
-  RTL_PASS,
-  "resolve_sw_modes",			/* name */
-  OPTGROUP_NONE,			/* optinfo_flags */
-  gate_resolve_sw_modes,		/* gate */
-  resolve_sw_modes,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_MODE_SWITCH,			/* tv_id */
-  0,					/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing |
-  0					/* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "resolve_sw_modes", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_MODE_SWITCH, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing | 0 ), /* todo_flags_finish */
 };
+
+class pass_resolve_sw_modes : public rtl_opt_pass
+{
+public:
+  pass_resolve_sw_modes(gcc::context *ctxt)
+    : rtl_opt_pass(pass_data_resolve_sw_modes, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_resolve_sw_modes (); }
+  unsigned int execute () { return resolve_sw_modes (); }
+
+}; // class pass_resolve_sw_modes
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_resolve_sw_modes (gcc::context *ctxt)
+{
+  return new pass_resolve_sw_modes (ctxt);
+}

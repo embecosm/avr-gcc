@@ -92,11 +92,15 @@ package body Freeze is
 
    procedure Check_Component_Storage_Order
      (Encl_Type : Entity_Id;
-      Comp      : Entity_Id);
+      Comp      : Entity_Id;
+      ADC       : Node_Id);
    --  For an Encl_Type that has a Scalar_Storage_Order attribute definition
-   --  clause, verify that the component type is compatible. For arrays,
-   --  Comp is Empty; for records, it is the entity of the component under
-   --  consideration.
+   --  clause, verify that the component type has an explicit and compatible
+   --  attribute/aspect. For arrays, Comp is Empty; for records, it is the
+   --  entity of the component under consideration. For an Encl_Type that
+   --  does not have a Scalar_Storage_Order attribute definition clause,
+   --  verify that the component also does not have such a clause.
+   --  ADC is the attribute definition clause if present (or Empty).
 
    procedure Check_Strict_Alignment (E : Entity_Id);
    --  E is a base type. If E is tagged or has a component that is aliased
@@ -229,7 +233,7 @@ package body Freeze is
 
       --  Note that it is legal for a renaming_as_body to rename an intrinsic
       --  subprogram, as long as the renaming occurs before the new entity
-      --  is frozen. See RM 8.5.4 (5).
+      --  is frozen (RM 8.5.4 (5)).
 
       if Nkind (Body_Decl) = N_Subprogram_Renaming_Declaration
         and then Is_Entity_Name (Name (Body_Decl))
@@ -835,7 +839,7 @@ package body Freeze is
                    and then not Has_Independent_Components (T);
 
                Packed_Size : Uint := Uint_0;
-               --  SIze in bis so far
+               --  Size in bits so far
 
             begin
                --  Test for variant part present
@@ -846,8 +850,9 @@ package body Freeze is
                  and then Nkind (Type_Definition (Parent (T))) =
                                                N_Record_Definition
                  and then not Null_Present (Type_Definition (Parent (T)))
-                 and then Present (Variant_Part
-                            (Component_List (Type_Definition (Parent (T)))))
+                 and then
+                   Present (Variant_Part
+                              (Component_List (Type_Definition (Parent (T)))))
                then
                   --  If variant part is present, and type is unconstrained,
                   --  then we must have defaulted discriminants, or a size
@@ -880,11 +885,13 @@ package body Freeze is
                   end if;
 
                   --  We do not know the packed size if we have a by reference
-                  --  type, or an atomic type or an atomic component.
+                  --  type, or an atomic type or an atomic component, or an
+                  --  aliased component (because packing does not touch these).
 
                   if Is_Atomic (Ctyp)
                     or else Is_Atomic (Comp)
                     or else Is_By_Reference_Type (Ctyp)
+                    or else Is_Aliased (Comp)
                   then
                      Packed_Size_Known := False;
                   end if;
@@ -1065,16 +1072,22 @@ package body Freeze is
 
    procedure Check_Component_Storage_Order
      (Encl_Type : Entity_Id;
-      Comp      : Entity_Id)
+      Comp      : Entity_Id;
+      ADC       : Node_Id)
    is
       Comp_Type : Entity_Id;
-      Comp_Def  : Node_Id;
+      Comp_ADC  : Node_Id;
       Err_Node  : Node_Id;
-      ADC       : Node_Id;
 
       Comp_Byte_Aligned : Boolean;
       --  Set True for the record case, when Comp starts on a byte boundary
       --  (in which case it is allowed to have different storage order).
+
+      Comp_SSO_Differs  : Boolean;
+      --  Set True when the component is a nested composite, and it does not
+      --  have the same scalar storage order as Encl_Type.
+
+      Component_Aliased : Boolean;
 
    begin
       --  Record case
@@ -1084,15 +1097,15 @@ package body Freeze is
          Comp_Type := Etype (Comp);
 
          if Is_Tag (Comp) then
-            Comp_Def          := Empty;
             Comp_Byte_Aligned := True;
+            Component_Aliased := False;
 
          else
-            Comp_Def          := Component_Definition (Parent (Comp));
             Comp_Byte_Aligned :=
               Present (Component_Clause (Comp))
                 and then
                   Normalized_First_Bit (Comp) mod System_Storage_Unit = 0;
+            Component_Aliased := Is_Aliased (Comp);
          end if;
 
       --  Array case
@@ -1100,46 +1113,74 @@ package body Freeze is
       else
          Err_Node  := Encl_Type;
          Comp_Type := Component_Type (Encl_Type);
-         Comp_Def  := Component_Definition
-                        (Type_Definition (Declaration_Node (Encl_Type)));
 
          Comp_Byte_Aligned := False;
+         Component_Aliased := Has_Aliased_Components (Encl_Type);
       end if;
 
       --  Note: the Reverse_Storage_Order flag is set on the base type, but
       --  the attribute definition clause is attached to the first subtype.
 
       Comp_Type := Base_Type (Comp_Type);
-      ADC := Get_Attribute_Definition_Clause
-               (First_Subtype (Comp_Type),
-                Attribute_Scalar_Storage_Order);
+      Comp_ADC := Get_Attribute_Definition_Clause
+                    (First_Subtype (Comp_Type),
+                     Attribute_Scalar_Storage_Order);
 
-      if Is_Record_Type (Comp_Type) or else Is_Array_Type (Comp_Type) then
+      --  Case of enclosing type not having explicit SSO: component cannot
+      --  have it either.
+
+      if No (ADC) then
+         if Present (Comp_ADC) then
+            Error_Msg_N
+              ("composite type must have explicit scalar storage order",
+               Err_Node);
+         end if;
+
+      --  Case of enclosing type having explicit SSO: check compatible
+      --  attribute on Comp_Type if composite.
+
+      elsif Is_Record_Type (Comp_Type) or else Is_Array_Type (Comp_Type) then
+         Comp_SSO_Differs :=
+           Reverse_Storage_Order (Encl_Type)
+             /=
+           Reverse_Storage_Order (Comp_Type);
+
          if Present (Comp) and then Chars (Comp) = Name_uParent then
-            if Reverse_Storage_Order (Encl_Type)
-                 /=
-               Reverse_Storage_Order (Comp_Type)
-            then
+            if Comp_SSO_Differs then
                Error_Msg_N
                  ("record extension must have same scalar storage order as "
                   & "parent", Err_Node);
             end if;
 
-         elsif No (ADC) then
+         elsif No (Comp_ADC) then
             Error_Msg_N ("nested composite must have explicit scalar "
                          & "storage order", Err_Node);
 
-         elsif (Reverse_Storage_Order (Encl_Type)
-                  /=
-                Reverse_Storage_Order (Comp_Type))
-           and then not Comp_Byte_Aligned
-         then
-            Error_Msg_N
-              ("type of non-byte-aligned component must have same scalar "
-               & "storage order as enclosing composite", Err_Node);
+         elsif Comp_SSO_Differs then
+
+            --  Component SSO differs from enclosing composite:
+
+            --  Reject if component is a packed array, as it may be represented
+            --  as a scalar internally.
+
+            if Is_Packed (Comp_Type) then
+               Error_Msg_N
+                 ("type of packed component must have same scalar "
+                  & "storage order as enclosing composite", Err_Node);
+
+            --  Reject if not byte aligned
+
+            elsif not Comp_Byte_Aligned then
+               Error_Msg_N
+                 ("type of non-byte-aligned component must have same scalar "
+                  & "storage order as enclosing composite", Err_Node);
+            end if;
          end if;
 
-      elsif Present (Comp_Def) and then Aliased_Present (Comp_Def) then
+      --  Enclosing type has explicit SSO, non-composite component must not
+      --  be aliased.
+
+      elsif Component_Aliased then
          Error_Msg_N
            ("aliased component not permitted for type with "
             & "explicit Scalar_Storage_Order", Err_Node);
@@ -1215,9 +1256,7 @@ package body Freeze is
 
       --  Do not attempt to analyze case where range was in error
 
-      if No (Scalar_Range (E))
-        or else Error_Posted (Scalar_Range (E))
-      then
+      if No (Scalar_Range (E)) or else Error_Posted (Scalar_Range (E)) then
          return;
       end if;
 
@@ -1242,7 +1281,6 @@ package body Freeze is
          Lo_Bound := Type_Low_Bound (Ancestor);
 
          if Compile_Time_Known_Value (Lo_Bound) then
-
             if Expr_Rep_Value (Lo_Bound) >= 0 then
                Set_Is_Unsigned_Type (E, True);
             end if;
@@ -1410,10 +1448,8 @@ package body Freeze is
                end if;
 
             elsif Ekind (E) in Task_Kind
-              and then
-                (Nkind (Parent (E)) = N_Task_Type_Declaration
-                   or else
-                 Nkind (Parent (E)) = N_Single_Task_Declaration)
+              and then Nkind_In (Parent (E), N_Task_Type_Declaration,
+                                             N_Single_Task_Declaration)
             then
                Push_Scope (E);
                Freeze_All (First_Entity (E), After);
@@ -1584,10 +1620,8 @@ package body Freeze is
             end if;
 
          elsif Ekind (E) in Task_Kind
-           and then
-             (Nkind (Parent (E)) = N_Task_Type_Declaration
-                or else
-              Nkind (Parent (E)) = N_Single_Task_Declaration)
+           and then Nkind_In (Parent (E), N_Task_Type_Declaration,
+                                          N_Single_Task_Declaration)
          then
             declare
                Ent : Entity_Id;
@@ -1613,13 +1647,13 @@ package body Freeze is
          --  where a component type is private and the controlled full type
          --  occurs after the access type is frozen. Cases that don't need a
          --  finalization master are generic formal types (the actual type will
-         --  have it) and types with Java and CIL conventions, since those are
-         --  used for API bindings. (Are there any other cases that should be
-         --  excluded here???)
+         --  have it) and types derived from them,  and types with Java and CIL
+         --  conventions, since those are used for API bindings.
+         --  (Are there any other cases that should be excluded here???)
 
          elsif Is_Access_Type (E)
            and then Comes_From_Source (E)
-           and then not Is_Generic_Type (E)
+           and then not Is_Generic_Type (Root_Type (E))
            and then Needs_Finalization (Designated_Type (E))
          then
             Build_Finalization_Master (E);
@@ -1697,8 +1731,15 @@ package body Freeze is
       --  integer literal without an explicit corresponding size clause. The
       --  caller has checked that Utype is a modular integer type.
 
+      procedure Freeze_Array_Type (Arr : Entity_Id);
+      --  Freeze array type, including freezing index and component types
+
+      function Freeze_Generic_Entities (Pack : Entity_Id) return List_Id;
+      --  Create Freeze_Generic_Entity nodes for types declared in a generic
+      --  package. Recurse on inner generic packages.
+
       procedure Freeze_Record_Type (Rec : Entity_Id);
-      --  Freeze each component, handle some representation clauses, and freeze
+      --  Freeze record type, including freezing component types, and freezing
       --  primitive operations if this is a tagged type.
 
       -------------------
@@ -1841,9 +1882,19 @@ package body Freeze is
                     and then Is_Type (Entity (Prefix (N)))
                     and then Entity (Prefix (N)) = E
                   then
-                     Error_Msg_N
-                       ("current instance must be a limited type", Prefix (N));
+                     if Ada_Version < Ada_2012 then
+                        Error_Msg_N
+                          ("current instance must be a limited type",
+                           Prefix (N));
+                     else
+                        Error_Msg_N
+                          ("current instance must be an immutably limited "
+                           & "type (RM-2012, 7.5 (8.1/3))",
+                           Prefix (N));
+                     end if;
+
                      return Abandon;
+
                   else
                      return OK;
                   end if;
@@ -1943,6 +1994,550 @@ package body Freeze is
          end if;
       end Check_Suspicious_Modulus;
 
+      -----------------------
+      -- Freeze_Array_Type --
+      -----------------------
+
+      procedure Freeze_Array_Type (Arr : Entity_Id) is
+         FS     : constant Entity_Id := First_Subtype (Arr);
+         Ctyp   : constant Entity_Id := Component_Type (Arr);
+         Clause : Entity_Id;
+
+         Non_Standard_Enum : Boolean := False;
+         --  Set true if any of the index types is an enumeration type with a
+         --  non-standard representation.
+
+      begin
+         Freeze_And_Append (Ctyp, N, Result);
+
+         Indx := First_Index (Arr);
+         while Present (Indx) loop
+            Freeze_And_Append (Etype (Indx), N, Result);
+
+            if Is_Enumeration_Type (Etype (Indx))
+              and then Has_Non_Standard_Rep (Etype (Indx))
+            then
+               Non_Standard_Enum := True;
+            end if;
+
+            Next_Index (Indx);
+         end loop;
+
+         --  Processing that is done only for base types
+
+         if Ekind (Arr) = E_Array_Type then
+
+            --  Propagate flags for component type
+
+            if Is_Controlled (Component_Type (Arr))
+              or else Has_Controlled_Component (Ctyp)
+            then
+               Set_Has_Controlled_Component (Arr);
+            end if;
+
+            if Has_Unchecked_Union (Component_Type (Arr)) then
+               Set_Has_Unchecked_Union (Arr);
+            end if;
+
+            --  Warn for pragma Pack overriding foreign convention
+
+            if Has_Foreign_Convention (Ctyp)
+              and then Has_Pragma_Pack (Arr)
+            then
+               declare
+                  CN : constant Name_Id :=
+                         Get_Convention_Name (Convention (Ctyp));
+                  PP : constant Node_Id :=
+                         Get_Pragma (First_Subtype (Arr), Pragma_Pack);
+               begin
+                  if Present (PP) then
+                     Error_Msg_Name_1 := CN;
+                     Error_Msg_Sloc := Sloc (Arr);
+                     Error_Msg_N
+                       ("pragma Pack affects convention % components #??",
+                        PP);
+                     Error_Msg_Name_1 := CN;
+                     Error_Msg_N
+                       ("\array components may not have % compatible "
+                        & "representation??", PP);
+                  end if;
+               end;
+            end if;
+
+            --  If packing was requested or if the component size was
+            --  set explicitly, then see if bit packing is required. This
+            --  processing is only done for base types, since all of the
+            --  representation aspects involved are type-related.
+
+            --  This is not just an optimization, if we start processing the
+            --  subtypes, they interfere with the settings on the base type
+            --  (this is because Is_Packed has a slightly different meaning
+            --  before and after freezing).
+
+            declare
+               Csiz : Uint;
+               Esiz : Uint;
+
+            begin
+               if (Is_Packed (Arr) or else Has_Pragma_Pack (Arr))
+                 and then Known_Static_RM_Size (Ctyp)
+                 and then not Has_Component_Size_Clause (Arr)
+               then
+                  Csiz := UI_Max (RM_Size (Ctyp), 1);
+
+               elsif Known_Component_Size (Arr) then
+                  Csiz := Component_Size (Arr);
+
+               elsif not Known_Static_Esize (Ctyp) then
+                  Csiz := Uint_0;
+
+               else
+                  Esiz := Esize (Ctyp);
+
+                  --  We can set the component size if it is less than 16,
+                  --  rounding it up to the next storage unit size.
+
+                  if Esiz <= 8 then
+                     Csiz := Uint_8;
+                  elsif Esiz <= 16 then
+                     Csiz := Uint_16;
+                  else
+                     Csiz := Uint_0;
+                  end if;
+
+                  --  Set component size up to match alignment if it would
+                  --  otherwise be less than the alignment. This deals with
+                  --  cases of types whose alignment exceeds their size (the
+                  --  padded type cases).
+
+                  if Csiz /= 0 then
+                     declare
+                        A : constant Uint := Alignment_In_Bits (Ctyp);
+                     begin
+                        if Csiz < A then
+                           Csiz := A;
+                        end if;
+                     end;
+                  end if;
+               end if;
+
+               --  Case of component size that may result in packing
+
+               if 1 <= Csiz and then Csiz <= 64 then
+                  declare
+                     Ent         : constant Entity_Id :=
+                                     First_Subtype (Arr);
+                     Pack_Pragma : constant Node_Id :=
+                                     Get_Rep_Pragma (Ent, Name_Pack);
+                     Comp_Size_C : constant Node_Id :=
+                                     Get_Attribute_Definition_Clause
+                                       (Ent, Attribute_Component_Size);
+                  begin
+                     --  Warn if we have pack and component size so that the
+                     --  pack is ignored.
+
+                     --  Note: here we must check for the presence of a
+                     --  component size before checking for a Pack pragma to
+                     --  deal with the case where the array type is a derived
+                     --  type whose parent is currently private.
+
+                     if Present (Comp_Size_C)
+                       and then Has_Pragma_Pack (Ent)
+                       and then Warn_On_Redundant_Constructs
+                     then
+                        Error_Msg_Sloc := Sloc (Comp_Size_C);
+                        Error_Msg_NE
+                          ("?r?pragma Pack for& ignored!", Pack_Pragma, Ent);
+                        Error_Msg_N
+                          ("\?r?explicit component size given#!", Pack_Pragma);
+                        Set_Is_Packed (Base_Type (Ent), False);
+                        Set_Is_Bit_Packed_Array (Base_Type (Ent), False);
+                     end if;
+
+                     --  Set component size if not already set by a component
+                     --  size clause.
+
+                     if not Present (Comp_Size_C) then
+                        Set_Component_Size (Arr, Csiz);
+                     end if;
+
+                     --  Check for base type of 8, 16, 32 bits, where an
+                     --  unsigned subtype has a length one less than the
+                     --  base type (e.g. Natural subtype of Integer).
+
+                     --  In such cases, if a component size was not set
+                     --  explicitly, then generate a warning.
+
+                     if Has_Pragma_Pack (Arr)
+                       and then not Present (Comp_Size_C)
+                       and then
+                         (Csiz = 7 or else Csiz = 15 or else Csiz = 31)
+                       and then Esize (Base_Type (Ctyp)) = Csiz + 1
+                     then
+                        Error_Msg_Uint_1 := Csiz;
+
+                        if Present (Pack_Pragma) then
+                           Error_Msg_N
+                             ("??pragma Pack causes component size "
+                              & "to be ^!", Pack_Pragma);
+                           Error_Msg_N
+                             ("\??use Component_Size to set "
+                              & "desired value!", Pack_Pragma);
+                        end if;
+                     end if;
+
+                     --  Actual packing is not needed for 8, 16, 32, 64. Also
+                     --  not needed for 24 if alignment is 1.
+
+                     if        Csiz = 8
+                       or else Csiz = 16
+                       or else Csiz = 32
+                       or else Csiz = 64
+                       or else (Csiz = 24 and then Alignment (Ctyp) = 1)
+                     then
+                        --  Here the array was requested to be packed, but
+                        --  the packing request had no effect, so Is_Packed
+                        --  is reset.
+
+                        --  Note: semantically this means that we lose track
+                        --  of the fact that a derived type inherited a pragma
+                        --  Pack that was non- effective, but that seems fine.
+
+                        --  We regard a Pack pragma as a request to set a
+                        --  representation characteristic, and this request
+                        --  may be ignored.
+
+                        Set_Is_Packed           (Base_Type (Arr), False);
+                        Set_Is_Bit_Packed_Array (Base_Type (Arr), False);
+
+                        if Known_Static_Esize (Component_Type (Arr))
+                          and then Esize (Component_Type (Arr)) = Csiz
+                        then
+                           Set_Has_Non_Standard_Rep
+                             (Base_Type (Arr), False);
+                        end if;
+
+                        --  In all other cases, packing is indeed needed
+
+                     else
+                        Set_Has_Non_Standard_Rep (Base_Type (Arr), True);
+                        Set_Is_Bit_Packed_Array  (Base_Type (Arr), True);
+                        Set_Is_Packed            (Base_Type (Arr), True);
+                     end if;
+                  end;
+               end if;
+            end;
+
+            --  Check for Atomic_Components or Aliased with unsuitable packing
+            --  or explicit component size clause given.
+
+            if (Has_Atomic_Components  (Arr)
+                  or else
+                Has_Aliased_Components (Arr))
+              and then
+                (Has_Component_Size_Clause (Arr) or else Is_Packed (Arr))
+            then
+               Alias_Atomic_Check : declare
+
+                  procedure Complain_CS (T : String);
+                  --  Outputs error messages for incorrect CS clause or pragma
+                  --  Pack for aliased or atomic components (T is "aliased" or
+                  --  "atomic");
+
+                  -----------------
+                  -- Complain_CS --
+                  -----------------
+
+                  procedure Complain_CS (T : String) is
+                  begin
+                     if Has_Component_Size_Clause (Arr) then
+                        Clause :=
+                          Get_Attribute_Definition_Clause
+                            (FS, Attribute_Component_Size);
+
+                        if Known_Static_Esize (Ctyp) then
+                           Error_Msg_N
+                             ("incorrect component size for "
+                              & T & " components", Clause);
+                           Error_Msg_Uint_1 := Esize (Ctyp);
+                           Error_Msg_N
+                             ("\only allowed value is^", Clause);
+
+                        else
+                           Error_Msg_N
+                             ("component size cannot be given for "
+                              & T & " components", Clause);
+                        end if;
+
+                     else
+                        Error_Msg_N
+                          ("cannot pack " & T & " components",
+                           Get_Rep_Pragma (FS, Name_Pack));
+                     end if;
+
+                     return;
+                  end Complain_CS;
+
+                  --  Start of processing for Alias_Atomic_Check
+
+               begin
+                  --  If object size of component type isn't known, we cannot
+                  --  be sure so we defer to the back end.
+
+                  if not Known_Static_Esize (Ctyp) then
+                     null;
+
+                  --  Case where component size has no effect. First check for
+                  --  object size of component type multiple of the storage
+                  --  unit size.
+
+                  elsif Esize (Ctyp) mod System_Storage_Unit = 0
+
+                    --  OK in both packing case and component size case if RM
+                    --  size is known and static and same as the object size.
+
+                    and then
+                      ((Known_Static_RM_Size (Ctyp)
+                         and then Esize (Ctyp) = RM_Size (Ctyp))
+
+                        --  Or if we have an explicit component size clause and
+                        --  the component size and object size are equal.
+
+                        or else
+                          (Has_Component_Size_Clause (Arr)
+                            and then Component_Size (Arr) = Esize (Ctyp)))
+                  then
+                     null;
+
+                  elsif Has_Aliased_Components (Arr)
+                    or else Is_Aliased (Ctyp)
+                  then
+                     Complain_CS ("aliased");
+
+                  elsif Has_Atomic_Components (Arr)
+                    or else Is_Atomic (Ctyp)
+                  then
+                     Complain_CS ("atomic");
+                  end if;
+               end Alias_Atomic_Check;
+            end if;
+
+            --  Warn for case of atomic type
+
+            Clause := Get_Rep_Pragma (FS, Name_Atomic);
+
+            if Present (Clause)
+              and then not Addressable (Component_Size (FS))
+            then
+               Error_Msg_NE
+                 ("non-atomic components of type& may not be "
+                  & "accessible by separate tasks??", Clause, Arr);
+
+               if Has_Component_Size_Clause (Arr) then
+                  Error_Msg_Sloc := Sloc (Get_Attribute_Definition_Clause
+                                           (FS, Attribute_Component_Size));
+                  Error_Msg_N ("\because of component size clause#??", Clause);
+
+               elsif Has_Pragma_Pack (Arr) then
+                  Error_Msg_Sloc := Sloc (Get_Rep_Pragma (FS, Name_Pack));
+                  Error_Msg_N ("\because of pragma Pack#??", Clause);
+               end if;
+            end if;
+
+            --  Check for scalar storage order
+
+            Check_Component_Storage_Order
+              (Encl_Type => Arr,
+               Comp      => Empty,
+               ADC       => Get_Attribute_Definition_Clause
+                              (First_Subtype (Arr),
+                               Attribute_Scalar_Storage_Order));
+
+            --  Processing that is done only for subtypes
+
+         else
+            --  Acquire alignment from base type
+
+            if Unknown_Alignment (Arr) then
+               Set_Alignment (Arr, Alignment (Base_Type (Arr)));
+               Adjust_Esize_Alignment (Arr);
+            end if;
+         end if;
+
+         --  Specific checks for bit-packed arrays
+
+         if Is_Bit_Packed_Array (Arr) then
+
+            --  Check number of elements for bit packed arrays that come from
+            --  source and have compile time known ranges. The bit-packed
+            --  arrays circuitry does not support arrays with more than
+            --  Integer'Last + 1 elements, and when this restriction is
+            --  violated, causes incorrect data access.
+
+            --  For the case where this is not compile time known, a run-time
+            --  check should be generated???
+
+            if Comes_From_Source (Arr) and then Is_Constrained (Arr) then
+               declare
+                  Elmts : Uint;
+                  Index : Node_Id;
+                  Ilen  : Node_Id;
+                  Ityp  : Entity_Id;
+
+               begin
+                  Elmts := Uint_1;
+                  Index := First_Index (Arr);
+                  while Present (Index) loop
+                     Ityp := Etype (Index);
+
+                     --  Never generate an error if any index is of a generic
+                     --  type. We will check this in instances.
+
+                     if Is_Generic_Type (Ityp) then
+                        Elmts := Uint_0;
+                        exit;
+                     end if;
+
+                     Ilen :=
+                       Make_Attribute_Reference (Loc,
+                         Prefix         =>
+                           New_Occurrence_Of (Ityp, Loc),
+                         Attribute_Name => Name_Range_Length);
+                     Analyze_And_Resolve (Ilen);
+
+                     --  No attempt is made to check number of elements
+                     --  if not compile time known.
+
+                     if Nkind (Ilen) /= N_Integer_Literal then
+                        Elmts := Uint_0;
+                        exit;
+                     end if;
+
+                     Elmts := Elmts * Intval (Ilen);
+                     Next_Index (Index);
+                  end loop;
+
+                  if Elmts > Intval (High_Bound
+                                       (Scalar_Range (Standard_Integer))) + 1
+                  then
+                     Error_Msg_N
+                       ("bit packed array type may not have "
+                        & "more than Integer''Last+1 elements", Arr);
+                  end if;
+               end;
+            end if;
+
+            --  Check size
+
+            if Known_RM_Size (Arr) then
+               declare
+                  SizC : constant Node_Id := Size_Clause (Arr);
+
+                  Discard : Boolean;
+                  pragma Warnings (Off, Discard);
+
+               begin
+                  --  It is not clear if it is possible to have no size clause
+                  --  at this stage, but it is not worth worrying about. Post
+                  --  error on the entity name in the size clause if present,
+                  --  else on the type entity itself.
+
+                  if Present (SizC) then
+                     Check_Size (Name (SizC), Arr, RM_Size (Arr), Discard);
+                  else
+                     Check_Size (Arr, Arr, RM_Size (Arr), Discard);
+                  end if;
+               end;
+            end if;
+         end if;
+
+         --  If any of the index types was an enumeration type with a
+         --  non-standard rep clause, then we indicate that the array type
+         --  is always packed (even if it is not bit packed).
+
+         if Non_Standard_Enum then
+            Set_Has_Non_Standard_Rep (Base_Type (Arr));
+            Set_Is_Packed            (Base_Type (Arr));
+         end if;
+
+         Set_Component_Alignment_If_Not_Set (Arr);
+
+         --  If the array is packed, we must create the packed array type to be
+         --  used to actually implement the type. This is only needed for real
+         --  array types (not for string literal types, since they are present
+         --  only for the front end).
+
+         if Is_Packed (Arr)
+           and then Ekind (Arr) /= E_String_Literal_Subtype
+         then
+            Create_Packed_Array_Type (Arr);
+            Freeze_And_Append (Packed_Array_Type (Arr), N, Result);
+
+            --  Size information of packed array type is copied to the array
+            --  type, since this is really the representation. But do not
+            --  override explicit existing size values. If the ancestor subtype
+            --  is constrained the packed_array_type will be inherited from it,
+            --  but the size may have been provided already, and must not be
+            --  overridden either.
+
+            if not Has_Size_Clause (Arr)
+              and then
+                (No (Ancestor_Subtype (Arr))
+                  or else not Has_Size_Clause (Ancestor_Subtype (Arr)))
+            then
+               Set_Esize     (Arr, Esize     (Packed_Array_Type (Arr)));
+               Set_RM_Size   (Arr, RM_Size   (Packed_Array_Type (Arr)));
+            end if;
+
+            if not Has_Alignment_Clause (Arr) then
+               Set_Alignment (Arr, Alignment (Packed_Array_Type (Arr)));
+            end if;
+         end if;
+
+         --  For non-packed arrays set the alignment of the array to the
+         --  alignment of the component type if it is unknown. Skip this
+         --  in atomic case (atomic arrays may need larger alignments).
+
+         if not Is_Packed (Arr)
+           and then Unknown_Alignment (Arr)
+           and then Known_Alignment (Ctyp)
+           and then Known_Static_Component_Size (Arr)
+           and then Known_Static_Esize (Ctyp)
+           and then Esize (Ctyp) = Component_Size (Arr)
+           and then not Is_Atomic (Arr)
+         then
+            Set_Alignment (Arr, Alignment (Component_Type (Arr)));
+         end if;
+      end Freeze_Array_Type;
+
+      -----------------------------
+      -- Freeze_Generic_Entities --
+      -----------------------------
+
+      function Freeze_Generic_Entities (Pack : Entity_Id) return List_Id is
+         E     : Entity_Id;
+         F     : Node_Id;
+         Flist : List_Id;
+
+      begin
+         Flist := New_List;
+         E := First_Entity (Pack);
+         while Present (E) loop
+            if Is_Type (E) and then not Is_Generic_Type (E) then
+               F := Make_Freeze_Generic_Entity (Sloc (Pack));
+               Set_Entity (F, E);
+               Append_To (Flist, F);
+
+            elsif Ekind (E) = E_Generic_Package then
+               Append_List_To (Flist, Freeze_Generic_Entities (E));
+            end if;
+
+            Next_Entity (E);
+         end loop;
+
+         return Flist;
+      end Freeze_Generic_Entities;
+
       ------------------------
       -- Freeze_Record_Type --
       ------------------------
@@ -1970,6 +2565,11 @@ package body Freeze is
          --  clause (used to warn about useless Bit_Order pragmas, and also
          --  to detect cases where Implicit_Packing may have an effect).
 
+         Aliased_Component : Boolean := False;
+         --  Set True if we find at least one component which is aliased. This
+         --  is used to prevent Implicit_Packing of the record, since packing
+         --  cannot modify the size of alignment of an aliased component.
+
          All_Scalar_Components : Boolean := True;
          --  Set False if we encounter a component of a non-scalar type
 
@@ -1992,6 +2592,11 @@ package body Freeze is
          --  subprogram type to frozen as well, to prevent an out-of-scope
          --  freeze node at some eventual point of call. Protected operations
          --  are handled elsewhere.
+
+         procedure Freeze_Choices_In_Variant_Part (VP : Node_Id);
+         --  Make sure that all types mentioned in Discrete_Choices of the
+         --  variants referenceed by the Variant_Part VP are frozen. This is
+         --  a recursive routine to deal with nested variants.
 
          ---------------------
          -- Check_Allocator --
@@ -2045,6 +2650,50 @@ package body Freeze is
             end if;
          end Check_Itype;
 
+         ------------------------------------
+         -- Freeze_Choices_In_Variant_Part --
+         ------------------------------------
+
+         procedure Freeze_Choices_In_Variant_Part (VP : Node_Id) is
+            pragma Assert (Nkind (VP) = N_Variant_Part);
+
+            Variant : Node_Id;
+            Choice  : Node_Id;
+            CL      : Node_Id;
+
+         begin
+            --  Loop through variants
+
+            Variant := First_Non_Pragma (Variants (VP));
+            while Present (Variant) loop
+
+               --  Loop through choices, checking that all types are frozen
+
+               Choice := First_Non_Pragma (Discrete_Choices (Variant));
+               while Present (Choice) loop
+                  if Nkind (Choice) in N_Has_Etype
+                    and then Present (Etype (Choice))
+                  then
+                     Freeze_And_Append (Etype (Choice), N, Result);
+                  end if;
+
+                  Next_Non_Pragma (Choice);
+               end loop;
+
+               --  Check for nested variant part to process
+
+               CL := Component_List (Variant);
+
+               if not Null_Present (CL) then
+                  if Present (Variant_Part (CL)) then
+                     Freeze_Choices_In_Variant_Part (Variant_Part (CL));
+                  end if;
+               end if;
+
+               Next_Non_Pragma (Variant);
+            end loop;
+         end Freeze_Choices_In_Variant_Part;
+
       --  Start of processing for Freeze_Record_Type
 
       begin
@@ -2094,6 +2743,9 @@ package body Freeze is
          Comp := First_Entity (Rec);
          Prev := Empty;
          while Present (Comp) loop
+            if Is_Aliased (Comp) then
+               Aliased_Component := True;
+            end if;
 
             --  Handle the component and discriminant case
 
@@ -2112,30 +2764,64 @@ package body Freeze is
 
                   if Is_Itype (Etype (Comp))
                     and then Is_Record_Type (Underlying_Type
-                                             (Scope (Etype (Comp))))
+                                               (Scope (Etype (Comp))))
                   then
                      Undelay_Type (Etype (Comp));
                   end if;
 
                   Freeze_And_Append (Etype (Comp), N, Result);
 
+                  --  Warn for pragma Pack overriding foreign convention
+
+                  if Has_Foreign_Convention (Etype (Comp))
+                    and then Has_Pragma_Pack (Rec)
+
+                    --  Don't warn for aliased components, since override
+                    --  cannot happen in that case.
+
+                    and then not Is_Aliased (Comp)
+                  then
+                     declare
+                        CN : constant Name_Id :=
+                               Get_Convention_Name (Convention (Etype (Comp)));
+                        PP : constant Node_Id :=
+                               Get_Pragma (Rec, Pragma_Pack);
+                     begin
+                        if Present (PP) then
+                           Error_Msg_Name_1 := CN;
+                           Error_Msg_Sloc := Sloc (Comp);
+                           Error_Msg_N
+                             ("pragma Pack affects convention % component#??",
+                              PP);
+                           Error_Msg_Name_1 := CN;
+                           Error_Msg_NE
+                             ("\component & may not have % compatible "
+                              & "representation??", PP, Comp);
+                        end if;
+                     end;
+                  end if;
+
                   --  Check for error of component clause given for variable
                   --  sized type. We have to delay this test till this point,
                   --  since the component type has to be frozen for us to know
-                  --  if it is variable length. We omit this test in a generic
-                  --  context, it will be applied at instantiation time.
-
-                  --  We also omit this test in CodePeer mode, since we do not
-                  --  have sufficient info on size and representation clauses.
+                  --  if it is variable length.
 
                   if Present (CC) then
                      Placed_Component := True;
 
+                     --  We omit this test in a generic context, it will be
+                     --  applied at instantiation time.
+
                      if Inside_A_Generic then
                         null;
 
+                     --  Also omit this test in CodePeer mode, since we do not
+                     --  have sufficient info on size and rep clauses.
+
                      elsif CodePeer_Mode then
                         null;
+
+                     --  Do the check
 
                      elsif not
                        Size_Known_At_Compile_Time
@@ -2272,7 +2958,7 @@ package body Freeze is
                begin
                   if Present (Alloc) then
 
-                     --  If component is pointer to a classwide type, freeze
+                     --  If component is pointer to a class-wide type, freeze
                      --  the specific type in the expression being allocated.
                      --  The expression may be a subtype indication, in which
                      --  case freeze the subtype mark.
@@ -2313,11 +2999,11 @@ package body Freeze is
               and then Present (Expression (Parent (Comp)))
               and then Nkind (Expression (Parent (Comp))) = N_Aggregate
               and then Is_Fully_Defined
-                 (Designated_Type (Component_Type (Etype (Comp))))
+                         (Designated_Type (Component_Type (Etype (Comp))))
             then
                Freeze_And_Append
                  (Designated_Type
-                   (Component_Type (Etype (Comp))), N, Result);
+                    (Component_Type (Etype (Comp))), N, Result);
             end if;
 
             Prev := Comp;
@@ -2351,15 +3037,16 @@ package body Freeze is
                  ("??scalar storage order specified but no component clause",
                   ADC);
             end if;
-
-            --  Check attribute on component types
-
-            Comp := First_Component (Rec);
-            while Present (Comp) loop
-               Check_Component_Storage_Order (Rec, Comp);
-               Next_Component (Comp);
-            end loop;
          end if;
+
+         --  Check consistent attribute setting on component types
+
+         Comp := First_Component (Rec);
+         while Present (Comp) loop
+            Check_Component_Storage_Order
+              (Encl_Type => Rec, Comp => Comp, ADC => ADC);
+            Next_Component (Comp);
+         end loop;
 
          --  Deal with Bit_Order aspect specifying a non-default bit order
 
@@ -2367,7 +3054,8 @@ package body Freeze is
 
          if Present (ADC) and then Base_Type (Rec) = Rec then
             if not (Placed_Component or else Is_Packed (Rec)) then
-               Error_Msg_N ("??bit order specification has no effect", ADC);
+               Error_Msg_N
+                 ("??bit order specification has no effect", ADC);
                Error_Msg_N
                  ("\??since no component clauses were specified", ADC);
 
@@ -2443,14 +3131,12 @@ package body Freeze is
          --  remote type here since that is what we are semantically freezing.
          --  This prevents the freeze node for that type in an inner scope.
 
-         --  Also, Check for controlled components and unchecked unions.
-         --  Finally, enforce the restriction that access attributes with a
-         --  current instance prefix can only apply to limited types.
-
          if Ekind (Rec) = E_Record_Type then
             if Present (Corresponding_Remote_Type (Rec)) then
                Freeze_And_Append (Corresponding_Remote_Type (Rec), N, Result);
             end if;
+
+            --  Check for controlled components and unchecked unions.
 
             Comp := First_Component (Rec);
             while Present (Comp) loop
@@ -2459,16 +3145,18 @@ package body Freeze is
                --  equivalent type. See Make_CW_Equivalent_Type.
 
                if not Is_Class_Wide_Equivalent_Type (Rec)
-                 and then (Has_Controlled_Component (Etype (Comp))
-                            or else (Chars (Comp) /= Name_uParent
-                                      and then Is_Controlled (Etype (Comp)))
-                            or else (Is_Protected_Type (Etype (Comp))
-                                      and then Present
-                                        (Corresponding_Record_Type
-                                          (Etype (Comp)))
-                                      and then Has_Controlled_Component
-                                        (Corresponding_Record_Type
-                                          (Etype (Comp)))))
+                 and then
+                   (Has_Controlled_Component (Etype (Comp))
+                     or else
+                       (Chars (Comp) /= Name_uParent
+                         and then Is_Controlled (Etype (Comp)))
+                     or else
+                       (Is_Protected_Type (Etype (Comp))
+                         and then
+                           Present (Corresponding_Record_Type (Etype (Comp)))
+                         and then
+                           Has_Controlled_Component
+                             (Corresponding_Record_Type (Etype (Comp)))))
                then
                   Set_Has_Controlled_Component (Rec);
                end if;
@@ -2488,11 +3176,17 @@ package body Freeze is
             end loop;
          end if;
 
+         --  Enforce the restriction that access attributes with a current
+         --  instance prefix can only apply to limited types. This comment
+         --  is floating here, but does not seem to belong here???
+
+         --  Set component alignment if not otherwise already set
+
          Set_Component_Alignment_If_Not_Set (Rec);
 
          --  For first subtypes, check if there are any fixed-point fields with
          --  component clauses, where we must check the size. This is not done
-         --  till the freeze point, since for fixed-point types, we do not know
+         --  till the freeze point since for fixed-point types, we do not know
          --  the size until the type is frozen. Similar processing applies to
          --  bit packed arrays.
 
@@ -2563,6 +3257,10 @@ package body Freeze is
 
            and then not Placed_Component
 
+           --  Or even one component is aliased
+
+           and then not Aliased_Component
+
            --  Must have size clause and all scalar components
 
            and then Has_Size_Clause (Rec)
@@ -2580,7 +3278,7 @@ package body Freeze is
            and then RM_Size (Rec) < Scalar_Component_Total_Esize
 
            --  And the total RM size cannot be greater than the specified size
-           --  since otherwise packing will not get us where we have to be!
+           --  since otherwise packing will not get us where we have to be.
 
            and then RM_Size (Rec) >= Scalar_Component_Total_RM_Size
 
@@ -2590,7 +3288,7 @@ package body Freeze is
            --  general, neither CodePeer not GNATprove care about the
            --  internal representation of objects.
 
-           and then not (CodePeer_Mode or SPARK_Mode)
+           and then not (CodePeer_Mode or GNATprove_Mode)
          then
             --  If implicit packing enabled, do it
 
@@ -2611,6 +3309,53 @@ package body Freeze is
                end;
             end if;
          end if;
+
+         --  All done if not a full record definition
+
+         if Ekind (Rec) /= E_Record_Type then
+            return;
+         end if;
+
+         --  Finally we need to check the variant part to make sure that
+         --  all types within choices are properly frozen as part of the
+         --  freezing of the record type.
+
+         Check_Variant_Part : declare
+            D : constant Node_Id := Declaration_Node (Rec);
+            T : Node_Id;
+            C : Node_Id;
+
+         begin
+            --  Find component list
+
+            C := Empty;
+
+            if Nkind (D) = N_Full_Type_Declaration then
+               T := Type_Definition (D);
+
+               if Nkind (T) = N_Record_Definition then
+                  C := Component_List (T);
+
+               elsif Nkind (T) = N_Derived_Type_Definition
+                 and then Present (Record_Extension_Part (T))
+               then
+                  C := Component_List (Record_Extension_Part (T));
+               end if;
+            end if;
+
+            --  Case of variant part present
+
+            if Present (C) and then Present (Variant_Part (C)) then
+               Freeze_Choices_In_Variant_Part (Variant_Part (C));
+            end if;
+
+            --  Note: we used to call Check_Choices here, but it is too early,
+            --  since predicated subtypes are frozen here, but their freezing
+            --  actions are in Analyze_Freeze_Entity, which has not been called
+            --  yet for entities frozen within this procedure, so we moved that
+            --  call to the Analyze_Freeze_Entity for the record type.
+
+         end Check_Variant_Part;
       end Freeze_Record_Type;
 
    --  Start of processing for Freeze_Entity
@@ -2655,6 +3400,12 @@ package body Freeze is
         and then No (Full_View (Base_Type (E)))
         and then Ada_Version >= Ada_2012
       then
+         return No_List;
+
+      --  Generic types need no freeze node and have no delayed semantic
+      --  checks.
+
+      elsif Is_Generic_Type (E) then
          return No_List;
 
       --  Do not freeze a global entity within an inner scope created during
@@ -2726,14 +3477,15 @@ package body Freeze is
                return No_List;
             end if;
          end;
+
+      elsif Ekind (E) = E_Generic_Package then
+         return Freeze_Generic_Entities (E);
       end if;
 
       --  Add checks to detect proper initialization of scalars that may appear
       --  as subprogram parameters.
 
-      if Is_Subprogram (E)
-        and then Check_Validity_Of_Parameters
-      then
+      if Is_Subprogram (E) and then Check_Validity_Of_Parameters then
          Apply_Parameter_Validity_Checks (E);
       end if;
 
@@ -2813,6 +3565,7 @@ package body Freeze is
 
                      if Is_Incomplete_Type (F_Type)
                        and then Present (Full_View (F_Type))
+                       and then not From_Limited_With (F_Type)
                      then
                         F_Type := Full_View (F_Type);
                         Set_Etype (Formal, F_Type);
@@ -2962,7 +3715,7 @@ package body Freeze is
                         Error_Msg_Qual_Level := 0;
                      end if;
 
-                     if not From_With_Type (F_Type) then
+                     if not From_Limited_With (F_Type) then
                         if Is_Access_Type (F_Type) then
                            F_Type := Designated_Type (F_Type);
                         end if;
@@ -2991,10 +3744,15 @@ package body Freeze is
                      R_Type := Etype (E);
 
                      --  AI05-0151: the return type may have been incomplete
-                     --  at the point of declaration.
+                     --  at the point of declaration. Replace it with the full
+                     --  view, unless the current type is a limited view. In
+                     --  that case the full view is in a different unit, and
+                     --  gigi finds the non-limited view after the other unit
+                     --  is elaborated.
 
                      if Ekind (R_Type) = E_Incomplete_Type
                        and then Present (Full_View (R_Type))
+                       and then not From_Limited_With (R_Type)
                      then
                         R_Type := Full_View (R_Type);
                         Set_Etype (E, R_Type);
@@ -3046,9 +3804,9 @@ package body Freeze is
 
                         elsif (Is_Tagged_Type (R_Type)
                                 or else (Is_Access_Type (R_Type)
-                                           and then
-                                             Is_Tagged_Type
-                                               (Designated_Type (R_Type))))
+                                          and then
+                                            Is_Tagged_Type
+                                              (Designated_Type (R_Type))))
                           and then Convention (E) = Convention_C
                           and then not Has_Warnings_Off (E)
                           and then not Has_Warnings_Off (R_Type)
@@ -3196,6 +3954,24 @@ package body Freeze is
 
                Check_Address_Clause (E);
 
+               --  Reset Is_True_Constant for aliased object. We consider that
+               --  the fact that something is aliased may indicate that some
+               --  funny business is going on, e.g. an aliased object is passed
+               --  by reference to a procedure which captures the address of
+               --  the object, which is later used to assign a new value. Such
+               --  code is highly dubious, but we choose to make it "work" for
+               --  aliased objects.
+
+               --  However, we don't do that for internal entities. We figure
+               --  that if we deliberately set Is_True_Constant for an internal
+               --  entity, e.g. a dispatch table entry, then we mean it.
+
+               if (Is_Aliased (E) or else Is_Aliased (Etype (E)))
+                 and then not Is_Internal_Name (Chars (E))
+               then
+                  Set_Is_True_Constant (E, False);
+               end if;
+
                --  If the object needs any kind of default initialization, an
                --  error must be issued if No_Default_Initialization applies.
                --  The check doesn't apply to imported objects, which are not
@@ -3263,10 +4039,21 @@ package body Freeze is
                --  then the only purpose of the Import pragma is to suppress
                --  implicit initialization.
 
-               if Is_Imported (E)
-                 and then No (Address_Clause (E))
-               then
+               if Is_Imported (E) and then No (Address_Clause (E)) then
                   Set_Is_Public (E);
+               end if;
+
+               --  For source objects that are not Imported and are library
+               --  level, if no linker section pragma was given inherit the
+               --  appropriate linker section from the corresponding type.
+
+               if Comes_From_Source (E)
+                 and then not Is_Imported (E)
+                 and then Is_Library_Level_Entity (E)
+                 and then No (Linker_Section_Pragma (E))
+               then
+                  Set_Linker_Section_Pragma
+                    (E, Linker_Section_Pragma (Etype (E)));
                end if;
 
                --  For convention C objects of an enumeration type, warn if
@@ -3275,7 +4062,7 @@ package body Freeze is
                --  expects 8-bit sizes for these cases.
 
                if (Convention (E) = Convention_C
-                    or else
+                     or else
                    Convention (E) = Convention_CPP)
                  and then Is_Enumeration_Type (Etype (E))
                  and then not Is_Character_Type (Etype (E))
@@ -3302,7 +4089,7 @@ package body Freeze is
             then
                --  Make sure we actually have a pragma, and have not merely
                --  inherited the indication from elsewhere (e.g. an address
-               --  clause, which is not good enough in RM terms!)
+               --  clause, which is not good enough in RM terms).
 
                if Has_Rep_Pragma (E, Name_Atomic)
                     or else
@@ -3332,13 +4119,8 @@ package body Freeze is
 
             --  Remaining step is to layout objects
 
-            if Ekind (E) = E_Variable
-                 or else
-               Ekind (E) = E_Constant
-                 or else
-               Ekind (E) = E_Loop_Parameter
-                 or else
-               Is_Formal (E)
+            if Ekind_In (E, E_Variable, E_Constant, E_Loop_Parameter)
+              or else Is_Formal (E)
             then
                Layout_Object (E);
             end if;
@@ -3349,7 +4131,7 @@ package body Freeze is
             --  enclosing statement sequence.
 
             if Ekind_In (E, E_Constant, E_Variable)
-                 and then not Has_Delayed_Freeze (E)
+              and then not Has_Delayed_Freeze (E)
             then
                declare
                   Init_Stmts : constant Node_Id :=
@@ -3360,12 +4142,20 @@ package body Freeze is
                     and then Nkind (Expression (Init_Stmts)) = N_Null_Statement
                   then
                      Insert_List_Before (Init_Stmts, Actions (Init_Stmts));
-                     Remove (Init_Stmts);
+
+                     --  Note that we rewrite Init_Stmts into a NULL statement,
+                     --  rather than just removing it, because Freeze_All may
+                     --  depend on this particular Node_Id still being present
+                     --  in the enclosing list to signal where to stop
+                     --  freezing.
+
+                     Rewrite (Init_Stmts,
+                       Make_Null_Statement (Sloc (Init_Stmts)));
+
                      Set_Initialization_Statements (E, Empty);
                   end if;
                end;
             end if;
-
          end if;
 
       --  Case of a type or subtype being frozen
@@ -3392,7 +4182,9 @@ package body Freeze is
 
          if Present (Scope (E))
            and then Is_Generic_Unit (Scope (E))
-           and then not Has_Predicates (E)
+           and then
+             (not Has_Predicates (E)
+               and then not Has_Delayed_Freeze (E))
          then
             Check_Compile_Time_Size (E);
             return No_List;
@@ -3404,20 +4196,32 @@ package body Freeze is
 
             --  Before we do anything else, a specialized test for the case of
             --  a size given for an array where the array needs to be packed,
-            --  but was not so the size cannot be honored. This would of course
-            --  be caught by the backend, and indeed we don't catch all cases.
-            --  The point is that we can give a better error message in those
-            --  cases that we do catch with the circuitry here. Also if pragma
-            --  Implicit_Packing is set, this is where the packing occurs.
+            --  but was not so the size cannot be honored. This is the case
+            --  where implicit packing may apply. The reason we do this so
+            --  early is that if we have implicit packing, the layout of the
+            --  base type is affected, so we must do this before we freeze
+            --  the base type.
 
-            --  The reason we do this so early is that the processing in the
-            --  automatic packing case affects the layout of the base type, so
-            --  it must be done before we freeze the base type.
+            --  We could do this processing only if implicit packing is enabled
+            --  since in all other cases, the error would be caught by the back
+            --  end. However, we choose to do the check even if we do not have
+            --  implicit packing enabled, since this allows us to give a more
+            --  useful error message (advising use of pragmas Implicit_Packing
+            --  or Pack).
 
             if Is_Array_Type (E) then
                declare
-                  Lo, Hi : Node_Id;
-                  Ctyp   : constant Entity_Id := Component_Type (E);
+                  Ctyp : constant Entity_Id := Component_Type (E);
+                  Rsiz : constant Uint      := RM_Size (Ctyp);
+                  SZ   : constant Node_Id   := Size_Clause (E);
+                  Btyp : constant Entity_Id := Base_Type (E);
+
+                  Lo   : Node_Id;
+                  Hi   : Node_Id;
+                  Indx : Node_Id;
+
+                  Num_Elmts : Uint;
+                  --  Number of elements in array
 
                begin
                   --  Check enabling conditions. These are straightforward
@@ -3432,86 +4236,89 @@ package body Freeze is
                   --  a chance to freeze the base type (and it is that freeze
                   --  action that causes stuff to be inherited).
 
-                  if Present (Size_Clause (E))
+                  if Has_Size_Clause (E)
                     and then Known_Static_RM_Size (E)
                     and then not Is_Packed (E)
                     and then not Has_Pragma_Pack (E)
-                    and then Number_Dimensions (E) = 1
                     and then not Has_Component_Size_Clause (E)
                     and then Known_Static_RM_Size (Ctyp)
+                    and then RM_Size (Ctyp) < 64
                     and then not Is_Limited_Composite (E)
                     and then not Is_Packed (Root_Type (E))
                     and then not Has_Component_Size_Clause (Root_Type (E))
-                    and then not (CodePeer_Mode or SPARK_Mode)
+                    and then not (CodePeer_Mode or GNATprove_Mode)
                   then
-                     Get_Index_Bounds (First_Index (E), Lo, Hi);
+                     --  Compute number of elements in array
 
-                     if Compile_Time_Known_Value (Lo)
-                       and then Compile_Time_Known_Value (Hi)
-                       and then Known_Static_RM_Size (Ctyp)
-                       and then RM_Size (Ctyp) < 64
+                     Num_Elmts := Uint_1;
+                     Indx := First_Index (E);
+                     while Present (Indx) loop
+                        Get_Index_Bounds (Indx, Lo, Hi);
+
+                        if not (Compile_Time_Known_Value (Lo)
+                                  and then
+                                Compile_Time_Known_Value (Hi))
+                        then
+                           goto No_Implicit_Packing;
+                        end if;
+
+                        Num_Elmts :=
+                          Num_Elmts *
+                            UI_Max (Uint_0,
+                                    Expr_Value (Hi) - Expr_Value (Lo) + 1);
+                        Next_Index (Indx);
+                     end loop;
+
+                     --  What we are looking for here is the situation where
+                     --  the RM_Size given would be exactly right if there was
+                     --  a pragma Pack (resulting in the component size being
+                     --  the same as the RM_Size). Furthermore, the component
+                     --  type size must be an odd size (not a multiple of
+                     --  storage unit). If the component RM size is an exact
+                     --  number of storage units that is a power of two, the
+                     --  array is not packed and has a standard representation.
+
+                     if RM_Size (E) = Num_Elmts * Rsiz
+                       and then Rsiz mod System_Storage_Unit /= 0
                      then
-                        declare
-                           Lov  : constant Uint      := Expr_Value (Lo);
-                           Hiv  : constant Uint      := Expr_Value (Hi);
-                           Len  : constant Uint      := UI_Max
-                                                         (Uint_0,
-                                                          Hiv - Lov + 1);
-                           Rsiz : constant Uint      := RM_Size (Ctyp);
-                           SZ   : constant Node_Id   := Size_Clause (E);
-                           Btyp : constant Entity_Id := Base_Type (E);
+                        --  For implicit packing mode, just set the component
+                        --  size silently.
 
-                        --  What we are looking for here is the situation where
-                        --  the RM_Size given would be exactly right if there
-                        --  was a pragma Pack (resulting in the component size
-                        --  being the same as the RM_Size). Furthermore, the
-                        --  component type size must be an odd size (not a
-                        --  multiple of storage unit). If the component RM size
-                        --  is an exact number of storage units that is a power
-                        --  of two, the array is not packed and has a standard
-                        --  representation.
+                        if Implicit_Packing then
+                           Set_Component_Size       (Btyp, Rsiz);
+                           Set_Is_Bit_Packed_Array  (Btyp);
+                           Set_Is_Packed            (Btyp);
+                           Set_Has_Non_Standard_Rep (Btyp);
 
-                        begin
-                           if RM_Size (E) = Len * Rsiz
-                             and then Rsiz mod System_Storage_Unit /= 0
-                           then
-                              --  For implicit packing mode, just set the
-                              --  component size silently.
+                           --  Otherwise give an error message
 
-                              if Implicit_Packing then
-                                 Set_Component_Size       (Btyp, Rsiz);
-                                 Set_Is_Bit_Packed_Array  (Btyp);
-                                 Set_Is_Packed            (Btyp);
-                                 Set_Has_Non_Standard_Rep (Btyp);
+                        else
+                           Error_Msg_NE
+                             ("size given for& too small", SZ, E);
+                           Error_Msg_N -- CODEFIX
+                             ("\use explicit pragma Pack "
+                              & "or use pragma Implicit_Packing", SZ);
+                        end if;
 
-                              --  Otherwise give an error message
+                     elsif RM_Size (E) = Num_Elmts * Rsiz
+                       and then Implicit_Packing
+                       and then
+                         (Rsiz / System_Storage_Unit = 1
+                            or else
+                          Rsiz / System_Storage_Unit = 2
+                            or else
+                          Rsiz / System_Storage_Unit = 4)
+                     then
+                        --  Not a packed array, but indicate the desired
+                        --  component size, for the back-end.
 
-                              else
-                                 Error_Msg_NE
-                                   ("size given for& too small", SZ, E);
-                                 Error_Msg_N -- CODEFIX
-                                   ("\use explicit pragma Pack "
-                                    & "or use pragma Implicit_Packing", SZ);
-                              end if;
-
-                           elsif RM_Size (E) = Len * Rsiz
-                             and then Implicit_Packing
-                             and then
-                               (Rsiz / System_Storage_Unit = 1
-                                 or else Rsiz / System_Storage_Unit = 2
-                                 or else Rsiz / System_Storage_Unit = 4)
-                           then
-
-                              --  Not a packed array, but indicate the desired
-                              --  component size, for the back-end.
-
-                              Set_Component_Size (Btyp, Rsiz);
-                           end if;
-                        end;
+                        Set_Component_Size (Btyp, Rsiz);
                      end if;
                   end if;
                end;
             end if;
+
+            <<No_Implicit_Packing>>
 
             --  If ancestor subtype present, freeze that first. Note that this
             --  will also get the base type frozen. Need RM reference ???
@@ -3559,506 +4366,10 @@ package body Freeze is
             Inherit_Aspects_At_Freeze_Point (E);
          end if;
 
-         --  For array type, freeze index types and component type first
-         --  before freezing the array (RM 13.14(15)).
+         --  Array type
 
          if Is_Array_Type (E) then
-            declare
-               FS     : constant Entity_Id := First_Subtype (E);
-               Ctyp   : constant Entity_Id := Component_Type (E);
-               Clause : Entity_Id;
-
-               Non_Standard_Enum : Boolean := False;
-               --  Set true if any of the index types is an enumeration type
-               --  with a non-standard representation.
-
-            begin
-               Freeze_And_Append (Ctyp, N, Result);
-
-               Indx := First_Index (E);
-               while Present (Indx) loop
-                  Freeze_And_Append (Etype (Indx), N, Result);
-
-                  if Is_Enumeration_Type (Etype (Indx))
-                    and then Has_Non_Standard_Rep (Etype (Indx))
-                  then
-                     Non_Standard_Enum := True;
-                  end if;
-
-                  Next_Index (Indx);
-               end loop;
-
-               --  Processing that is done only for base types
-
-               if Ekind (E) = E_Array_Type then
-
-                  --  Propagate flags for component type
-
-                  if Is_Controlled (Component_Type (E))
-                    or else Has_Controlled_Component (Ctyp)
-                  then
-                     Set_Has_Controlled_Component (E);
-                  end if;
-
-                  if Has_Unchecked_Union (Component_Type (E)) then
-                     Set_Has_Unchecked_Union (E);
-                  end if;
-
-                  --  If packing was requested or if the component size was set
-                  --  explicitly, then see if bit packing is required. This
-                  --  processing is only done for base types, since all the
-                  --  representation aspects involved are type-related. This
-                  --  is not just an optimization, if we start processing the
-                  --  subtypes, they interfere with the settings on the base
-                  --  type (this is because Is_Packed has a slightly different
-                  --  meaning before and after freezing).
-
-                  declare
-                     Csiz : Uint;
-                     Esiz : Uint;
-
-                  begin
-                     if (Is_Packed (E) or else Has_Pragma_Pack (E))
-                       and then Known_Static_RM_Size (Ctyp)
-                       and then not Has_Component_Size_Clause (E)
-                     then
-                        Csiz := UI_Max (RM_Size (Ctyp), 1);
-
-                     elsif Known_Component_Size (E) then
-                        Csiz := Component_Size (E);
-
-                     elsif not Known_Static_Esize (Ctyp) then
-                        Csiz := Uint_0;
-
-                     else
-                        Esiz := Esize (Ctyp);
-
-                        --  We can set the component size if it is less than
-                        --  16, rounding it up to the next storage unit size.
-
-                        if Esiz <= 8 then
-                           Csiz := Uint_8;
-                        elsif Esiz <= 16 then
-                           Csiz := Uint_16;
-                        else
-                           Csiz := Uint_0;
-                        end if;
-
-                        --  Set component size up to match alignment if it
-                        --  would otherwise be less than the alignment. This
-                        --  deals with cases of types whose alignment exceeds
-                        --  their size (padded types).
-
-                        if Csiz /= 0 then
-                           declare
-                              A : constant Uint := Alignment_In_Bits (Ctyp);
-                           begin
-                              if Csiz < A then
-                                 Csiz := A;
-                              end if;
-                           end;
-                        end if;
-                     end if;
-
-                     --  Case of component size that may result in packing
-
-                     if 1 <= Csiz and then Csiz <= 64 then
-                        declare
-                           Ent         : constant Entity_Id :=
-                                           First_Subtype (E);
-                           Pack_Pragma : constant Node_Id :=
-                                           Get_Rep_Pragma (Ent, Name_Pack);
-                           Comp_Size_C : constant Node_Id :=
-                                           Get_Attribute_Definition_Clause
-                                             (Ent, Attribute_Component_Size);
-                        begin
-                           --  Warn if we have pack and component size so that
-                           --  the pack is ignored.
-
-                           --  Note: here we must check for the presence of a
-                           --  component size before checking for a Pack pragma
-                           --  to deal with the case where the array type is a
-                           --  derived type whose parent is currently private.
-
-                           if Present (Comp_Size_C)
-                             and then Has_Pragma_Pack (Ent)
-                             and then Warn_On_Redundant_Constructs
-                           then
-                              Error_Msg_Sloc := Sloc (Comp_Size_C);
-                              Error_Msg_NE
-                                ("?r?pragma Pack for& ignored!",
-                                 Pack_Pragma, Ent);
-                              Error_Msg_N
-                                ("\?r?explicit component size given#!",
-                                 Pack_Pragma);
-                              Set_Is_Packed (Base_Type (Ent), False);
-                              Set_Is_Bit_Packed_Array (Base_Type (Ent), False);
-                           end if;
-
-                           --  Set component size if not already set by a
-                           --  component size clause.
-
-                           if not Present (Comp_Size_C) then
-                              Set_Component_Size (E, Csiz);
-                           end if;
-
-                           --  Check for base type of 8, 16, 32 bits, where an
-                           --  unsigned subtype has a length one less than the
-                           --  base type (e.g. Natural subtype of Integer).
-
-                           --  In such cases, if a component size was not set
-                           --  explicitly, then generate a warning.
-
-                           if Has_Pragma_Pack (E)
-                             and then not Present (Comp_Size_C)
-                             and then
-                               (Csiz = 7 or else Csiz = 15 or else Csiz = 31)
-                             and then Esize (Base_Type (Ctyp)) = Csiz + 1
-                           then
-                              Error_Msg_Uint_1 := Csiz;
-
-                              if Present (Pack_Pragma) then
-                                 Error_Msg_N
-                                   ("??pragma Pack causes component size "
-                                    & "to be ^!", Pack_Pragma);
-                                 Error_Msg_N
-                                   ("\??use Component_Size to set "
-                                    & "desired value!", Pack_Pragma);
-                              end if;
-                           end if;
-
-                           --  Actual packing is not needed for 8, 16, 32, 64.
-                           --  Also not needed for 24 if alignment is 1.
-
-                           if        Csiz = 8
-                             or else Csiz = 16
-                             or else Csiz = 32
-                             or else Csiz = 64
-                             or else (Csiz = 24 and then Alignment (Ctyp) = 1)
-                           then
-                              --  Here the array was requested to be packed,
-                              --  but the packing request had no effect, so
-                              --  Is_Packed is reset.
-
-                              --  Note: semantically this means that we lose
-                              --  track of the fact that a derived type
-                              --  inherited a pragma Pack that was non-
-                              --  effective, but that seems fine.
-
-                              --  We regard a Pack pragma as a request to set
-                              --  a representation characteristic, and this
-                              --  request may be ignored.
-
-                              Set_Is_Packed           (Base_Type (E), False);
-                              Set_Is_Bit_Packed_Array (Base_Type (E), False);
-
-                              if Known_Static_Esize (Component_Type (E))
-                                and then Esize (Component_Type (E)) = Csiz
-                              then
-                                 Set_Has_Non_Standard_Rep
-                                   (Base_Type (E), False);
-                              end if;
-
-                           --  In all other cases, packing is indeed needed
-
-                           else
-                              Set_Has_Non_Standard_Rep (Base_Type (E), True);
-                              Set_Is_Bit_Packed_Array  (Base_Type (E), True);
-                              Set_Is_Packed            (Base_Type (E), True);
-                           end if;
-                        end;
-                     end if;
-                  end;
-
-                  --  Check for Atomic_Components or Aliased with unsuitable
-                  --  packing or explicit component size clause given.
-
-                  if (Has_Atomic_Components (E)
-                       or else Has_Aliased_Components (E))
-                    and then (Has_Component_Size_Clause (E)
-                               or else Is_Packed (E))
-                  then
-                     Alias_Atomic_Check : declare
-
-                        procedure Complain_CS (T : String);
-                        --  Outputs error messages for incorrect CS clause or
-                        --  pragma Pack for aliased or atomic components (T is
-                        --  "aliased" or "atomic");
-
-                        -----------------
-                        -- Complain_CS --
-                        -----------------
-
-                        procedure Complain_CS (T : String) is
-                        begin
-                           if Has_Component_Size_Clause (E) then
-                              Clause :=
-                                Get_Attribute_Definition_Clause
-                                  (FS, Attribute_Component_Size);
-
-                              if Known_Static_Esize (Ctyp) then
-                                 Error_Msg_N
-                                   ("incorrect component size for "
-                                    & T & " components", Clause);
-                                 Error_Msg_Uint_1 := Esize (Ctyp);
-                                 Error_Msg_N
-                                   ("\only allowed value is^", Clause);
-
-                              else
-                                 Error_Msg_N
-                                   ("component size cannot be given for "
-                                    & T & " components", Clause);
-                              end if;
-
-                           else
-                              Error_Msg_N
-                                ("cannot pack " & T & " components",
-                                 Get_Rep_Pragma (FS, Name_Pack));
-                           end if;
-
-                           return;
-                        end Complain_CS;
-
-                     --  Start of processing for Alias_Atomic_Check
-
-                     begin
-
-                        --  If object size of component type isn't known, we
-                        --  cannot be sure so we defer to the back end.
-
-                        if not Known_Static_Esize (Ctyp) then
-                           null;
-
-                        --  Case where component size has no effect. First
-                        --  check for object size of component type multiple
-                        --  of the storage unit size.
-
-                        elsif Esize (Ctyp) mod System_Storage_Unit = 0
-
-                          --  OK in both packing case and component size case
-                          --  if RM size is known and static and the same as
-                          --  the object size.
-
-                          and then
-                            ((Known_Static_RM_Size (Ctyp)
-                               and then Esize (Ctyp) = RM_Size (Ctyp))
-
-                             --  Or if we have an explicit component size
-                             --  clause and the component size and object size
-                             --  are equal.
-
-                             or else
-                                 (Has_Component_Size_Clause (E)
-                                 and then Component_Size (E) = Esize (Ctyp)))
-                        then
-                           null;
-
-                        elsif Has_Aliased_Components (E)
-                          or else Is_Aliased (Ctyp)
-                        then
-                           Complain_CS ("aliased");
-
-                        elsif Has_Atomic_Components (E)
-                          or else Is_Atomic (Ctyp)
-                        then
-                           Complain_CS ("atomic");
-                        end if;
-                     end Alias_Atomic_Check;
-                  end if;
-
-                  --  Warn for case of atomic type
-
-                  Clause := Get_Rep_Pragma (FS, Name_Atomic);
-
-                  if Present (Clause)
-                    and then not Addressable (Component_Size (FS))
-                  then
-                     Error_Msg_NE
-                       ("non-atomic components of type& may not be "
-                        & "accessible by separate tasks??", Clause, E);
-
-                     if Has_Component_Size_Clause (E) then
-                        Error_Msg_Sloc :=
-                          Sloc
-                            (Get_Attribute_Definition_Clause
-                                 (FS, Attribute_Component_Size));
-                        Error_Msg_N
-                          ("\because of component size clause#??",
-                           Clause);
-
-                     elsif Has_Pragma_Pack (E) then
-                        Error_Msg_Sloc :=
-                          Sloc (Get_Rep_Pragma (FS, Name_Pack));
-                        Error_Msg_N
-                          ("\because of pragma Pack#??", Clause);
-                     end if;
-                  end if;
-
-                  --  Check for scalar storage order
-
-                  if Present (Get_Attribute_Definition_Clause
-                                (E, Attribute_Scalar_Storage_Order))
-                  then
-                     Check_Component_Storage_Order (E, Empty);
-                  end if;
-
-               --  Processing that is done only for subtypes
-
-               else
-                  --  Acquire alignment from base type
-
-                  if Unknown_Alignment (E) then
-                     Set_Alignment (E, Alignment (Base_Type (E)));
-                     Adjust_Esize_Alignment (E);
-                  end if;
-               end if;
-
-               --  Specific checks for bit-packed arrays
-
-               if Is_Bit_Packed_Array (E) then
-
-                  --  Check number of elements for bit packed arrays that come
-                  --  from source and have compile time known ranges. The
-                  --  bit-packed arrays circuitry does not support arrays
-                  --  with more than Integer'Last + 1 elements, and when this
-                  --  restriction is violated, causes incorrect data access.
-
-                  --  For the case where this is not compile time known, a
-                  --  run-time check should be generated???
-
-                  if Comes_From_Source (E) and then Is_Constrained (E) then
-                     declare
-                        Elmts : Uint;
-                        Index : Node_Id;
-                        Ilen  : Node_Id;
-                        Ityp  : Entity_Id;
-
-                     begin
-                        Elmts := Uint_1;
-                        Index := First_Index (E);
-                        while Present (Index) loop
-                           Ityp := Etype (Index);
-
-                           --  Never generate an error if any index is of a
-                           --  generic type. We will check this in instances.
-
-                           if Is_Generic_Type (Ityp) then
-                              Elmts := Uint_0;
-                              exit;
-                           end if;
-
-                           Ilen :=
-                             Make_Attribute_Reference (Loc,
-                               Prefix         =>
-                                 New_Occurrence_Of (Ityp, Loc),
-                               Attribute_Name => Name_Range_Length);
-                           Analyze_And_Resolve (Ilen);
-
-                           --  No attempt is made to check number of elements
-                           --  if not compile time known.
-
-                           if Nkind (Ilen) /= N_Integer_Literal then
-                              Elmts := Uint_0;
-                              exit;
-                           end if;
-
-                           Elmts := Elmts * Intval (Ilen);
-                           Next_Index (Index);
-                        end loop;
-
-                        if Elmts > Intval (High_Bound
-                                             (Scalar_Range
-                                                (Standard_Integer))) + 1
-                        then
-                           Error_Msg_N
-                             ("bit packed array type may not have "
-                              & "more than Integer''Last+1 elements", E);
-                        end if;
-                     end;
-                  end if;
-
-                  --  Check size
-
-                  if Known_RM_Size (E) then
-                     declare
-                        SizC : constant Node_Id := Size_Clause (E);
-
-                        Discard : Boolean;
-                        pragma Warnings (Off, Discard);
-
-                     begin
-                        --  It is not clear if it is possible to have no size
-                        --  clause at this stage, but it is not worth worrying
-                        --  about. Post error on the entity name in the size
-                        --  clause if present, else on the type entity itself.
-
-                        if Present (SizC) then
-                           Check_Size (Name (SizC), E, RM_Size (E), Discard);
-                        else
-                           Check_Size (E, E, RM_Size (E), Discard);
-                        end if;
-                     end;
-                  end if;
-               end if;
-
-               --  If any of the index types was an enumeration type with a
-               --  non-standard rep clause, then we indicate that the array
-               --  type is always packed (even if it is not bit packed).
-
-               if Non_Standard_Enum then
-                  Set_Has_Non_Standard_Rep (Base_Type (E));
-                  Set_Is_Packed            (Base_Type (E));
-               end if;
-
-               Set_Component_Alignment_If_Not_Set (E);
-
-               --  If the array is packed, we must create the packed array
-               --  type to be used to actually implement the type. This is
-               --  only needed for real array types (not for string literal
-               --  types, since they are present only for the front end).
-
-               if Is_Packed (E)
-                 and then Ekind (E) /= E_String_Literal_Subtype
-               then
-                  Create_Packed_Array_Type (E);
-                  Freeze_And_Append (Packed_Array_Type (E), N, Result);
-
-                  --  Size information of packed array type is copied to the
-                  --  array type, since this is really the representation. But
-                  --  do not override explicit existing size values. If the
-                  --  ancestor subtype is constrained the packed_array_type
-                  --  will be inherited from it, but the size may have been
-                  --  provided already, and must not be overridden either.
-
-                  if not Has_Size_Clause (E)
-                    and then
-                      (No (Ancestor_Subtype (E))
-                        or else not Has_Size_Clause (Ancestor_Subtype (E)))
-                  then
-                     Set_Esize     (E, Esize     (Packed_Array_Type (E)));
-                     Set_RM_Size   (E, RM_Size   (Packed_Array_Type (E)));
-                  end if;
-
-                  if not Has_Alignment_Clause (E) then
-                     Set_Alignment (E, Alignment (Packed_Array_Type (E)));
-                  end if;
-               end if;
-
-               --  For non-packed arrays set the alignment of the array to the
-               --  alignment of the component type if it is unknown. Skip this
-               --  in atomic case (atomic arrays may need larger alignments).
-
-               if not Is_Packed (E)
-                 and then Unknown_Alignment (E)
-                 and then Known_Alignment (Ctyp)
-                 and then Known_Static_Component_Size (E)
-                 and then Known_Static_Esize (Ctyp)
-                 and then Esize (Ctyp) = Component_Size (E)
-                 and then not Is_Atomic (E)
-               then
-                  Set_Alignment (E, Alignment (Component_Type (E)));
-               end if;
-            end;
+            Freeze_Array_Type (E);
 
          --  For a class-wide type, the corresponding specific type is
          --  frozen as well (RM 13.14(15))
@@ -4120,7 +4431,9 @@ package body Freeze is
          --  for the case of a private type with record extension (we will do
          --  that later when the full type is frozen).
 
-         elsif Ekind_In (E, E_Record_Type, E_Record_Subtype) then
+         elsif Ekind_In (E, E_Record_Type, E_Record_Subtype)
+           and then not Is_Generic_Unit (Scope (E))
+         then
             Freeze_Record_Type (E);
 
          --  For a concurrent type, freeze corresponding record type. This
@@ -4132,8 +4445,7 @@ package body Freeze is
 
          elsif Is_Concurrent_Type (E) then
             if Present (Corresponding_Record_Type (E)) then
-               Freeze_And_Append
-                 (Corresponding_Record_Type (E), N, Result);
+               Freeze_And_Append (Corresponding_Record_Type (E), N, Result);
             end if;
 
             Comp := First_Entity (E);
@@ -4279,9 +4591,7 @@ package body Freeze is
             --  amendment type, so diagnosis is at the point of use and the
             --  type might be frozen later.
 
-            elsif E /= Base_Type (E)
-              or else Is_Derived_Type (E)
-            then
+            elsif E /= Base_Type (E) or else Is_Derived_Type (E) then
                null;
 
             else
@@ -4424,6 +4734,7 @@ package body Freeze is
             if Is_Pure_Unit_Access_Type (E)
               and then (Ada_Version < Ada_2005
                          or else not No_Pool_Assigned (E))
+              and then not Is_Generic_Unit (Scope (E))
             then
                Error_Msg_N ("named access type not allowed in pure unit", E);
 
@@ -4495,8 +4806,7 @@ package body Freeze is
                --  be an array type, or a nonlimited record type).
 
                if Has_Private_Declaration (E) then
-                  if (not Is_Record_Type (E)
-                       or else not Is_Immutably_Limited_Type (E))
+                  if (not Is_Record_Type (E) or else not Is_Limited_View (E))
                     and then not Is_Private_Type (E)
                   then
                      Error_Msg_Name_1 := Name_Simple_Storage_Pool_Type;
@@ -4527,7 +4837,8 @@ package body Freeze is
                   --  Upon return, Pool_Op_Formal will be updated to the next
                   --  formal, if any.
 
-                  procedure Validate_Simple_Pool_Operation (Op_Name : Name_Id);
+                  procedure Validate_Simple_Pool_Operation
+                    (Op_Name : Name_Id);
                   --  Search for and validate a simple pool operation with the
                   --  name Op_Name. If the name is Allocate, then there must be
                   --  exactly one such primitive operation for the simple pool
@@ -4940,21 +5251,6 @@ package body Freeze is
            and then not Is_Library_Level_Entity (E)
          then
             Set_Is_Public (E, False);
-
-         --  If no address clause and not intrinsic, then for imported
-         --  subprogram in main unit, generate descriptor if we are in
-         --  Propagate_Exceptions mode.
-
-         --  This is very odd code, it makes a null result, why ???
-
-         elsif Propagate_Exceptions
-           and then Is_Imported (E)
-           and then not Is_Intrinsic_Subprogram (E)
-           and then Convention (E) /= Convention_Stubbed
-         then
-            if Result = No_List then
-               Result := Empty_List;
-            end if;
          end if;
       end if;
 
@@ -4977,9 +5273,15 @@ package body Freeze is
         and then not Has_Size_Clause (Typ)
         and then not Has_Size_Clause (Base_Type (Typ))
         and then Esize (Typ) < Standard_Integer_Size
+
+        --  Don't do this if Short_Enums on target
+
+        and then not Target_Short_Enums
       then
          Init_Esize (Typ, Standard_Integer_Size);
          Set_Alignment (Typ, Alignment (Standard_Integer));
+
+      --  Normal Ada case or size clause present or not Long_C_Enums on target
 
       else
          --  If the enumeration type interfaces to C, and it has a size clause
@@ -4994,6 +5296,10 @@ package body Freeze is
            and then Esize (Typ) /= Esize (Standard_Integer)
            and then not Is_Boolean_Type (Typ)
            and then not Is_Character_Type (Typ)
+
+           --  Don't do this if Short_Enums on target
+
+           and then not Target_Short_Enums
          then
             Error_Msg_N
               ("C enum types have the size of a C int??", Size_Clause (Typ));
@@ -5085,7 +5391,7 @@ package body Freeze is
       --  expression, see section "Handling of Default Expressions" in the
       --  spec of package Sem for further details. Note that we have to make
       --  sure that we actually have a real expression (if we have a subtype
-      --  indication, we can't test Is_Static_Expression!) However, we exclude
+      --  indication, we can't test Is_Static_Expression). However, we exclude
       --  the case of the prefix of an attribute of a static scalar subtype
       --  from this early return, because static subtype attributes should
       --  always cause freezing, even in default expressions, but the attribute
@@ -5432,7 +5738,7 @@ package body Freeze is
          end case;
 
          --  We fall through the case if we did not yet find the proper
-         --  place in the free for inserting the freeze node, so climb!
+         --  place in the free for inserting the freeze node, so climb.
 
          P := Parent_P;
       end loop;
@@ -6208,15 +6514,22 @@ package body Freeze is
       end if;
 
       --  Reset the Pure indication on an imported subprogram unless an
-      --  explicit Pure_Function pragma was present. We do this because
-      --  otherwise it is an insidious error to call a non-pure function from
-      --  pure unit and have calls mysteriously optimized away. What happens
-      --  here is that the Import can bypass the normal check to ensure that
-      --  pure units call only pure subprograms.
+      --  explicit Pure_Function pragma was present or the subprogram is an
+      --  intrinsic. We do this because otherwise it is an insidious error
+      --  to call a non-pure function from pure unit and have calls
+      --  mysteriously optimized away. What happens here is that the Import
+      --  can bypass the normal check to ensure that pure units call only pure
+      --  subprograms.
+
+      --  The reason for the intrinsic exception is that in general, intrinsic
+      --  functions (such as shifts) are pure anyway. The only exceptions are
+      --  the intrinsics in GNAT.Source_Info, and that unit is not marked Pure
+      --  in any case, so no problem arises.
 
       if Is_Imported (E)
         and then Is_Pure (E)
         and then not Has_Pragma_Pure_Function (E)
+        and then not Is_Intrinsic_Subprogram (E)
       then
          Set_Is_Pure (E, False);
       end if;
@@ -6224,7 +6537,7 @@ package body Freeze is
       --  For non-foreign convention subprograms, this is where we create
       --  the extra formals (for accessibility level and constrained bit
       --  information). We delay this till the freeze point precisely so
-      --  that we know the convention!
+      --  that we know the convention.
 
       if not Has_Foreign_Convention (E) then
          Create_Extra_Formals (E);
@@ -6481,18 +6794,16 @@ package body Freeze is
             --  directly.
 
             if Nkind (Dcopy) = N_Identifier
-              or else Nkind (Dcopy) = N_Expanded_Name
-              or else Nkind (Dcopy) = N_Integer_Literal
+              or else Nkind_In (Dcopy, N_Expanded_Name,
+                                       N_Integer_Literal,
+                                       N_Character_Literal,
+                                       N_String_Literal)
               or else (Nkind (Dcopy) = N_Real_Literal
                         and then not Vax_Float (Etype (Dcopy)))
-              or else Nkind (Dcopy) = N_Character_Literal
-              or else Nkind (Dcopy) = N_String_Literal
-              or else Known_Null (Dcopy)
               or else (Nkind (Dcopy) = N_Attribute_Reference
-                        and then
-                       Attribute_Name (Dcopy) = Name_Null_Parameter)
+                        and then Attribute_Name (Dcopy) = Name_Null_Parameter)
+              or else Known_Null (Dcopy)
             then
-
                --  If there is no default function, we must still do a full
                --  analyze call on the default value, to ensure that all error
                --  checks are performed, e.g. those associated with static

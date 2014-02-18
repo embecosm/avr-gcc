@@ -1,6 +1,6 @@
 ## Linker script for GNU namespace versioning.
 ##
-## Copyright (C) 2002-2013 Free Software Foundation, Inc.
+## Copyright (C) 2002-2014 Free Software Foundation, Inc.
 ##
 ## This file is part of the libstdc++ version 3 distribution.
 ##
@@ -63,6 +63,7 @@ GLIBCXX_7.0 {
     _ZTVN9__gnu_cxx3__718stdio_sync_filebufI[cw]NSt3__711char_traitsI[cw]EEEE;
 
     # thunk
+    _ZTv0_n12_NS*;
     _ZTv0_n24_NS*;
 
     # typeinfo structure
@@ -234,6 +235,9 @@ CXXABI_2.0 {
 
     __cxa_throw_bad_array_new_length;
     _Z*St20bad_array_new_length*;
+
+    __cxa_throw_bad_array_length;
+    _Z*St16bad_array_length*;
 
     # Default function.
     _ZSt11_Hash_bytesPKv*;

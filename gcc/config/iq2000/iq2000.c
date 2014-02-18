@@ -1,5 +1,5 @@
 /* Subroutines used for code generation on Vitesse IQ2000 processors
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,6 +22,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "calls.h"
+#include "varasm.h"
 #include "rtl.h"
 #include "regs.h"
 #include "hard-reg-set.h"
@@ -1104,8 +1107,8 @@ init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype,
 	  tree ret_type = TREE_TYPE (fntype);
 
 	  fprintf (stderr, ", fntype code = %s, ret code = %s\n",
-		   tree_code_name[(int)TREE_CODE (fntype)],
-		   tree_code_name[(int)TREE_CODE (ret_type)]);
+		   get_tree_code_name (TREE_CODE (fntype)),
+		   get_tree_code_name (TREE_CODE (ret_type)));
 	}
     }
 
@@ -1279,7 +1282,7 @@ iq2000_function_arg (cumulative_args_t cum_v, enum machine_mode mode,
 
       if (! type || TREE_CODE (type) != RECORD_TYPE
 	  || ! named  || ! TYPE_SIZE_UNIT (type)
-	  || ! host_integerp (TYPE_SIZE_UNIT (type), 1))
+	  || ! tree_fits_uhwi_p (TYPE_SIZE_UNIT (type)))
 	ret = gen_rtx_REG (mode, regbase + *arg_words + bias);
       else
 	{
@@ -1289,7 +1292,7 @@ iq2000_function_arg (cumulative_args_t cum_v, enum machine_mode mode,
 	    if (TREE_CODE (field) == FIELD_DECL
 		&& TREE_CODE (TREE_TYPE (field)) == REAL_TYPE
 		&& TYPE_PRECISION (TREE_TYPE (field)) == BITS_PER_WORD
-		&& host_integerp (bit_position (field), 0)
+		&& tree_fits_shwi_p (bit_position (field))
 		&& int_bit_position (field) % BITS_PER_WORD == 0)
 	      break;
 
@@ -1307,7 +1310,7 @@ iq2000_function_arg (cumulative_args_t cum_v, enum machine_mode mode,
 	      /* ??? If this is a packed structure, then the last hunk won't
 		 be 64 bits.  */
 	      chunks
-		= tree_low_cst (TYPE_SIZE_UNIT (type), 1) / UNITS_PER_WORD;
+		= tree_to_uhwi (TYPE_SIZE_UNIT (type)) / UNITS_PER_WORD;
 	      if (chunks + *arg_words + bias > (unsigned) MAX_ARGS_IN_REGISTERS)
 		chunks = MAX_ARGS_IN_REGISTERS - *arg_words - bias;
 

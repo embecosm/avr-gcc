@@ -1,5 +1,5 @@
 /* If-conversion for vectorizer.
-   Copyright (C) 2004-2013 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
    Contributed by Devang Patel <dpatel@apple.com>
 
 This file is part of GCC.
@@ -85,16 +85,37 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "flags.h"
 #include "basic-block.h"
 #include "gimple-pretty-print.h"
-#include "tree-flow.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-fold.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimplify.h"
+#include "gimple-iterator.h"
+#include "gimplify-me.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "ssa-iterators.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "tree-into-ssa.h"
+#include "tree-ssa.h"
 #include "cfgloop.h"
 #include "tree-chrec.h"
 #include "tree-data-ref.h"
 #include "tree-scalar-evolution.h"
+#include "tree-ssa-loop-ivopts.h"
+#include "tree-ssa-address.h"
 #include "tree-pass.h"
 #include "dbgcnt.h"
+#include "expr.h"
+#include "optabs.h"
 
 /* List of basic blocks in if-conversion-suitable order.  */
 static basic_block *ifc_bbs;
@@ -177,39 +198,48 @@ init_bb_predicate (basic_block bb)
   set_bb_predicate (bb, boolean_true_node);
 }
 
-/* Free the predicate of basic block BB.  */
+/* Release the SSA_NAMEs associated with the predicate of basic block BB,
+   but don't actually free it.  */
 
 static inline void
-free_bb_predicate (basic_block bb)
+release_bb_predicate (basic_block bb)
 {
-  gimple_seq stmts;
-
-  if (!bb_has_predicate (bb))
-    return;
-
-  /* Release the SSA_NAMEs created for the gimplification of the
-     predicate.  */
-  stmts = bb_predicate_gimplified_stmts (bb);
+  gimple_seq stmts = bb_predicate_gimplified_stmts (bb);
   if (stmts)
     {
       gimple_stmt_iterator i;
 
       for (i = gsi_start (stmts); !gsi_end_p (i); gsi_next (&i))
-	free_stmt_operands (gsi_stmt (i));
+	free_stmt_operands (cfun, gsi_stmt (i));
+      set_bb_predicate_gimplified_stmts (bb, NULL);
     }
+}
 
+/* Free the predicate of basic block BB.  */
+
+static inline void
+free_bb_predicate (basic_block bb)
+{
+  if (!bb_has_predicate (bb))
+    return;
+
+  release_bb_predicate (bb);
   free (bb->aux);
   bb->aux = NULL;
 }
 
-/* Free the predicate of BB and reinitialize it with the true
-   predicate.  */
+/* Reinitialize predicate of BB with the true predicate.  */
 
 static inline void
 reset_bb_predicate (basic_block bb)
 {
-  free_bb_predicate (bb);
-  init_bb_predicate (bb);
+  if (!bb_has_predicate (bb))
+    init_bb_predicate (bb);
+  else
+    {
+      release_bb_predicate (bb);
+      set_bb_predicate (bb, boolean_true_node);
+    }
 }
 
 /* Returns a new SSA_NAME of type TYPE that is assigned the value of
@@ -365,10 +395,11 @@ fold_build_cond_expr (tree type, tree cond, tree rhs, tree lhs)
   return build3 (COND_EXPR, type, cond, rhs, lhs);
 }
 
-/* Add condition NC to the predicate list of basic block BB.  */
+/* Add condition NC to the predicate list of basic block BB.  LOOP is
+   the loop to be if-converted.  */
 
 static inline void
-add_to_predicate_list (basic_block bb, tree nc)
+add_to_predicate_list (struct loop *loop, basic_block bb, tree nc)
 {
   tree bc, *tp;
 
@@ -376,7 +407,14 @@ add_to_predicate_list (basic_block bb, tree nc)
     return;
 
   if (!is_predicated (bb))
-    bc = nc;
+    {
+      /* If dominance tells us this basic block is always executed, don't
+	 record any predicates for it.  */
+      if (dominated_by_p (CDI_DOMINATORS, loop->latch, bb))
+	return;
+
+      bc = nc;
+    }
   else
     {
       bc = bb_predicate (bb);
@@ -417,7 +455,7 @@ add_to_dst_predicate_list (struct loop *loop, edge e,
     cond = fold_build2 (TRUTH_AND_EXPR, boolean_type_node,
 			prev_cond, cond);
 
-  add_to_predicate_list (e->dest, cond);
+  add_to_predicate_list (loop, e->dest, cond);
 }
 
 /* Return true if one of the successor edges of BB exits LOOP.  */
@@ -447,7 +485,8 @@ bb_with_exit_edge_p (struct loop *loop, basic_block bb)
    - there is a virtual PHI in a BB other than the loop->header.  */
 
 static bool
-if_convertible_phi_p (struct loop *loop, basic_block bb, gimple phi)
+if_convertible_phi_p (struct loop *loop, basic_block bb, gimple phi,
+		      bool any_mask_load_store)
 {
   if (dump_file && (dump_flags & TDF_DETAILS))
     {
@@ -462,7 +501,7 @@ if_convertible_phi_p (struct loop *loop, basic_block bb, gimple phi)
       return false;
     }
 
-  if (flag_tree_loop_if_convert_stores)
+  if (flag_tree_loop_if_convert_stores || any_mask_load_store)
     return true;
 
   /* When the flag_tree_loop_if_convert_stores is not set, check
@@ -678,6 +717,56 @@ ifcvt_could_trap_p (gimple stmt, vec<data_reference_p> refs)
   return gimple_could_trap_p (stmt);
 }
 
+/* Return true if STMT could be converted into a masked load or store
+   (conditional load or store based on a mask computed from bb predicate).  */
+
+static bool
+ifcvt_can_use_mask_load_store (gimple stmt)
+{
+  tree lhs, ref;
+  enum machine_mode mode;
+  basic_block bb = gimple_bb (stmt);
+  bool is_load;
+
+  if (!(flag_tree_loop_vectorize || bb->loop_father->force_vect)
+      || bb->loop_father->dont_vectorize
+      || !gimple_assign_single_p (stmt)
+      || gimple_has_volatile_ops (stmt))
+    return false;
+
+  /* Check whether this is a load or store.  */
+  lhs = gimple_assign_lhs (stmt);
+  if (gimple_store_p (stmt))
+    {
+      if (!is_gimple_val (gimple_assign_rhs1 (stmt)))
+	return false;
+      is_load = false;
+      ref = lhs;
+    }
+  else if (gimple_assign_load_p (stmt))
+    {
+      is_load = true;
+      ref = gimple_assign_rhs1 (stmt);
+    }
+  else
+    return false;
+
+  if (may_be_nonaddressable_p (ref))
+    return false;
+
+  /* Mask should be integer mode of the same size as the load/store
+     mode.  */
+  mode = TYPE_MODE (TREE_TYPE (lhs));
+  if (int_mode_for_mode (mode) == BLKmode
+      || VECTOR_MODE_P (mode))
+    return false;
+
+  if (can_vec_mask_load_store_p (mode, is_load))
+    return true;
+
+  return false;
+}
+
 /* Return true when STMT is if-convertible.
 
    GIMPLE_ASSIGN statement is not if-convertible if,
@@ -687,7 +776,8 @@ ifcvt_could_trap_p (gimple stmt, vec<data_reference_p> refs)
 
 static bool
 if_convertible_gimple_assign_stmt_p (gimple stmt,
-				     vec<data_reference_p> refs)
+				     vec<data_reference_p> refs,
+				     bool *any_mask_load_store)
 {
   tree lhs = gimple_assign_lhs (stmt);
   basic_block bb;
@@ -713,10 +803,21 @@ if_convertible_gimple_assign_stmt_p (gimple stmt,
       return false;
     }
 
+  /* tree-into-ssa.c uses GF_PLF_1, so avoid it, because
+     in between if_convertible_loop_p and combine_blocks
+     we can perform loop versioning.  */
+  gimple_set_plf (stmt, GF_PLF_2, false);
+
   if (flag_tree_loop_if_convert_stores)
     {
       if (ifcvt_could_trap_p (stmt, refs))
 	{
+	  if (ifcvt_can_use_mask_load_store (stmt))
+	    {
+	      gimple_set_plf (stmt, GF_PLF_2, true);
+	      *any_mask_load_store = true;
+	      return true;
+	    }
 	  if (dump_file && (dump_flags & TDF_DETAILS))
 	    fprintf (dump_file, "tree could trap...\n");
 	  return false;
@@ -726,6 +827,12 @@ if_convertible_gimple_assign_stmt_p (gimple stmt,
 
   if (gimple_assign_rhs_could_trap_p (stmt))
     {
+      if (ifcvt_can_use_mask_load_store (stmt))
+	{
+	  gimple_set_plf (stmt, GF_PLF_2, true);
+	  *any_mask_load_store = true;
+	  return true;
+	}
       if (dump_file && (dump_flags & TDF_DETAILS))
 	fprintf (dump_file, "tree could trap...\n");
       return false;
@@ -737,6 +844,12 @@ if_convertible_gimple_assign_stmt_p (gimple stmt,
       && bb != bb->loop_father->header
       && !bb_with_exit_edge_p (bb->loop_father, bb))
     {
+      if (ifcvt_can_use_mask_load_store (stmt))
+	{
+	  gimple_set_plf (stmt, GF_PLF_2, true);
+	  *any_mask_load_store = true;
+	  return true;
+	}
       if (dump_file && (dump_flags & TDF_DETAILS))
 	{
 	  fprintf (dump_file, "LHS is not var\n");
@@ -755,7 +868,8 @@ if_convertible_gimple_assign_stmt_p (gimple stmt,
    - it is a GIMPLE_LABEL or a GIMPLE_COND.  */
 
 static bool
-if_convertible_stmt_p (gimple stmt, vec<data_reference_p> refs)
+if_convertible_stmt_p (gimple stmt, vec<data_reference_p> refs,
+		       bool *any_mask_load_store)
 {
   switch (gimple_code (stmt))
     {
@@ -765,7 +879,8 @@ if_convertible_stmt_p (gimple stmt, vec<data_reference_p> refs)
       return true;
 
     case GIMPLE_ASSIGN:
-      return if_convertible_gimple_assign_stmt_p (stmt, refs);
+      return if_convertible_gimple_assign_stmt_p (stmt, refs,
+						  any_mask_load_store);
 
     case GIMPLE_CALL:
       {
@@ -793,20 +908,6 @@ if_convertible_stmt_p (gimple stmt, vec<data_reference_p> refs)
       return false;
       break;
     }
-
-  return true;
-}
-
-/* Return true when BB post-dominates all its predecessors.  */
-
-static bool
-bb_postdominates_preds (basic_block bb)
-{
-  unsigned i;
-
-  for (i = 0; i < EDGE_COUNT (bb->preds); i++)
-    if (!dominated_by_p (CDI_POST_DOMINATORS, EDGE_PRED (bb, i)->src, bb))
-      return false;
 
   return true;
 }
@@ -868,10 +969,23 @@ if_convertible_bb_p (struct loop *loop, basic_block bb, basic_block exit_bb)
 	return false;
       }
 
-  if (EDGE_COUNT (bb->preds) == 2
-      && bb != loop->header
-      && !bb_postdominates_preds (bb))
-    return false;
+  /* At least one incoming edge has to be non-critical as otherwise edge
+     predicates are not equal to basic-block predicates of the edge
+     source.  */
+  if (EDGE_COUNT (bb->preds) > 1
+      && bb != loop->header)
+    {
+      bool found = false;
+      FOR_EACH_EDGE (e, ei, bb->preds)
+	if (EDGE_COUNT (e->src->succs) == 1)
+	  found = true;
+      if (!found)
+	{
+	  if (dump_file && (dump_flags & TDF_DETAILS))
+	    fprintf (dump_file, "only critical predecessors\n");
+	  return false;
+	}
+    }
 
   return true;
 }
@@ -907,7 +1021,7 @@ get_loop_body_in_if_conv_order (const struct loop *loop)
   unsigned int visited_count = 0;
 
   gcc_assert (loop->num_nodes);
-  gcc_assert (loop->latch != EXIT_BLOCK_PTR);
+  gcc_assert (loop->latch != EXIT_BLOCK_PTR_FOR_FN (cfun));
 
   blocks = XCNEWVEC (basic_block, loop->num_nodes);
   visited = BITMAP_ALLOC (NULL);
@@ -968,7 +1082,7 @@ get_loop_body_in_if_conv_order (const struct loop *loop)
    S1 will be predicated with "x", and
    S2 will be predicated with "!x".  */
 
-static bool
+static void
 predicate_bbs (loop_p loop)
 {
   unsigned int i;
@@ -980,7 +1094,7 @@ predicate_bbs (loop_p loop)
     {
       basic_block bb = ifc_bbs[i];
       tree cond;
-      gimple_stmt_iterator itr;
+      gimple stmt;
 
       /* The loop latch is always executed and has no extra conditions
 	 to be processed: skip it.  */
@@ -991,52 +1105,32 @@ predicate_bbs (loop_p loop)
 	}
 
       cond = bb_predicate (bb);
-
-      for (itr = gsi_start_bb (bb); !gsi_end_p (itr); gsi_next (&itr))
+      stmt = last_stmt (bb);
+      if (stmt && gimple_code (stmt) == GIMPLE_COND)
 	{
-	  gimple stmt = gsi_stmt (itr);
+	  tree c2;
+	  edge true_edge, false_edge;
+	  location_t loc = gimple_location (stmt);
+	  tree c = fold_build2_loc (loc, gimple_cond_code (stmt),
+				    boolean_type_node,
+				    gimple_cond_lhs (stmt),
+				    gimple_cond_rhs (stmt));
 
-	  switch (gimple_code (stmt))
-	    {
-	    case GIMPLE_LABEL:
-	    case GIMPLE_ASSIGN:
-	    case GIMPLE_CALL:
-	    case GIMPLE_DEBUG:
-	      break;
+	  /* Add new condition into destination's predicate list.  */
+	  extract_true_false_edges_from_block (gimple_bb (stmt),
+					       &true_edge, &false_edge);
 
-	    case GIMPLE_COND:
-	      {
-		tree c2;
-		edge true_edge, false_edge;
-		location_t loc = gimple_location (stmt);
-		tree c = fold_build2_loc (loc, gimple_cond_code (stmt),
-					  boolean_type_node,
-					  gimple_cond_lhs (stmt),
-					  gimple_cond_rhs (stmt));
+	  /* If C is true, then TRUE_EDGE is taken.  */
+	  add_to_dst_predicate_list (loop, true_edge, unshare_expr (cond),
+				     unshare_expr (c));
 
-		/* Add new condition into destination's predicate list.  */
-		extract_true_false_edges_from_block (gimple_bb (stmt),
-						     &true_edge, &false_edge);
+	  /* If C is false, then FALSE_EDGE is taken.  */
+	  c2 = build1_loc (loc, TRUTH_NOT_EXPR, boolean_type_node,
+			   unshare_expr (c));
+	  add_to_dst_predicate_list (loop, false_edge,
+				     unshare_expr (cond), c2);
 
-		/* If C is true, then TRUE_EDGE is taken.  */
-		add_to_dst_predicate_list (loop, true_edge,
-					   unshare_expr (cond),
-					   unshare_expr (c));
-
-		/* If C is false, then FALSE_EDGE is taken.  */
-		c2 = build1_loc (loc, TRUTH_NOT_EXPR,
-				 boolean_type_node, unshare_expr (c));
-		add_to_dst_predicate_list (loop, false_edge,
-					   unshare_expr (cond), c2);
-
-		cond = NULL_TREE;
-		break;
-	      }
-
-	    default:
-	      /* Not handled yet in if-conversion.  */
-	      return false;
-	    }
+	  cond = NULL_TREE;
 	}
 
       /* If current bb has only one successor, then consider it as an
@@ -1051,7 +1145,7 @@ predicate_bbs (loop_p loop)
 	  if (cond == NULL_TREE)
 	    cond = boolean_true_node;
 
-	  add_to_predicate_list (bb_n, cond);
+	  add_to_predicate_list (loop, bb_n, cond);
 	}
     }
 
@@ -1059,8 +1153,6 @@ predicate_bbs (loop_p loop)
   reset_bb_predicate (loop->header);
   gcc_assert (bb_predicate_gimplified_stmts (loop->header) == NULL
 	      && bb_predicate_gimplified_stmts (loop->latch) == NULL);
-
-  return true;
 }
 
 /* Return true when LOOP is if-convertible.  This is a helper function
@@ -1071,7 +1163,7 @@ static bool
 if_convertible_loop_p_1 (struct loop *loop,
 			 vec<loop_p> *loop_nest,
 			 vec<data_reference_p> *refs,
-			 vec<ddr_p> *ddrs)
+			 vec<ddr_p> *ddrs, bool *any_mask_load_store)
 {
   bool res;
   unsigned int i;
@@ -1084,7 +1176,6 @@ if_convertible_loop_p_1 (struct loop *loop,
     return false;
 
   calculate_dominance_info (CDI_DOMINATORS);
-  calculate_dominance_info (CDI_POST_DOMINATORS);
 
   /* Allow statements that can be handled during if-conversion.  */
   ifc_bbs = get_loop_body_in_if_conv_order (loop);
@@ -1106,9 +1197,24 @@ if_convertible_loop_p_1 (struct loop *loop,
 	exit_bb = bb;
     }
 
-  res = predicate_bbs (loop);
-  if (!res)
-    return false;
+  for (i = 0; i < loop->num_nodes; i++)
+    {
+      basic_block bb = ifc_bbs[i];
+      gimple_stmt_iterator gsi;
+
+      for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi))
+	switch (gimple_code (gsi_stmt (gsi)))
+	  {
+	  case GIMPLE_LABEL:
+	  case GIMPLE_ASSIGN:
+	  case GIMPLE_CALL:
+	  case GIMPLE_DEBUG:
+	  case GIMPLE_COND:
+	    break;
+	  default:
+	    return false;
+	  }
+    }
 
   if (flag_tree_loop_if_convert_stores)
     {
@@ -1120,6 +1226,7 @@ if_convertible_loop_p_1 (struct loop *loop,
 	  DR_WRITTEN_AT_LEAST_ONCE (dr) = -1;
 	  DR_RW_UNCONDITIONALLY (dr) = -1;
 	}
+      predicate_bbs (loop);
     }
 
   for (i = 0; i < loop->num_nodes; i++)
@@ -1127,15 +1234,29 @@ if_convertible_loop_p_1 (struct loop *loop,
       basic_block bb = ifc_bbs[i];
       gimple_stmt_iterator itr;
 
-      for (itr = gsi_start_phis (bb); !gsi_end_p (itr); gsi_next (&itr))
-	if (!if_convertible_phi_p (loop, bb, gsi_stmt (itr)))
-	  return false;
-
       /* Check the if-convertibility of statements in predicated BBs.  */
-      if (is_predicated (bb))
+      if (!dominated_by_p (CDI_DOMINATORS, loop->latch, bb))
 	for (itr = gsi_start_bb (bb); !gsi_end_p (itr); gsi_next (&itr))
-	  if (!if_convertible_stmt_p (gsi_stmt (itr), *refs))
+	  if (!if_convertible_stmt_p (gsi_stmt (itr), *refs,
+				      any_mask_load_store))
 	    return false;
+    }
+
+  if (flag_tree_loop_if_convert_stores)
+    for (i = 0; i < loop->num_nodes; i++)
+      free_bb_predicate (ifc_bbs[i]);
+
+  /* Checking PHIs needs to be done after stmts, as the fact whether there
+     are any masked loads or stores affects the tests.  */
+  for (i = 0; i < loop->num_nodes; i++)
+    {
+      basic_block bb = ifc_bbs[i];
+      gimple_stmt_iterator itr;
+
+      for (itr = gsi_start_phis (bb); !gsi_end_p (itr); gsi_next (&itr))
+	if (!if_convertible_phi_p (loop, bb, gsi_stmt (itr),
+				   *any_mask_load_store))
+	  return false;
     }
 
   if (dump_file)
@@ -1153,14 +1274,13 @@ if_convertible_loop_p_1 (struct loop *loop,
    - if its basic blocks and phi nodes are if convertible.  */
 
 static bool
-if_convertible_loop_p (struct loop *loop)
+if_convertible_loop_p (struct loop *loop, bool *any_mask_load_store)
 {
   edge e;
   edge_iterator ei;
   bool res = false;
   vec<data_reference_p> refs;
   vec<ddr_p> ddrs;
-  vec<loop_p> loop_nest;
 
   /* Handle only innermost loop.  */
   if (!loop || loop->inner)
@@ -1194,8 +1314,9 @@ if_convertible_loop_p (struct loop *loop)
 
   refs.create (5);
   ddrs.create (25);
-  loop_nest.create (3);
-  res = if_convertible_loop_p_1 (loop, &loop_nest, &refs, &ddrs);
+  auto_vec<loop_p, 3> loop_nest;
+  res = if_convertible_loop_p_1 (loop, &loop_nest, &refs, &ddrs,
+				 any_mask_load_store);
 
   if (flag_tree_loop_if_convert_stores)
     {
@@ -1206,7 +1327,6 @@ if_convertible_loop_p (struct loop *loop)
 	free (dr->aux);
     }
 
-  loop_nest.release ();
   free_data_refs (refs);
   free_dependence_relations (ddrs);
   return res;
@@ -1220,8 +1340,7 @@ if_convertible_loop_p (struct loop *loop)
    if-conversion.  */
 
 static basic_block
-find_phi_replacement_condition (struct loop *loop,
-				basic_block bb, tree *cond,
+find_phi_replacement_condition (basic_block bb, tree *cond,
 				gimple_stmt_iterator *gsi)
 {
   edge first_edge, second_edge;
@@ -1231,34 +1350,10 @@ find_phi_replacement_condition (struct loop *loop,
   first_edge = EDGE_PRED (bb, 0);
   second_edge = EDGE_PRED (bb, 1);
 
-  /* Use condition based on following criteria:
-     1)
-       S1: x = !c ? a : b;
-
-       S2: x = c ? b : a;
-
-       S2 is preferred over S1. Make 'b' first_bb and use its condition.
-
-     2) Do not make loop header first_bb.
-
-     3)
-       S1: x = !(c == d)? a : b;
-
-       S21: t1 = c == d;
-       S22: x = t1 ? b : a;
-
-       S3: x = (c == d) ? b : a;
-
-       S3 is preferred over S1 and S2*, Make 'b' first_bb and use
-       its condition.
-
-     4) If  pred B is dominated by pred A then use pred B's condition.
-        See PR23115.  */
-
-  /* Select condition that is not TRUTH_NOT_EXPR.  */
+  /* Prefer an edge with a not negated predicate.
+     ???  That's a very weak cost model.  */
   tmp_cond = bb_predicate (first_edge->src);
   gcc_assert (tmp_cond);
-
   if (TREE_CODE (tmp_cond) == TRUTH_NOT_EXPR)
     {
       edge tmp_edge;
@@ -1268,11 +1363,9 @@ find_phi_replacement_condition (struct loop *loop,
       second_edge = tmp_edge;
     }
 
-  /* Check if FIRST_BB is loop header or not and make sure that
-     FIRST_BB does not dominate SECOND_BB.  */
-  if (first_edge->src == loop->header
-      || dominated_by_p (CDI_DOMINATORS,
-			 second_edge->src, first_edge->src))
+  /* Check if the edge we take the condition from is not critical.
+     We know that at least one non-critical edge exists.  */
+  if (EDGE_COUNT (first_edge->src->succs) > 1)
     {
       *cond = bb_predicate (second_edge->src);
 
@@ -1347,16 +1440,12 @@ predicate_scalar_phi (gimple phi, tree cond,
 	  arg_1 = gimple_phi_arg_def (phi, 1);
 	}
 
-      gcc_checking_assert (bb == bb->loop_father->header
-			   || bb_postdominates_preds (bb));
-
       /* Build new RHS using selected condition and arguments.  */
       rhs = fold_build_cond_expr (TREE_TYPE (res), unshare_expr (cond),
 				  arg_0, arg_1);
     }
 
   new_stmt = gimple_build_assign (res, rhs);
-  SSA_NAME_DEF_STMT (gimple_phi_result (phi)) = new_stmt;
   gsi_insert_before (gsi, new_stmt, GSI_SAME_STMT);
   update_stmt (new_stmt);
 
@@ -1395,7 +1484,7 @@ predicate_all_scalar_phis (struct loop *loop)
       /* BB has two predecessors.  Using predecessor's aux field, set
 	 appropriate condition for the PHI node replacement.  */
       gsi = gsi_after_labels (bb);
-      true_bb = find_phi_replacement_condition (loop, bb, &cond, &gsi);
+      true_bb = find_phi_replacement_condition (bb, &cond, &gsi);
 
       while (!gsi_end_p (phi_gsi))
 	{
@@ -1413,7 +1502,7 @@ predicate_all_scalar_phis (struct loop *loop)
    gimplification of the predicates.  */
 
 static void
-insert_gimplified_predicates (loop_p loop)
+insert_gimplified_predicates (loop_p loop, bool any_mask_load_store)
 {
   unsigned int i;
 
@@ -1434,7 +1523,8 @@ insert_gimplified_predicates (loop_p loop)
       stmts = bb_predicate_gimplified_stmts (bb);
       if (stmts)
 	{
-	  if (flag_tree_loop_if_convert_stores)
+	  if (flag_tree_loop_if_convert_stores
+	      || any_mask_load_store)
 	    {
 	      /* Insert the predicate of the BB just after the label,
 		 as the if-conversion of memory writes will use this
@@ -1593,9 +1683,49 @@ predicate_mem_writes (loop_p loop)
 	}
 
       for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi))
-	if ((stmt = gsi_stmt (gsi))
-	    && gimple_assign_single_p (stmt)
-	    && gimple_vdef (stmt))
+	if (!gimple_assign_single_p (stmt = gsi_stmt (gsi)))
+	  continue;
+	else if (gimple_plf (stmt, GF_PLF_2))
+	  {
+	    tree lhs = gimple_assign_lhs (stmt);
+	    tree rhs = gimple_assign_rhs1 (stmt);
+	    tree ref, addr, ptr, masktype, mask_op0, mask_op1, mask;
+	    gimple new_stmt;
+	    int bitsize = GET_MODE_BITSIZE (TYPE_MODE (TREE_TYPE (lhs)));
+
+	    masktype = build_nonstandard_integer_type (bitsize, 1);
+	    mask_op0 = build_int_cst (masktype, swap ? 0 : -1);
+	    mask_op1 = build_int_cst (masktype, swap ? -1 : 0);
+	    ref = TREE_CODE (lhs) == SSA_NAME ? rhs : lhs;
+	    mark_addressable (ref);
+	    addr = force_gimple_operand_gsi (&gsi, build_fold_addr_expr (ref),
+					     true, NULL_TREE, true,
+					     GSI_SAME_STMT);
+	    cond = force_gimple_operand_gsi_1 (&gsi, unshare_expr (cond),
+					       is_gimple_condexpr, NULL_TREE,
+					       true, GSI_SAME_STMT);
+	    mask = fold_build_cond_expr (masktype, unshare_expr (cond),
+					 mask_op0, mask_op1);
+	    mask = ifc_temp_var (masktype, mask, &gsi);
+	    ptr = build_int_cst (reference_alias_ptr_type (ref), 0);
+	    /* Copy points-to info if possible.  */
+	    if (TREE_CODE (addr) == SSA_NAME && !SSA_NAME_PTR_INFO (addr))
+	      copy_ref_info (build2 (MEM_REF, TREE_TYPE (ref), addr, ptr),
+			     ref);
+	    if (TREE_CODE (lhs) == SSA_NAME)
+	      {
+		new_stmt
+		  = gimple_build_call_internal (IFN_MASK_LOAD, 3, addr,
+						ptr, mask);
+		gimple_call_set_lhs (new_stmt, lhs);
+	      }
+	    else
+	      new_stmt
+		= gimple_build_call_internal (IFN_MASK_STORE, 4, addr, ptr,
+					      mask, rhs);
+	    gsi_replace (&gsi, new_stmt, true);
+	  }
+	else if (gimple_vdef (stmt))
 	  {
 	    tree lhs = gimple_assign_lhs (stmt);
 	    tree rhs = gimple_assign_rhs1 (stmt);
@@ -1665,7 +1795,7 @@ remove_conditions_and_labels (loop_p loop)
    blocks.  Replace PHI nodes with conditional modify expressions.  */
 
 static void
-combine_blocks (struct loop *loop)
+combine_blocks (struct loop *loop, bool any_mask_load_store)
 {
   basic_block bb, exit_bb, merge_target_bb;
   unsigned int orig_loop_num_nodes = loop->num_nodes;
@@ -1673,11 +1803,12 @@ combine_blocks (struct loop *loop)
   edge e;
   edge_iterator ei;
 
+  predicate_bbs (loop);
   remove_conditions_and_labels (loop);
-  insert_gimplified_predicates (loop);
+  insert_gimplified_predicates (loop, any_mask_load_store);
   predicate_all_scalar_phis (loop);
 
-  if (flag_tree_loop_if_convert_stores)
+  if (flag_tree_loop_if_convert_stores || any_mask_load_store)
     predicate_mem_writes (loop);
 
   /* Merge basic blocks: first remove all the edges in the loop,
@@ -1765,33 +1896,78 @@ combine_blocks (struct loop *loop)
 
   free (ifc_bbs);
   ifc_bbs = NULL;
+}
 
-  /* Post-dominators are corrupt now.  */
-  free_dominance_info (CDI_POST_DOMINATORS);
+/* Version LOOP before if-converting it, the original loop
+   will be then if-converted, the new copy of the loop will not,
+   and the LOOP_VECTORIZED internal call will be guarding which
+   loop to execute.  The vectorizer pass will fold this
+   internal call into either true or false.  */
+
+static bool
+version_loop_for_if_conversion (struct loop *loop)
+{
+  basic_block cond_bb;
+  tree cond = make_ssa_name (boolean_type_node, NULL);
+  struct loop *new_loop;
+  gimple g;
+  gimple_stmt_iterator gsi;
+
+  g = gimple_build_call_internal (IFN_LOOP_VECTORIZED, 2,
+				  build_int_cst (integer_type_node, loop->num),
+				  integer_zero_node);
+  gimple_call_set_lhs (g, cond);
+
+  initialize_original_copy_tables ();
+  new_loop = loop_version (loop, cond, &cond_bb,
+			   REG_BR_PROB_BASE, REG_BR_PROB_BASE,
+			   REG_BR_PROB_BASE, true);
+  free_original_copy_tables ();
+  if (new_loop == NULL)
+    return false;
+  new_loop->dont_vectorize = true;
+  new_loop->force_vect = false;
+  gsi = gsi_last_bb (cond_bb);
+  gimple_call_set_arg (g, 1, build_int_cst (integer_type_node, new_loop->num));
+  gsi_insert_before (&gsi, g, GSI_SAME_STMT);
+  update_ssa (TODO_update_ssa);
+  return true;
 }
 
 /* If-convert LOOP when it is legal.  For the moment this pass has no
-   profitability analysis.  Returns true when something changed.  */
+   profitability analysis.  Returns non-zero todo flags when something
+   changed.  */
 
-static bool
+static unsigned int
 tree_if_conversion (struct loop *loop)
 {
-  bool changed = false;
+  unsigned int todo = 0;
   ifc_bbs = NULL;
+  bool any_mask_load_store = false;
 
-  if (!if_convertible_loop_p (loop)
+  if (!if_convertible_loop_p (loop, &any_mask_load_store)
       || !dbg_cnt (if_conversion_tree))
+    goto cleanup;
+
+  if (any_mask_load_store
+      && ((!flag_tree_loop_vectorize && !loop->force_vect)
+	  || loop->dont_vectorize))
+    goto cleanup;
+
+  if (any_mask_load_store && !version_loop_for_if_conversion (loop))
     goto cleanup;
 
   /* Now all statements are if-convertible.  Combine all the basic
      blocks into one huge basic block doing the if-conversion
      on-the-fly.  */
-  combine_blocks (loop);
+  combine_blocks (loop, any_mask_load_store);
 
-  if (flag_tree_loop_if_convert_stores)
-    mark_virtual_operands_for_renaming (cfun);
-
-  changed = true;
+  todo |= TODO_cleanup_cfg;
+  if (flag_tree_loop_if_convert_stores || any_mask_load_store)
+    {
+      mark_virtual_operands_for_renaming (cfun);
+      todo |= TODO_update_ssa_only_virtuals;
+    }
 
  cleanup:
   if (ifc_bbs)
@@ -1805,7 +1981,7 @@ tree_if_conversion (struct loop *loop)
       ifc_bbs = NULL;
     }
 
-  return changed;
+  return todo;
 }
 
 /* Tree if-conversion pass management.  */
@@ -1813,29 +1989,23 @@ tree_if_conversion (struct loop *loop)
 static unsigned int
 main_tree_if_conversion (void)
 {
-  loop_iterator li;
   struct loop *loop;
-  bool changed = false;
   unsigned todo = 0;
 
   if (number_of_loops (cfun) <= 1)
     return 0;
 
-  FOR_EACH_LOOP (li, loop, 0)
-    changed |= tree_if_conversion (loop);
-
-  if (changed)
-    todo |= TODO_cleanup_cfg;
-
-  if (changed && flag_tree_loop_if_convert_stores)
-    todo |= TODO_update_ssa_only_virtuals;
-
-  free_dominance_info (CDI_POST_DOMINATORS);
+  FOR_EACH_LOOP (loop, 0)
+    if (flag_tree_loop_if_convert == 1
+	|| flag_tree_loop_if_convert_stores == 1
+	|| ((flag_tree_loop_vectorize || loop->force_vect)
+	    && !loop->dont_vectorize))
+      todo |= tree_if_conversion (loop);
 
 #ifdef ENABLE_CHECKING
   {
     basic_block bb;
-    FOR_EACH_BB (bb)
+    FOR_EACH_BB_FN (bb, cfun)
       gcc_assert (!bb->aux);
   }
 #endif
@@ -1848,28 +2018,47 @@ main_tree_if_conversion (void)
 static bool
 gate_tree_if_conversion (void)
 {
-  return ((flag_tree_vectorize && flag_tree_loop_if_convert != 0)
+  return (((flag_tree_loop_vectorize || cfun->has_force_vect_loops)
+	   && flag_tree_loop_if_convert != 0)
 	  || flag_tree_loop_if_convert == 1
 	  || flag_tree_loop_if_convert_stores == 1);
 }
 
-struct gimple_opt_pass pass_if_conversion =
+namespace {
+
+const pass_data pass_data_if_conversion =
 {
- {
-  GIMPLE_PASS,
-  "ifcvt",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_tree_if_conversion,		/* gate */
-  main_tree_if_conversion,		/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_NONE,				/* tv_id */
-  PROP_cfg | PROP_ssa,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_verify_stmts | TODO_verify_flow
-                                        /* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "ifcvt", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_verify_stmts | TODO_verify_flow
+    | TODO_verify_ssa ), /* todo_flags_finish */
 };
+
+class pass_if_conversion : public gimple_opt_pass
+{
+public:
+  pass_if_conversion (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_if_conversion, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_tree_if_conversion (); }
+  unsigned int execute () { return main_tree_if_conversion (); }
+
+}; // class pass_if_conversion
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_if_conversion (gcc::context *ctxt)
+{
+  return new pass_if_conversion (ctxt);
+}

@@ -233,6 +233,10 @@ package body Ada.Containers.Formal_Hashed_Sets is
       Cu     : Cursor;
 
    begin
+      if 0 < Capacity and then Capacity < Source.Capacity then
+         raise Capacity_Error;
+      end if;
+
       Target.Length := Source.Length;
       Target.Free := Source.Free;
 
@@ -687,7 +691,6 @@ package body Ada.Containers.Formal_Hashed_Sets is
       Insert (Container, New_Item, Position, Inserted);
 
       if not Inserted then
-
          Container.Nodes (Position.Node).Element := New_Item;
       end if;
    end Include;

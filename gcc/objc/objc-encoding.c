@@ -1,5 +1,5 @@
 /* Routines dealing with ObjC encoding of types
-   Copyright (C) 1992-2013 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -21,6 +21,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "stor-layout.h"
 
 #ifdef OBJCPLUS
 #include "cp/cp-tree.h"
@@ -632,7 +634,7 @@ encode_type (tree type, int curtype, int format)
 	      tree int_type = type;
 	      if (flag_next_runtime)
 		{
-		  /* Another legacy kludge for compatiblity with
+		  /* Another legacy kludge for compatibility with
 		     gcc-3.3: 32-bit longs are encoded as 'l' or 'L',
 		     but not always.  For typedefs, we need to use 'i'
 		     or 'I' instead if encoding a struct field, or a
@@ -820,7 +822,7 @@ encode_field (tree field_decl, int curtype, int format)
      between GNU and NeXT runtimes.  */
   if (DECL_BIT_FIELD_TYPE (field_decl))
     {
-      int size = tree_low_cst (DECL_SIZE (field_decl), 1);
+      int size = tree_to_uhwi (DECL_SIZE (field_decl));
 
       if (flag_next_runtime)
 	encode_next_bitfield (size);

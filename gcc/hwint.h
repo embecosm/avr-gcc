@@ -1,5 +1,5 @@
 /* HOST_WIDE_INT definitions for the GNU compiler.
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -37,7 +37,7 @@
 # if GCC_VERSION >= 3000
 #  define HAVE_LONG_LONG 1
 #  define SIZEOF_LONG_LONG 8
-extern char sizeof_long_long_must_be_8[sizeof(long long) == 8 ? 1 : -1];
+extern char sizeof_long_long_must_be_8[sizeof (long long) == 8 ? 1 : -1];
 # endif
 #endif
 
@@ -110,7 +110,11 @@ extern char sizeof_long_long_must_be_8[sizeof(long long) == 8 ? 1 : -1];
 #endif
 
 
-#define HOST_WIDE_INT_1 HOST_WIDE_INT_C(1)
+#define HOST_WIDE_INT_UC(X) HOST_WIDE_INT_C (X ## U)
+#define HOST_WIDE_INT_1 HOST_WIDE_INT_C (1)
+#define HOST_WIDE_INT_1U HOST_WIDE_INT_UC (1)
+#define HOST_WIDE_INT_M1 HOST_WIDE_INT_C (-1)
+#define HOST_WIDE_INT_M1U HOST_WIDE_INT_UC (-1)
 
 /* This is a magic identifier which allows GCC to figure out the type
    of HOST_WIDE_INT for %wd specifier checks.  You must issue this
@@ -164,7 +168,7 @@ typedef HOST_WIDE_INT __gcc_host_wide_int__;
 # define HOST_WIDEST_INT_PRINT_UNSIGNED	      HOST_WIDE_INT_PRINT_UNSIGNED
 # define HOST_WIDEST_INT_PRINT_HEX	      HOST_WIDE_INT_PRINT_HEX
 # define HOST_WIDEST_INT_PRINT_DOUBLE_HEX     HOST_WIDE_INT_PRINT_DOUBLE_HEX
-# define HOST_WIDEST_INT_C(X)		      HOST_WIDE_INT(X)
+# define HOST_WIDEST_INT_C(X)		      HOST_WIDE_INT (X)
 #else
 # if HOST_BITS_PER_LONGLONG >= 64
 #  define HOST_BITS_PER_WIDEST_INT	      HOST_BITS_PER_LONGLONG
@@ -318,9 +322,6 @@ extern HOST_WIDE_INT least_common_multiple (HOST_WIDE_INT, HOST_WIDE_INT);
 
 /* Sign extend SRC starting from PREC.  */
 
-#ifdef ENABLE_CHECKING
-extern HOST_WIDE_INT sext_hwi (HOST_WIDE_INT, unsigned int);
-#else
 static inline HOST_WIDE_INT
 sext_hwi (HOST_WIDE_INT src, unsigned int prec)
 {
@@ -328,24 +329,23 @@ sext_hwi (HOST_WIDE_INT src, unsigned int prec)
     return src;
   else
     {
+      gcc_checking_assert (prec < HOST_BITS_PER_WIDE_INT);
       int shift = HOST_BITS_PER_WIDE_INT - prec;
       return (src << shift) >> shift;
     }
 }
-#endif
 
 /* Zero extend SRC starting from PREC.  */
-#ifdef ENABLE_CHECKING
-extern unsigned HOST_WIDE_INT zext_hwi (unsigned HOST_WIDE_INT, unsigned int);
-#else
 static inline unsigned HOST_WIDE_INT
 zext_hwi (unsigned HOST_WIDE_INT src, unsigned int prec)
 {
   if (prec == HOST_BITS_PER_WIDE_INT)
     return src;
   else
-    return src & (((HOST_WIDE_INT)1 << prec) - 1);
+    {
+      gcc_checking_assert (prec < HOST_BITS_PER_WIDE_INT);
+      return src & (((HOST_WIDE_INT) 1 << prec) - 1);
+    }
 }
-#endif
 
 #endif /* ! GCC_HWINT_H */

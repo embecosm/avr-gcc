@@ -1,5 +1,5 @@
 /* Generic implementation of the UNPACK intrinsic
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>
 
 This file is part of the GNU Fortran runtime library (libgfortran).
@@ -143,6 +143,9 @@ unpack_internal (gfc_array_char *ret, const gfc_array_char *vector,
 
   if (empty)
     return;
+
+  /* This assert makes sure GCC knows we can access *stride[0] later.  */
+  assert (dim > 0);
 
   vstride0 = GFC_DESCRIPTOR_STRIDE_BYTES(vector,0);
   rstride0 = rstride[0];

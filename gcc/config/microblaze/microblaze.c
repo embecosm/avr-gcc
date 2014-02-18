@@ -1,5 +1,5 @@
 /* Subroutines used for code generation on Xilinx MicroBlaze.
-   Copyright (C) 2009-2013 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
    Contributed by Michael Eager <eager@eagercon.com>.
 
@@ -33,6 +33,9 @@
 #include "insn-attr.h"
 #include "recog.h"
 #include "tree.h"
+#include "varasm.h"
+#include "stor-layout.h"
+#include "calls.h"
 #include "function.h"
 #include "expr.h"
 #include "flags.h"
@@ -1609,21 +1612,28 @@ static int
 microblaze_version_to_int (const char *version)
 {
   const char *p, *v;
-  const char *tmpl = "vX.YY.Z";
+  const char *tmpl = "vXX.YY.Z";
   int iver = 0;
 
   p = version;
   v = tmpl;
 
-  while (*v)
+  while (*p)
     {
       if (*v == 'X')
 	{			/* Looking for major  */
-	  if (!(*p >= '0' && *p <= '9'))
-	    return -1;
-	  iver += (int) (*p - '0');
-	  iver *= 10;
-	}
+          if (*p == '.')
+            {
+              *v++;
+            }
+          else
+            {
+	      if (!(*p >= '0' && *p <= '9'))
+	        return -1;
+	      iver += (int) (*p - '0');
+              iver *= 10;
+	     }
+        }
       else if (*v == 'Y')
 	{			/* Looking for minor  */
 	  if (!(*p >= '0' && *p <= '9'))
@@ -2118,6 +2128,7 @@ microblaze_initial_elimination_offset (int from, int to)
    't'  print 't' for EQ, 'f' for NE
    'm'  Print 1<<operand.
    'i'  Print 'i' if MEM operand has immediate value
+   'y'  Print 'y' if MEM operand is single register
    'o'	Print operand address+4
    '?'	Print 'd' if we use a branch with delay slot instead of normal branch.
    'h'  Print high word of const_double (int or float) value as hex
@@ -2287,6 +2298,15 @@ print_operand (FILE * file, rtx op, int letter)
       {
 	rtx op4 = adjust_address (op, GET_MODE (op), 4);
 	output_address (XEXP (op4, 0));
+      }
+    else if (letter == 'y')
+      {
+        rtx mem_reg = XEXP (op, 0);
+        if (GET_CODE (mem_reg) == REG)
+        {
+            register int regnum = REGNO (mem_reg);
+            fprintf (file, "%s", reg_names[regnum]);
+        }
       }
     else
       output_address (XEXP (op, 0));
@@ -2767,6 +2787,9 @@ microblaze_expand_prologue (void)
     }
 
   fsiz = compute_frame_size (get_frame_size ());
+
+  if (flag_stack_usage_info)
+    current_function_static_stack_size = fsiz;
 
   /* If this function is a varargs function, store any registers that
      would normally hold arguments ($5 - $10) on the stack.  */

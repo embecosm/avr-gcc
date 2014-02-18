@@ -1,5 +1,5 @@
 /* RTL reader for GCC.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -380,7 +380,7 @@ apply_iterator_to_string (const char *string)
 static rtx
 copy_rtx_for_iterators (rtx original)
 {
-  const char *format_ptr;
+  const char *format_ptr, *p;
   int i, j;
   rtx x;
 
@@ -397,12 +397,14 @@ copy_rtx_for_iterators (rtx original)
     switch (format_ptr[i])
       {
       case 'T':
-	XTMPL (x, i) = apply_iterator_to_string (XTMPL (x, i));
+	while (XTMPL (x, i) != (p = apply_iterator_to_string (XTMPL (x, i))))
+	  XTMPL (x, i) = p;
 	break;
 
       case 'S':
       case 's':
-	XSTR (x, i) = apply_iterator_to_string (XSTR (x, i));
+	while (XSTR (x, i) != (p = apply_iterator_to_string (XSTR (x, i))))
+	  XSTR (x, i) = p;
 	break;
 
       case 'e':
@@ -801,7 +803,10 @@ validate_const_int (const char *string)
     valid = 0;
   for (; *cp; cp++)
     if (! ISDIGIT (*cp))
-      valid = 0;
+      {
+        valid = 0;
+	break;
+      }
   if (!valid)
     fatal_with_file_and_line ("invalid decimal constant \"%s\"\n", string);
 }
@@ -1126,6 +1131,7 @@ read_rtx_code (const char *code_name)
   /* If we end up with an insn expression then we free this space below.  */
   return_rtx = rtx_alloc (code);
   format_ptr = GET_RTX_FORMAT (code);
+  memset (return_rtx, 0, RTX_CODE_SIZE (code));
   PUT_CODE (return_rtx, code);
 
   if (iterator)
@@ -1149,6 +1155,8 @@ read_rtx_code (const char *code_name)
 	/* 0 means a field for internal use only.
 	   Don't expect it to be present in the input.  */
       case '0':
+	if (code == REG)
+	  ORIGINAL_REGNO (return_rtx) = REGNO (return_rtx);
 	break;
 
       case 'e':

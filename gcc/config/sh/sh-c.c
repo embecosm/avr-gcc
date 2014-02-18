@@ -1,5 +1,5 @@
 /* Pragma handling for GCC for Renesas / SuperH SH.
-   Copyright (C) 1993-2013 Free Software Foundation, Inc.
+   Copyright (C) 1993-2014 Free Software Foundation, Inc.
    Contributed by Joern Rennecke <joern.rennecke@st.com>.
 
 This file is part of GCC.
@@ -23,6 +23,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "attribs.h"
 #include "tm_p.h"
 #include "cpplib.h"
 #include "c-family/c-common.h"

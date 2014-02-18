@@ -1,6 +1,6 @@
 # Rules common to all arm targets
 #
-# Copyright (C) 2004-2013 Free Software Foundation, Inc.
+# Copyright (C) 2004-2014 Free Software Foundation, Inc.
 #
 # This file is part of GCC.
 #
@@ -78,8 +78,13 @@ $(srcdir)/config/arm/arm-tables.opt: $(srcdir)/config/arm/genopt.sh \
 	$(SHELL) $(srcdir)/config/arm/genopt.sh $(srcdir)/config/arm > \
 		$(srcdir)/config/arm/arm-tables.opt
 
-arm.o: $(CONFIG_H) $(SYSTEM_H) coretypes.h $(TM_H) \
-  $(RTL_H) $(TREE_H) $(OBSTACK_H) $(REGS_H) hard-reg-set.h \
+aarch-common.o: $(srcdir)/config/arm/aarch-common.c $(CONFIG_H) $(SYSTEM_H) \
+    coretypes.h $(TM_H) $(TM_P_H) $(RTL_H) $(TREE_H) output.h $(C_COMMON_H)
+	$(COMPILER) -c $(ALL_COMPILERFLAGS) $(ALL_CPPFLAGS) $(INCLUDES) \
+		$(srcdir)/config/arm/aarch-common.c
+
+arm.o: $(srcdir)/config/arm/arm.c $(CONFIG_H) $(SYSTEM_H) coretypes.h $(TM_H) \
+  $(RTL_H) $(TREE_H) $(HASH_TABLE_H) $(OBSTACK_H) $(REGS_H) hard-reg-set.h \
   insn-config.h conditions.h output.h dumpfile.h \
   $(INSN_ATTR_H) $(FLAGS_H) reload.h $(FUNCTION_H) \
   $(EXPR_H) $(OPTABS_H) $(RECOG_H) $(CGRAPH_H) \

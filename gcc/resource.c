@@ -1,5 +1,5 @@
 /* Definitions for computing resource usage of specific insns.
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -147,7 +147,7 @@ find_basic_block (rtx insn, int search_limit)
 
   /* The start of the function.  */
   else if (insn == 0)
-    return ENTRY_BLOCK_PTR->next_bb->index;
+    return ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb->index;
 
   /* See if any of the upcoming CODE_LABELs start a basic block.  If we reach
      anything other than a CODE_LABEL or note, we can't find this code.  */
@@ -240,9 +240,7 @@ mark_referenced_resources (rtx x, struct resources *res,
     case MEM:
       /* If this memory shouldn't change, it really isn't referencing
 	 memory.  */
-      if (MEM_READONLY_P (x))
-	res->unch_memory = 1;
-      else
+      if (! MEM_READONLY_P (x))
 	res->memory = 1;
       res->volatil |= MEM_VOLATILE_P (x);
 
@@ -375,6 +373,16 @@ mark_referenced_resources (rtx x, struct resources *res,
 
     case INSN:
     case JUMP_INSN:
+
+      if (GET_CODE (PATTERN (x)) == COND_EXEC)
+      /* In addition to the usual references, also consider all outputs
+	 as referenced, to compensate for mark_set_resources treating
+	 them as killed.  This is similar to ZERO_EXTRACT / STRICT_LOW_PART
+	 handling, execpt that we got a partial incidence instead of a partial
+	 width.  */
+      mark_set_resources (x, res, 0,
+			  include_delayed_effects
+			  ? MARK_SRC_DEST_CALL : MARK_SRC_DEST);
 
 #ifdef INSN_REFERENCES_ARE_DELAYED
       if (! include_delayed_effects
@@ -740,7 +748,6 @@ mark_set_resources (rtx x, struct resources *res, int in_dest,
       if (in_dest)
 	{
 	  res->memory = 1;
-	  res->unch_memory |= MEM_READONLY_P (x);
 	  res->volatil |= MEM_VOLATILE_P (x);
 	}
 
@@ -896,7 +903,7 @@ mark_target_live_regs (rtx insns, rtx target, struct resources *res)
 
   /* We have to assume memory is needed, but the CC isn't.  */
   res->memory = 1;
-  res->volatil = res->unch_memory = 0;
+  res->volatil = 0;
   res->cc = 0;
 
   /* See if we have computed this value already.  */
@@ -911,7 +918,8 @@ mark_target_live_regs (rtx insns, rtx target, struct resources *res)
 	 information, we can get it from there unless the insn at the
 	 start of the basic block has been deleted.  */
       if (tinfo && tinfo->block != -1
-	  && ! INSN_DELETED_P (BB_HEAD (BASIC_BLOCK (tinfo->block))))
+	  && ! INSN_DELETED_P (BB_HEAD (BASIC_BLOCK_FOR_FN (cfun,
+							    tinfo->block))))
 	b = tinfo->block;
     }
 
@@ -951,7 +959,7 @@ mark_target_live_regs (rtx insns, rtx target, struct resources *res)
      to use the LR problem.  Otherwise, we must assume everything is live.  */
   if (b != -1)
     {
-      regset regs_live = DF_LR_IN (BASIC_BLOCK (b));
+      regset regs_live = DF_LR_IN (BASIC_BLOCK_FOR_FN (cfun, b));
       rtx start_insn, stop_insn;
 
       /* Compute hard regs live at start of block.  */
@@ -959,8 +967,8 @@ mark_target_live_regs (rtx insns, rtx target, struct resources *res)
 
       /* Get starting and ending insn, handling the case where each might
 	 be a SEQUENCE.  */
-      start_insn = (b == ENTRY_BLOCK_PTR->next_bb->index ?
-		    insns : BB_HEAD (BASIC_BLOCK (b)));
+      start_insn = (b == ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb->index ?
+		    insns : BB_HEAD (BASIC_BLOCK_FOR_FN (cfun, b)));
       stop_insn = target;
 
       if (NONJUMP_INSN_P (start_insn)
@@ -997,11 +1005,18 @@ mark_target_live_regs (rtx insns, rtx target, struct resources *res)
 
 	  if (CALL_P (real_insn))
 	    {
-	      /* CALL clobbers all call-used regs that aren't fixed except
-		 sp, ap, and fp.  Do this before setting the result of the
-		 call live.  */
-	      AND_COMPL_HARD_REG_SET (current_live_regs,
-				      regs_invalidated_by_call);
+	      /* Values in call-clobbered registers survive a COND_EXEC CALL
+		 if that is not executed; this matters for resoure use because
+		 they may be used by a complementarily (or more strictly)
+		 predicated instruction, or if the CALL is NORETURN.  */
+	      if (GET_CODE (PATTERN (real_insn)) != COND_EXEC)
+		{
+		  /* CALL clobbers all call-used regs that aren't fixed except
+		     sp, ap, and fp.  Do this before setting the result of the
+		     call live.  */
+		  AND_COMPL_HARD_REG_SET (current_live_regs,
+					  regs_invalidated_by_call);
+		}
 
 	      /* A CALL_INSN sets any global register live, since it may
 		 have been modified by the call.  */
@@ -1145,7 +1160,6 @@ init_resource_info (rtx epilogue_insn)
 
   end_of_function_needs.cc = 0;
   end_of_function_needs.memory = 1;
-  end_of_function_needs.unch_memory = 0;
   CLEAR_HARD_REG_SET (end_of_function_needs.regs);
 
   if (frame_pointer_needed)
@@ -1202,10 +1216,10 @@ init_resource_info (rtx epilogue_insn)
 
   /* Allocate and initialize the tables used by mark_target_live_regs.  */
   target_hash_table = XCNEWVEC (struct target_info *, TARGET_HASH_PRIME);
-  bb_ticks = XCNEWVEC (int, last_basic_block);
+  bb_ticks = XCNEWVEC (int, last_basic_block_for_fn (cfun));
 
   /* Set the BLOCK_FOR_INSN of each label that starts a basic block.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     if (LABEL_P (BB_HEAD (bb)))
       BLOCK_FOR_INSN (BB_HEAD (bb)) = bb;
 }
@@ -1244,7 +1258,7 @@ free_resource_info (void)
       bb_ticks = NULL;
     }
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     if (LABEL_P (BB_HEAD (bb)))
       BLOCK_FOR_INSN (BB_HEAD (bb)) = NULL;
 }

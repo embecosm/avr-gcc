@@ -20,19 +20,17 @@
 
 namespace __tsan {
 
-struct ScopedInSymbolizer {
-  ScopedInSymbolizer() {
-    ThreadState *thr = cur_thread();
-    CHECK(!thr->in_symbolizer);
-    thr->in_symbolizer = true;
-  }
+void EnterSymbolizer() {
+  ThreadState *thr = cur_thread();
+  CHECK(!thr->in_symbolizer);
+  thr->in_symbolizer = true;
+}
 
-  ~ScopedInSymbolizer() {
-    ThreadState *thr = cur_thread();
-    CHECK(thr->in_symbolizer);
-    thr->in_symbolizer = false;
-  }
-};
+void ExitSymbolizer() {
+  ThreadState *thr = cur_thread();
+  CHECK(thr->in_symbolizer);
+  thr->in_symbolizer = false;
+}
 
 ReportStack *NewReportStackEntry(uptr addr) {
   ReportStack *ent = (ReportStack*)internal_alloc(MBlockReportStack,
@@ -40,18 +38,6 @@ ReportStack *NewReportStackEntry(uptr addr) {
   internal_memset(ent, 0, sizeof(*ent));
   ent->pc = addr;
   return ent;
-}
-
-// Strip module path to make output shorter.
-static char *StripModuleName(const char *module) {
-  if (module == 0)
-    return 0;
-  const char *short_module_name = internal_strrchr(module, '/');
-  if (short_module_name)
-    short_module_name += 1;
-  else
-    short_module_name = module;
-  return internal_strdup(short_module_name);
 }
 
 static ReportStack *NewReportStackEntry(const AddressInfo &info) {
@@ -67,16 +53,64 @@ static ReportStack *NewReportStackEntry(const AddressInfo &info) {
   return ent;
 }
 
+
+  ReportStack *next;
+  char *module;
+  uptr offset;
+  uptr pc;
+  char *func;
+  char *file;
+  int line;
+  int col;
+
+
+// Denotes fake PC values that come from JIT/JAVA/etc.
+// For such PC values __tsan_symbolize_external() will be called.
+const uptr kExternalPCBit = 1ULL << 60;
+
+// May be overriden by JIT/JAVA/etc,
+// whatever produces PCs marked with kExternalPCBit.
+extern "C" bool __tsan_symbolize_external(uptr pc,
+                               char *func_buf, uptr func_siz,
+                               char *file_buf, uptr file_siz,
+                               int *line, int *col)
+                               SANITIZER_WEAK_ATTRIBUTE;
+
+bool __tsan_symbolize_external(uptr pc,
+                               char *func_buf, uptr func_siz,
+                               char *file_buf, uptr file_siz,
+                               int *line, int *col) {
+  return false;
+}
+
 ReportStack *SymbolizeCode(uptr addr) {
-  if (!IsSymbolizerAvailable())
+  // Check if PC comes from non-native land.
+  if (addr & kExternalPCBit) {
+    // Declare static to not consume too much stack space.
+    // We symbolize reports in a single thread, so this is fine.
+    static char func_buf[1024];
+    static char file_buf[1024];
+    int line, col;
+    if (!__tsan_symbolize_external(addr, func_buf, sizeof(func_buf),
+                                  file_buf, sizeof(file_buf), &line, &col))
+      return NewReportStackEntry(addr);
+    ReportStack *ent = NewReportStackEntry(addr);
+    ent->module = 0;
+    ent->offset = 0;
+    ent->func = internal_strdup(func_buf);
+    ent->file = internal_strdup(file_buf);
+    ent->line = line;
+    ent->col = col;
+    return ent;
+  }
+  if (!Symbolizer::Get()->IsAvailable())
     return SymbolizeCodeAddr2Line(addr);
-  ScopedInSymbolizer in_symbolizer;
   static const uptr kMaxAddrFrames = 16;
   InternalScopedBuffer<AddressInfo> addr_frames(kMaxAddrFrames);
   for (uptr i = 0; i < kMaxAddrFrames; i++)
     new(&addr_frames[i]) AddressInfo();
-  uptr addr_frames_num = __sanitizer::SymbolizeCode(addr, addr_frames.data(),
-                                                    kMaxAddrFrames);
+  uptr addr_frames_num = Symbolizer::Get()->SymbolizeCode(
+      addr, addr_frames.data(), kMaxAddrFrames);
   if (addr_frames_num == 0)
     return NewReportStackEntry(addr);
   ReportStack *top = 0;
@@ -95,11 +129,10 @@ ReportStack *SymbolizeCode(uptr addr) {
 }
 
 ReportLocation *SymbolizeData(uptr addr) {
-  if (!IsSymbolizerAvailable())
+  if (!Symbolizer::Get()->IsAvailable())
     return 0;
-  ScopedInSymbolizer in_symbolizer;
   DataInfo info;
-  if (!__sanitizer::SymbolizeData(addr, &info))
+  if (!Symbolizer::Get()->SymbolizeData(addr, &info))
     return 0;
   ReportLocation *ent = (ReportLocation*)internal_alloc(MBlockReportStack,
                                                         sizeof(ReportLocation));
@@ -112,6 +145,12 @@ ReportLocation *SymbolizeData(uptr addr) {
   ent->addr = info.start;
   ent->size = info.size;
   return ent;
+}
+
+void SymbolizeFlush() {
+  if (!Symbolizer::Get()->IsAvailable())
+    return;
+  Symbolizer::Get()->Flush();
 }
 
 }  // namespace __tsan

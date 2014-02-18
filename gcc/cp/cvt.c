@@ -1,5 +1,5 @@
 /* Language-level data type conversion for GNU C++.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
    Hacked by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -29,6 +29,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "flags.h"
 #include "cp-tree.h"
 #include "intl.h"
@@ -77,7 +78,7 @@ cp_convert_to_pointer (tree type, tree expr, tsubst_flags_t complain)
   tree intype = TREE_TYPE (expr);
   enum tree_code form;
   tree rval;
-  location_t loc = EXPR_LOC_OR_HERE (expr);
+  location_t loc = EXPR_LOC_OR_LOC (expr, input_location);
 
   if (intype == error_mark_node)
     return error_mark_node;
@@ -203,12 +204,12 @@ cp_convert_to_pointer (tree type, tree expr, tsubst_flags_t complain)
 
   if (null_ptr_cst_p (expr))
     {
-      if (complain & tf_warning)
-	maybe_warn_zero_as_null_pointer_constant (expr, loc);
-
       if (TYPE_PTRMEMFUNC_P (type))
 	return build_ptrmemfunc (TYPE_PTRMEMFUNC_FN_TYPE (type), expr, 0,
 				 /*c_cast_p=*/false, complain);
+
+      if (complain & tf_warning)
+	maybe_warn_zero_as_null_pointer_constant (expr, loc);
 
       /* A NULL pointer-to-data-member is represented by -1, not by
 	 zero.  */
@@ -412,7 +413,7 @@ convert_to_reference (tree reftype, tree expr, int convtype,
   tree rval = NULL_TREE;
   tree rval_as_conversion = NULL_TREE;
   bool can_convert_intype_to_type;
-  location_t loc = EXPR_LOC_OR_HERE (expr);
+  location_t loc = EXPR_LOC_OR_LOC (expr, input_location);
 
   if (TREE_CODE (type) == FUNCTION_TYPE
       && TREE_TYPE (expr) == unknown_type_node)
@@ -428,7 +429,7 @@ convert_to_reference (tree reftype, tree expr, int convtype,
 
   intype = TYPE_MAIN_VARIANT (intype);
 
-  can_convert_intype_to_type = can_convert (type, intype, complain);
+  can_convert_intype_to_type = can_convert_standard (type, intype, complain);
 
   if (!can_convert_intype_to_type
       && (convtype & CONV_IMPLICIT) && MAYBE_CLASS_TYPE_P (intype)
@@ -449,7 +450,8 @@ convert_to_reference (tree reftype, tree expr, int convtype,
 	}
     }
 
-  if (((convtype & CONV_STATIC) && can_convert (intype, type, complain))
+  if (((convtype & CONV_STATIC)
+       && can_convert_standard (intype, type, complain))
       || ((convtype & CONV_IMPLICIT) && can_convert_intype_to_type))
     {
       {
@@ -624,10 +626,22 @@ cp_convert_and_check (tree type, tree expr, tsubst_flags_t complain)
   result = cp_convert (type, expr, complain);
 
   if ((complain & tf_warning)
-      && c_inhibit_evaluation_warnings == 0
-      && !TREE_OVERFLOW_P (expr)
-      && result != error_mark_node)
-    warnings_for_convert_and_check (type, expr, result);
+      && c_inhibit_evaluation_warnings == 0)
+    {
+      tree folded = maybe_constant_value (expr);
+      tree stripped = folded;
+      tree folded_result
+	= folded != expr ? cp_convert (type, folded, complain) : result;
+
+      /* maybe_constant_value wraps an INTEGER_CST with TREE_OVERFLOW in a
+	 NOP_EXPR so that it isn't TREE_CONSTANT anymore.  */
+      STRIP_NOPS (stripped);
+
+      if (!TREE_OVERFLOW_P (stripped)
+	  && folded_result != error_mark_node)
+	warnings_for_convert_and_check (input_location, type, folded,
+					folded_result);
+    }
 
   return result;
 }
@@ -644,7 +658,7 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
   enum tree_code code = TREE_CODE (type);
   const char *invalid_conv_diag;
   tree e1;
-  location_t loc = EXPR_LOC_OR_HERE (expr);
+  location_t loc = EXPR_LOC_OR_LOC (expr, input_location);
 
   if (error_operand_p (e) || type == error_mark_node)
     return error_mark_node;
@@ -740,6 +754,7 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
 	     unspecified.  */
 	  if ((complain & tf_warning)
 	      && TREE_CODE (e) == INTEGER_CST
+	      && ENUM_UNDERLYING_TYPE (type)
 	      && !int_fits_type_p (e, ENUM_UNDERLYING_TYPE (type)))
 	    warning_at (loc, OPT_Wconversion, 
 			"the result of the conversion is unspecified because "
@@ -900,7 +915,7 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
 tree
 convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 {
-  location_t loc = EXPR_LOC_OR_HERE (expr);
+  location_t loc = EXPR_LOC_OR_LOC (expr, input_location);
 
   if (expr == error_mark_node
       || TREE_TYPE (expr) == error_mark_node)
@@ -1390,7 +1405,9 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 			    || code == PREDECREMENT_EXPR
 			    || code == PREINCREMENT_EXPR
 			    || code == POSTDECREMENT_EXPR
-			    || code == POSTINCREMENT_EXPR)))
+			    || code == POSTINCREMENT_EXPR))
+		   || code == VEC_PERM_EXPR
+		   || code == VEC_COND_EXPR)
                   && (complain & tf_warning))
 		warning_at (loc, OPT_Wunused_value, "value computed is not used");
 	    }
@@ -1579,17 +1596,6 @@ build_expr_type_conversion (int desires, tree expr, bool complain)
       if (DECL_NONCONVERTING_P (cand))
 	continue;
 
-      if (TREE_CODE (cand) == TEMPLATE_DECL)
-	{
-	  if (complain)
-	    {
-	      error ("ambiguous default type conversion from %qT",
-		     basetype);
-	      error ("  candidate conversions include %qD", cand);
-	    }
-	  return error_mark_node;
-	}
-
       candidate = non_reference (TREE_TYPE (TREE_TYPE (cand)));
 
       switch (TREE_CODE (candidate))
@@ -1623,11 +1629,23 @@ build_expr_type_conversion (int desires, tree expr, bool complain)
 	  break;
 
 	default:
+	  /* A wildcard could be instantiated to match any desired
+	     type, but we can't deduce the template argument.  */
+	  if (WILDCARD_TYPE_P (candidate))
+	    win = true;
 	  break;
 	}
 
       if (win)
 	{
+	  if (TREE_CODE (cand) == TEMPLATE_DECL)
+	    {
+	      if (complain)
+		error ("default type conversion can't deduce template"
+		       " argument for %qD", cand);
+	      return error_mark_node;
+	    }
+
 	  if (winner)
 	    {
 	      tree winner_type

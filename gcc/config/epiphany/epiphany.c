@@ -1,5 +1,5 @@
 /* Subroutines used for code generation on the EPIPHANY cpu.
-   Copyright (C) 1994-2013 Free Software Foundation, Inc.
+   Copyright (C) 1994-2014 Free Software Foundation, Inc.
    Contributed by Embecosm on behalf of Adapteva, Inc.
 
 This file is part of GCC.
@@ -23,6 +23,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
+#include "varasm.h"
+#include "calls.h"
+#include "stringpool.h"
 #include "rtl.h"
 #include "regs.h"
 #include "hard-reg-set.h"
@@ -45,6 +49,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "ggc.h"
 #include "tm-constrs.h"
 #include "tree-pass.h"	/* for current_pass */
+#include "context.h"
+#include "pass_manager.h"
 
 /* Which cpu we're compiling for.  */
 int epiphany_cpu_type;
@@ -58,6 +64,9 @@ char epiphany_punct_chars[256];
 
 /* The rounding mode that we generally use for floating point.  */
 int epiphany_normal_fp_rounding;
+
+/* The pass instance, for use in epiphany_optimize_mode_switching. */
+static opt_pass *pass_mode_switch_use;
 
 static void epiphany_init_reg_tables (void);
 static int get_epiphany_condition_code (rtx);
@@ -165,22 +174,30 @@ epiphany_init (void)
      pass because of the side offect of epiphany_mode_needed on
      MACHINE_FUNCTION(cfun)->unknown_mode_uses.  But it must run before
      pass_resolve_sw_modes.  */
-  static struct register_pass_info insert_use_info
-    = { &pass_mode_switch_use.pass, "mode_sw",
+  pass_mode_switch_use = make_pass_mode_switch_use (g);
+  struct register_pass_info insert_use_info
+    = { pass_mode_switch_use, "mode_sw",
 	1, PASS_POS_INSERT_AFTER
       };
-  static struct register_pass_info mode_sw2_info
-    = { &pass_mode_switching.pass, "mode_sw",
+  opt_pass *mode_sw2
+    = g->get_passes()->get_pass_mode_switching ()->clone ();
+  struct register_pass_info mode_sw2_info
+    = { mode_sw2, "mode_sw",
 	1, PASS_POS_INSERT_AFTER
       };
-  static struct register_pass_info mode_sw3_info
-    = { &pass_resolve_sw_modes.pass, "mode_sw",
+  opt_pass *mode_sw3 = make_pass_resolve_sw_modes (g);
+  struct register_pass_info mode_sw3_info
+    = { mode_sw3, "mode_sw",
 	1, PASS_POS_INSERT_AFTER
       };
-  static struct register_pass_info mode_sw4_info
-    = { &pass_split_all_insns.pass, "mode_sw",
+  opt_pass *mode_sw4
+    = g->get_passes()->get_pass_split_all_insns ()->clone ();
+  struct register_pass_info mode_sw4_info
+    = { mode_sw4, "mode_sw",
 	1, PASS_POS_INSERT_AFTER
       };
+  static const int num_modes[] = NUM_MODES_FOR_MODE_SWITCHING;
+#define N_ENTITIES ARRAY_SIZE (num_modes)
 
   epiphany_init_reg_tables ();
 
@@ -196,13 +213,17 @@ epiphany_init (void)
   register_pass (&mode_sw3_info);
   register_pass (&insert_use_info);
   register_pass (&mode_sw2_info);
+  /* Verify that NUM_MODES_FOR_MODE_SWITCHING has one value per entity.  */
+  gcc_assert (N_ENTITIES == EPIPHANY_MSW_ENTITY_NUM);
 
 #if 1 /* As long as peep2_rescan is not implemented,
          (see http://gcc.gnu.org/ml/gcc-patches/2011-10/msg02819.html,)
          we need a second peephole2 pass to get reasonable code.  */
   {
-    static struct register_pass_info peep2_2_info
-      = { &pass_peephole2.pass, "peephole2",
+    opt_pass *extra_peephole2
+      = g->get_passes ()->get_pass_peephole2 ()->clone ();
+    struct register_pass_info peep2_2_info
+      = { extra_peephole2, "peephole2",
 	  1, PASS_POS_INSERT_AFTER
 	};
 
@@ -880,6 +901,11 @@ struct epiphany_frame_info
   int      stld_sz;             /* Current load/store data size for offset
 				   adjustment. */
   int      need_fp;             /* value to override "frame_pointer_needed */
+  /* FIRST_SLOT is the slot that is saved first, at the very start of
+     the frame, with a POST_MODIFY to allocate the frame, if the size fits,
+     or at least the parm and register save areas, otherwise.
+     In the case of a large frame, LAST_SLOT is the slot that is saved last,
+     with a POST_MODIFY to allocate the rest of the frame.  */
   int first_slot, last_slot, first_slot_offset, last_slot_offset;
   int first_slot_size;
   int small_threshold;
@@ -1065,7 +1091,10 @@ epiphany_compute_frame_size (int size /* # of var. bytes allocated.  */)
 	 to be a lot of code complexity for little gain.  */
       || (reg_size > 8 && optimize))
     reg_size = EPIPHANY_STACK_ALIGN (reg_size);
-  if (total_size + reg_size <= (unsigned) epiphany_stack_offset
+  if (((total_size + reg_size
+	/* Reserve space for UNKNOWN_REGNUM.  */
+	+ EPIPHANY_STACK_ALIGN (4))
+       <= (unsigned) epiphany_stack_offset)
       && !interrupt_p
       && crtl->is_leaf && !frame_pointer_needed)
     {
@@ -1104,7 +1133,7 @@ epiphany_compute_frame_size (int size /* # of var. bytes allocated.  */)
       if (total_size + reg_size <= (unsigned) epiphany_stack_offset)
 	{
 	  gcc_assert (first_slot < 0);
-	  gcc_assert (reg_size == 0);
+	  gcc_assert (reg_size == 0 || (int) reg_size == epiphany_stack_offset);
 	  last_slot_offset = EPIPHANY_STACK_ALIGN (total_size + reg_size);
 	}
       else
@@ -1665,7 +1694,6 @@ epiphany_expand_prologue (void)
   int interrupt_p;
   enum epiphany_function_type fn_type;
   rtx addr, mem, off, reg;
-  rtx save_config;
 
   if (!current_frame_info.initialized)
     epiphany_compute_frame_size (get_frame_size ());
@@ -1734,18 +1762,28 @@ epiphany_expand_prologue (void)
      register save.  */
   if (current_frame_info.last_slot >= 0)
     {
+      rtx ip, mem2, insn, note;
+
       gcc_assert (current_frame_info.last_slot != GPR_FP
 		  || (!current_frame_info.need_fp
 		      && current_frame_info.first_slot < 0));
       off = GEN_INT (-current_frame_info.last_slot_offset);
       mem = gen_frame_mem (BLKmode,
 			   gen_rtx_PLUS (Pmode, stack_pointer_rtx, off));
-      reg = gen_rtx_REG (Pmode, GPR_IP);
-      frame_move_insn (reg, off);
-      frame_insn (gen_stack_adjust_str
-		   (gen_frame_mem (word_mode, stack_pointer_rtx),
-		    gen_rtx_REG (word_mode, current_frame_info.last_slot),
-		    reg, mem));
+      ip = gen_rtx_REG (Pmode, GPR_IP);
+      frame_move_insn (ip, off);
+      reg = gen_rtx_REG (word_mode, current_frame_info.last_slot),
+      mem2 = gen_frame_mem (word_mode, stack_pointer_rtx),
+      insn = frame_insn (gen_stack_adjust_str (mem2, reg, ip, mem));
+      /* Instruction scheduling can separate the instruction setting IP from
+	 INSN so that dwarf2out_frame_debug_expr becomes confused what the
+	 temporary register is.  Example: _gcov.o  */
+      note = gen_rtx_SET (VOIDmode, stack_pointer_rtx,
+			  gen_rtx_PLUS (Pmode, stack_pointer_rtx, off));
+      note = gen_rtx_PARALLEL (VOIDmode,
+			       gen_rtvec (2, gen_rtx_SET (VOIDmode, mem2, reg),
+					  note));
+      add_reg_note (insn, REG_FRAME_RELATED_EXPR, note);
     }
   /* If there is only one or no register to save, yet we have a large frame,
      use an add.  */
@@ -1762,44 +1800,6 @@ epiphany_expand_prologue (void)
 	  off = reg;
 	}
       frame_insn (gen_stack_adjust_add (off, mem));
-    }
-
-  /* Mode switching uses get_hard_reg_initial_val after
-      emit_initial_value_sets, so we have to fix this up now.  */
-  save_config = has_hard_reg_initial_val (SImode, CONFIG_REGNUM);
-  if (save_config)
-    {
-      if (REG_P (save_config))
-	{
-	  if (REGNO (save_config) >= FIRST_PSEUDO_REGISTER)
-	    gcc_assert (!df_regs_ever_live_p (REGNO (save_config)));
-	  else
-	    frame_move_insn (save_config,
-			     get_hard_reg_initial_reg (save_config));
-	}
-      else
-	{
-	  rtx save_dst = save_config;
-
-	  reg = gen_rtx_REG (SImode, GPR_IP);
-	  gcc_assert (MEM_P (save_dst));
-	  if (!memory_operand (save_dst, SImode))
-	    {
-	      rtx addr = XEXP (save_dst, 0);
-	      rtx reg2 = gen_rtx_REG (SImode, GPR_16);
-
-	      gcc_assert (GET_CODE (addr) == PLUS);
-	      gcc_assert (XEXP (addr, 0) == hard_frame_pointer_rtx
-			  || XEXP (addr, 0) == stack_pointer_rtx);
-	      emit_move_insn (reg2, XEXP (addr, 1));
-	      save_dst
-		= replace_equiv_address (save_dst,
-					 gen_rtx_PLUS (Pmode, XEXP (addr, 0),
-						       reg2));
-	    }
-	  emit_move_insn (reg, get_hard_reg_initial_reg (save_config));
-	  emit_move_insn (save_dst, reg);
-	}
     }
 }
 
@@ -2261,6 +2261,7 @@ epiphany_optimize_mode_switching (int entity)
     {
     case EPIPHANY_MSW_ENTITY_AND:
     case EPIPHANY_MSW_ENTITY_OR:
+    case EPIPHANY_MSW_ENTITY_CONFIG:
       return true;
     case EPIPHANY_MSW_ENTITY_NEAREST:
     case EPIPHANY_MSW_ENTITY_TRUNC:
@@ -2271,7 +2272,7 @@ epiphany_optimize_mode_switching (int entity)
       return (MACHINE_FUNCTION (cfun)->sw_entities_processed
 	      & (1 << EPIPHANY_MSW_ENTITY_ROUND_UNKNOWN)) != 0;
     case EPIPHANY_MSW_ENTITY_FPU_OMNIBUS:
-      return optimize == 0 || current_pass == &pass_mode_switch_use.pass;
+      return optimize == 0 || current_pass == pass_mode_switch_use;
     }
   gcc_unreachable ();
 }
@@ -2279,7 +2280,8 @@ epiphany_optimize_mode_switching (int entity)
 int
 epiphany_mode_priority_to_mode (int entity, unsigned priority)
 {
-  if (entity == EPIPHANY_MSW_ENTITY_AND || entity == EPIPHANY_MSW_ENTITY_OR)
+  if (entity == EPIPHANY_MSW_ENTITY_AND || entity == EPIPHANY_MSW_ENTITY_OR
+      || entity== EPIPHANY_MSW_ENTITY_CONFIG)
     return priority;
   if (priority > 3)
     switch (priority)
@@ -2331,7 +2333,8 @@ epiphany_mode_needed (int entity, rtx insn)
   if (recog_memoized (insn) < 0)
     {
       if (entity == EPIPHANY_MSW_ENTITY_AND
-	  || entity == EPIPHANY_MSW_ENTITY_OR)
+	  || entity == EPIPHANY_MSW_ENTITY_OR
+	  || entity == EPIPHANY_MSW_ENTITY_CONFIG)
 	return 2;
       return FP_MODE_NONE;
     }
@@ -2340,9 +2343,24 @@ epiphany_mode_needed (int entity, rtx insn)
   switch (entity)
   {
   case EPIPHANY_MSW_ENTITY_AND:
-    return mode != FP_MODE_INT ? 1 : 2;
+    return mode != FP_MODE_NONE && mode != FP_MODE_INT ? 1 : 2;
   case EPIPHANY_MSW_ENTITY_OR:
     return mode == FP_MODE_INT ? 1 : 2;
+  case EPIPHANY_MSW_ENTITY_CONFIG:
+    /* We must know/save config before we set it to something else.
+       Where we need the original value, we are fine with having it
+       just unchanged from the function start.
+       Because of the nature of the mode switching optimization,
+       a restore will be dominated by a clobber.  */
+    if (mode != FP_MODE_NONE && mode != FP_MODE_CALLER)
+      return 1;
+    /* A cpecial case are abnormal edges, which are deemed to clobber
+       the mode as well.  We need to pin this effect on a actually
+       dominating insn, and one where the frame can be accessed, too, in
+       case the pseudo used to save CONFIG doesn't get a hard register.  */
+    if (CALL_P (insn) && find_reg_note (insn, REG_EH_REGION, NULL_RTX))
+      return 1;
+    return 2;
   case EPIPHANY_MSW_ENTITY_ROUND_KNOWN:
     if (recog_memoized (insn) == CODE_FOR_set_fp_mode)
       mode = (enum attr_fp_mode) epiphany_mode_after (entity, mode, insn);
@@ -2386,6 +2404,10 @@ epiphany_mode_entry_exit (int entity, bool exit)
       if (exit)
 	return normal_mode == FP_MODE_INT ? 1 : 2;
       return 0;
+    case EPIPHANY_MSW_ENTITY_CONFIG:
+      if (exit)
+	return 2;
+      return normal_mode == FP_MODE_CALLER ? 0 : 1;
     case EPIPHANY_MSW_ENTITY_ROUND_UNKNOWN:
       if (normal_mode == FP_MODE_ROUND_NEAREST
 	  || normal_mode == FP_MODE_ROUND_TRUNC)
@@ -2411,6 +2433,18 @@ epiphany_mode_after (int entity, int last_mode, rtx insn)
       if (CALL_P (insn))
 	return 0;
       return last_mode;
+    }
+  /* If there is an abnormal edge, we don't want the config register to
+     be 'saved' again at the destination.
+     The frame pointer adjustment is inside a PARALLEL because of the
+     flags clobber.  */
+  if (entity == EPIPHANY_MSW_ENTITY_CONFIG && NONJUMP_INSN_P (insn)
+      && GET_CODE (PATTERN (insn)) == PARALLEL
+      && GET_CODE (XVECEXP (PATTERN (insn), 0, 0)) == SET
+      && SET_DEST (XVECEXP (PATTERN (insn), 0, 0)) == frame_pointer_rtx)
+    {
+      gcc_assert (cfun->has_nonlocal_label);
+      return 1;
     }
   if (recog_memoized (insn) < 0)
     return last_mode;
@@ -2465,12 +2499,25 @@ emit_set_fp_mode (int entity, int mode, HARD_REG_SET regs_live ATTRIBUTE_UNUSED)
 	emit_move_insn (MACHINE_FUNCTION (cfun)->or_mask, GEN_INT(0x00080000));
       return;
     }
+  else if (entity == EPIPHANY_MSW_ENTITY_CONFIG)
+    {
+      /* Mode switching optimization is done after emit_initial_value_sets,
+	 so we have to take care of CONFIG_REGNUM here.  */
+      gcc_assert (mode >= 0 && mode <= 2);
+      rtx save = get_hard_reg_initial_val (SImode, CONFIG_REGNUM);
+      if (mode == 1)
+	emit_insn (gen_save_config (save));
+      return;
+    }
   fp_mode = (enum attr_fp_mode) mode;
   src = NULL_RTX;
 
   switch (fp_mode)
     {
       case FP_MODE_CALLER:
+	/* The EPIPHANY_MSW_ENTITY_CONFIG processing must come later
+	   so that the config save gets inserted before the first use.  */
+	gcc_assert (entity > EPIPHANY_MSW_ENTITY_CONFIG);
 	src = get_hard_reg_initial_val (SImode, CONFIG_REGNUM);
 	mask = MACHINE_FUNCTION (cfun)->and_mask;
 	break;
@@ -2714,11 +2761,11 @@ epiphany_special_round_type_align (tree type, unsigned computed,
 	continue;
       offset = bit_position (field);
       size = DECL_SIZE (field);
-      if (!host_integerp (offset, 1) || !host_integerp (size, 1)
-	  || TREE_INT_CST_LOW (offset) >= try_align
-	  || TREE_INT_CST_LOW (size) >= try_align)
+      if (!tree_fits_uhwi_p (offset) || !tree_fits_uhwi_p (size)
+	  || tree_to_uhwi (offset) >= try_align
+	  || tree_to_uhwi (size) >= try_align)
 	return try_align;
-      total = TREE_INT_CST_LOW (offset) + TREE_INT_CST_LOW (size);
+      total = tree_to_uhwi (offset) + tree_to_uhwi (size);
       if (total > max)
 	max = total;
     }
@@ -2741,7 +2788,7 @@ epiphany_adjust_field_align (tree field, unsigned computed)
     {
       tree elmsz = TYPE_SIZE (TREE_TYPE (TREE_TYPE (field)));
 
-      if (!host_integerp (elmsz, 1) || tree_low_cst (elmsz, 1) >= 32)
+      if (!tree_fits_uhwi_p (elmsz) || tree_to_uhwi (elmsz) >= 32)
 	return 64;
     }
   return computed;

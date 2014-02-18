@@ -1,7 +1,7 @@
 /* Language-independent diagnostic subroutines for the GNU Compiler
    Collection that are only for use in the compilers proper and not
    the driver or other programs.
-   Copyright (C) 1999-2013 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -39,7 +39,8 @@ diagnostic_report_current_function (diagnostic_context *context,
 				    diagnostic_info *diagnostic)
 {
   diagnostic_report_current_module (context, diagnostic->location);
-  lang_hooks.print_error_function (context, input_filename, diagnostic);
+  lang_hooks.print_error_function (context, LOCATION_FILE (input_location),
+				   diagnostic);
 }
 
 static void

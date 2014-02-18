@@ -1,5 +1,5 @@
 /* Output dbx-format symbol table information from GNU compiler.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -72,6 +72,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm.h"
 
 #include "tree.h"
+#include "varasm.h"
+#include "stor-layout.h"
 #include "rtl.h"
 #include "flags.h"
 #include "regs.h"
@@ -636,7 +638,7 @@ dbxout_begin_complex_stabs_noforcetext (void)
 #define stabstr_C(chr) obstack_1grow (&stabstr_ob, chr)
 
 /* Add STR, a normal C string, to the string being built.  */
-#define stabstr_S(str) obstack_grow (&stabstr_ob, str, strlen(str))
+#define stabstr_S(str) obstack_grow (&stabstr_ob, str, strlen (str))
 
 /* Add the text of ID, an IDENTIFIER_NODE, to the string being built.  */
 #define stabstr_I(id) obstack_grow (&stabstr_ob, \
@@ -1519,9 +1521,9 @@ dbxout_type_fields (tree type)
 	  /* Omit fields whose position or size are variable or too large to
 	     represent.  */
 	  || (TREE_CODE (tem) == FIELD_DECL
-	      && (! host_integerp (bit_position (tem), 0)
+	      && (! tree_fits_shwi_p (bit_position (tem))
 		  || ! DECL_SIZE (tem)
-		  || ! host_integerp (DECL_SIZE (tem), 1))))
+		  || ! tree_fits_uhwi_p (DECL_SIZE (tem)))))
 	continue;
 
       else if (TREE_CODE (tem) != CONST_DECL)
@@ -1566,7 +1568,7 @@ dbxout_type_fields (tree type)
 	      stabstr_C (',');
 	      stabstr_D (int_bit_position (tem));
 	      stabstr_C (',');
-	      stabstr_D (tree_low_cst (DECL_SIZE (tem), 1));
+	      stabstr_D (tree_to_uhwi (DECL_SIZE (tem)));
 	      stabstr_C (';');
 	    }
 	}
@@ -1610,9 +1612,9 @@ dbxout_type_method_1 (tree decl)
   stabstr_C (c1);
   stabstr_C (c2);
 
-  if (DECL_VINDEX (decl) && host_integerp (DECL_VINDEX (decl), 0))
+  if (DECL_VINDEX (decl) && tree_fits_shwi_p (DECL_VINDEX (decl)))
     {
-      stabstr_D (tree_low_cst (DECL_VINDEX (decl), 0));
+      stabstr_D (tree_to_shwi (DECL_VINDEX (decl)));
       stabstr_C (';');
       dbxout_type (DECL_CONTEXT (decl), 0);
       stabstr_C (';');
@@ -1718,23 +1720,23 @@ dbxout_range_type (tree type, tree low, tree high)
     }
 
   stabstr_C (';');
-  if (low && host_integerp (low, 0))
+  if (low && tree_fits_shwi_p (low))
     {
       if (print_int_cst_bounds_in_octal_p (type, low, high))
         stabstr_O (low);
       else
-        stabstr_D (tree_low_cst (low, 0));
+        stabstr_D (tree_to_shwi (low));
     }
   else
     stabstr_C ('0');
 
   stabstr_C (';');
-  if (high && host_integerp (high, 0))
+  if (high && tree_fits_shwi_p (high))
     {
       if (print_int_cst_bounds_in_octal_p (type, low, high))
         stabstr_O (high);
       else
-        stabstr_D (tree_low_cst (high, 0));
+        stabstr_D (tree_to_shwi (high));
       stabstr_C (';');
     }
   else
@@ -1864,7 +1866,7 @@ dbxout_type (tree type, int full)
 	 Sun dbx crashes if we do.  */
       if (! full || !COMPLETE_TYPE_P (type)
 	  /* No way in DBX fmt to describe a variable size.  */
-	  || ! host_integerp (TYPE_SIZE (type), 1))
+	  || ! tree_fits_uhwi_p (TYPE_SIZE (type)))
 	return;
       break;
     case TYPE_DEFINED:
@@ -1889,7 +1891,7 @@ dbxout_type (tree type, int full)
 	 && !full)
 	|| !COMPLETE_TYPE_P (type)
 	/* No way in DBX fmt to describe a variable size.  */
-	|| ! host_integerp (TYPE_SIZE (type), 1))
+	|| ! tree_fits_uhwi_p (TYPE_SIZE (type)))
       {
 	typevec[TYPE_SYMTAB_ADDRESS (type)].status = TYPE_XREF;
 	return;
@@ -2147,7 +2149,7 @@ dbxout_type (tree type, int full)
 	     && !full)
 	    || !COMPLETE_TYPE_P (type)
 	    /* No way in DBX fmt to describe a variable size.  */
-	    || ! host_integerp (TYPE_SIZE (type), 1))
+	    || ! tree_fits_uhwi_p (TYPE_SIZE (type)))
 	  {
 	    /* If the type is just a cross reference, output one
 	       and mark the type as partially described.
@@ -2210,10 +2212,10 @@ dbxout_type (tree type, int full)
 		     	 offset within the vtable where we must look
 		     	 to find the necessary adjustment.  */
 		      stabstr_D
-			(tree_low_cst (BINFO_VPTR_FIELD (child), 0)
+			(tree_to_shwi (BINFO_VPTR_FIELD (child))
 			 * BITS_PER_UNIT);
 		    else
-		      stabstr_D (tree_low_cst (BINFO_OFFSET (child), 0)
+		      stabstr_D (tree_to_shwi (BINFO_OFFSET (child))
 				       * BITS_PER_UNIT);
 		    stabstr_C (',');
 		    dbxout_type (BINFO_TYPE (child), 0);
@@ -2228,11 +2230,11 @@ dbxout_type (tree type, int full)
 		    stabstr_C (':');
 		    dbxout_type (BINFO_TYPE (child), full);
 		    stabstr_C (',');
-		    stabstr_D (tree_low_cst (BINFO_OFFSET (child), 0)
+		    stabstr_D (tree_to_shwi (BINFO_OFFSET (child))
 				     * BITS_PER_UNIT);
 		    stabstr_C (',');
 		    stabstr_D
-		      (tree_low_cst (TYPE_SIZE (BINFO_TYPE (child)), 0)
+		      (tree_to_shwi (TYPE_SIZE (BINFO_TYPE (child)))
 		       * BITS_PER_UNIT);
 		    stabstr_C (';');
 		  }
@@ -2434,7 +2436,7 @@ dbxout_class_name_qualifiers (tree decl)
   tree context = decl_type_context (decl);
 
   if (context != NULL_TREE
-      && TREE_CODE(context) == RECORD_TYPE
+      && TREE_CODE (context) == RECORD_TYPE
       && TYPE_NAME (context) != 0
       && (TREE_CODE (TYPE_NAME (context)) == IDENTIFIER_NODE
           || (DECL_NAME (TYPE_NAME (context)) != 0)))
@@ -2479,8 +2481,8 @@ dbxout_expand_expr (tree expr)
 	  /* If this is a var that might not be actually output,
 	     return NULL, otherwise stabs might reference an undefined
 	     symbol.  */
-	  struct varpool_node *node = varpool_get_node (expr);
-	  if (!node || !node->analyzed)
+	  varpool_node *node = varpool_get_node (expr);
+	  if (!node || !node->definition)
 	    return NULL;
 	}
       /* FALLTHRU */
@@ -2516,9 +2518,9 @@ dbxout_expand_expr (tree expr)
 	  return NULL;
 	if (offset != NULL)
 	  {
-	    if (!host_integerp (offset, 0))
+	    if (!tree_fits_shwi_p (offset))
 	      return NULL;
-	    x = adjust_address_nv (x, mode, tree_low_cst (offset, 0));
+	    x = adjust_address_nv (x, mode, tree_to_shwi (offset));
 	  }
 	if (bitpos != 0)
 	  x = adjust_address_nv (x, mode, bitpos / BITS_PER_UNIT);
@@ -2796,7 +2798,7 @@ dbxout_symbol (tree decl, int local ATTRIBUTE_UNUSED)
 		/* Do not generate a tag for records of variable size,
 		   since this type can not be properly described in the
 		   DBX format, and it confuses some tools such as objdump.  */
-		&& host_integerp (TYPE_SIZE (type), 1))
+		&& tree_fits_uhwi_p (TYPE_SIZE (type)))
 	      {
 		tree name = TYPE_NAME (type);
 		if (TREE_CODE (name) == TYPE_DECL)
@@ -2912,7 +2914,7 @@ dbxout_symbol (tree decl, int local ATTRIBUTE_UNUSED)
 	 ??? Why do we skip emitting the type and location in this case?  */
       if (TREE_STATIC (decl) && TREE_READONLY (decl)
 	  && DECL_INITIAL (decl) != 0
-	  && host_integerp (DECL_INITIAL (decl), 0)
+	  && tree_fits_shwi_p (DECL_INITIAL (decl))
 	  && ! TREE_ASM_WRITTEN (decl)
 	  && (DECL_FILE_SCOPE_P (decl)
 	      || TREE_CODE (DECL_CONTEXT (decl)) == BLOCK
@@ -2924,7 +2926,7 @@ dbxout_symbol (tree decl, int local ATTRIBUTE_UNUSED)
 	  if (TREE_CODE (TREE_TYPE (decl)) == INTEGER_TYPE
 	      || TREE_CODE (TREE_TYPE (decl)) == ENUMERAL_TYPE)
 	    {
-	      HOST_WIDE_INT ival = TREE_INT_CST_LOW (DECL_INITIAL (decl));
+	      HOST_WIDE_INT ival = tree_to_shwi (DECL_INITIAL (decl));
 
 	      dbxout_begin_complex_stabs ();
 	      dbxout_symbol_name (decl, NULL, 'c');
@@ -3302,8 +3304,8 @@ dbxout_common_check (tree decl, int *value)
      for thread-local symbols.  Can be handled via same mechanism as used
      in dwarf2out.c.  */
   if (TREE_CODE (decl) != VAR_DECL
-      || !TREE_STATIC(decl)
-      || !DECL_HAS_VALUE_EXPR_P(decl)
+      || !TREE_STATIC (decl)
+      || !DECL_HAS_VALUE_EXPR_P (decl)
       || DECL_THREAD_LOCAL_P (decl)
       || !is_fortran ())
     return NULL;
@@ -3337,21 +3339,21 @@ dbxout_common_check (tree decl, int *value)
           if (CONST_INT_P (XEXP (sym_addr, 0)))
             {
               name =
-                targetm.strip_name_encoding(XSTR (XEXP (sym_addr, 1), 0));
+                targetm.strip_name_encoding (XSTR (XEXP (sym_addr, 1), 0));
               *value = INTVAL (XEXP (sym_addr, 0));
               cdecl = SYMBOL_REF_DECL (XEXP (sym_addr, 1));
             }
           else
             {
               name =
-                targetm.strip_name_encoding(XSTR (XEXP (sym_addr, 0), 0));
+                targetm.strip_name_encoding (XSTR (XEXP (sym_addr, 0), 0));
               *value = INTVAL (XEXP (sym_addr, 1));
               cdecl = SYMBOL_REF_DECL (XEXP (sym_addr, 0));
             }
           break;
 
         case SYMBOL_REF:
-          name = targetm.strip_name_encoding(XSTR (sym_addr, 0));
+          name = targetm.strip_name_encoding (XSTR (sym_addr, 0));
           *value = 0;
           cdecl = SYMBOL_REF_DECL (sym_addr);
           break;
@@ -3364,7 +3366,7 @@ dbxout_common_check (tree decl, int *value)
       /* Check area common symbol is offset into.  If this is not public, then
          it is not a symbol in a common block.  It must be a .lcomm symbol, not
          a .comm symbol.  */
-      if (cdecl == NULL || !TREE_PUBLIC(cdecl))
+      if (cdecl == NULL || !TREE_PUBLIC (cdecl))
         name = NULL;
     }
   else

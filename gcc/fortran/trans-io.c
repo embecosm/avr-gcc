@@ -1,5 +1,5 @@
 /* IO Code translation/library interface
-   Copyright (C) 2002-2013 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Paul Brook
 
 This file is part of GCC.
@@ -23,6 +23,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
+#include "stringpool.h"
+#include "stor-layout.h"
 #include "ggc.h"
 #include "diagnostic-core.h"	/* For internal_error.  */
 #include "gfortran.h"
@@ -243,16 +245,16 @@ gfc_trans_io_runtime_check (tree cond, tree var, int error_code,
 
   /* The code to generate the error.  */
   gfc_start_block (&block);
-  
+
   arg1 = gfc_build_addr_expr (NULL_TREE, var);
-  
+
   arg2 = build_int_cst (integer_type_node, error_code),
-  
+
   asprintf (&message, "%s", _(msgid));
   arg3 = gfc_build_addr_expr (pchar_type_node,
 			      gfc_build_localized_cstring_const (message));
   free (message);
-  
+
   tmp = build_call_expr_loc (input_location,
 			 gfor_fndecl_generate_error, 3, arg1, arg2, arg3);
 
@@ -521,7 +523,7 @@ set_parameter_value (stmtblock_t *block, tree var, enum iofield type,
       gfc_trans_io_runtime_check (cond, var, LIBERROR_BAD_UNIT,
 			       "Unit number in I/O statement too small",
 			       &se.pre);
-    
+
       /* UNIT numbers should be less than the max.  */
       val = gfc_conv_mpz_to_tree (gfc_integer_kinds[i].huge, 4);
       cond = fold_build2_loc (input_location, GT_EXPR, boolean_type_node,
@@ -1000,7 +1002,7 @@ gfc_trans_open (gfc_code * code)
   if (p->convert)
     mask |= set_string (&block, &post_block, var, IOPARM_open_convert,
 			p->convert);
-			
+
   if (p->newunit)
     mask |= set_parameter_ref (&block, &post_block, var, IOPARM_open_newunit,
 			       p->newunit);
@@ -1234,7 +1236,7 @@ gfc_trans_inquire (gfc_code * code)
     {
       mask |= set_parameter_ref (&block, &post_block, var, IOPARM_inquire_exist,
 				 p->exist);
-    
+
       if (p->unit && !p->iostat)
 	{
 	  p->iostat = create_dummy_iostat ();
@@ -1322,7 +1324,7 @@ gfc_trans_inquire (gfc_code * code)
   if (p->pad)
     mask |= set_string (&block, &post_block, var, IOPARM_inquire_pad,
 			p->pad);
-  
+
   if (p->convert)
     mask |= set_string (&block, &post_block, var, IOPARM_inquire_convert,
 			p->convert);
@@ -1547,7 +1549,7 @@ transfer_namelist_element (stmtblock_t * block, const char * var_name,
   tree dtype;
   tree dt_parm_addr;
   tree decl = NULL_TREE;
-  int n_dim; 
+  int n_dim;
   int itype;
   int rank = 0;
 
@@ -2029,7 +2031,7 @@ transfer_expr (gfc_se * se, gfc_typespec * ts, tree addr_expr, gfc_code * code)
       ts->type = BT_INTEGER;
       ts->kind = gfc_index_integer_kind;
     }
-  
+
   kind = ts->kind;
   function = NULL;
   arg2 = NULL;
@@ -2111,7 +2113,7 @@ transfer_expr (gfc_se * se, gfc_typespec * ts, tree addr_expr, gfc_code * code)
 	    function = iocall[IOCALL_X_CHARACTER_WIDE];
 	  else
 	    function = iocall[IOCALL_X_CHARACTER_WIDE_WRITE];
-	    
+
 	  tmp = gfc_build_addr_expr (NULL_TREE, dt_parm);
 	  tmp = build_call_expr_loc (input_location,
 				 function, 4, tmp, addr_expr, arg2, arg3);
@@ -2145,6 +2147,12 @@ transfer_expr (gfc_se * se, gfc_typespec * ts, tree addr_expr, gfc_code * code)
       expr = gfc_evaluate_now (addr_expr, &se->pre);
       expr = build_fold_indirect_ref_loc (input_location,
 				      expr);
+
+      /* Make sure that the derived type has been built.  An external
+	 function, if only referenced in an io statement, requires this
+	 check (see PR58771).  */
+      if (ts->u.derived->backend_decl == NULL_TREE)
+	(void) gfc_typenode_for_spec (ts);
 
       for (c = ts->u.derived->components; c; c = c->next)
 	{
@@ -2260,7 +2268,10 @@ gfc_trans_transfer (gfc_code * code)
 	    {
 	      for (n = 0; n < ref->u.ar.dimen; n++)
 		if (ref->u.ar.dimen_type[n] == DIMEN_VECTOR)
-		  seen_vector = true;
+		  {
+		    seen_vector = true;
+		    break;
+		  }
 	    }
 
 	  if (seen_vector && last_dt == READ)

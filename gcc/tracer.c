@@ -1,7 +1,7 @@
 /* The tracer pass for the GNU compiler.
    Contributed by Jan Hubicka, SuSE Labs.
    Adapted to work on GIMPLE instead of RTL by Robert Kidd, UIUC.
-   Copyright (C) 2001-2013 Free Software Foundation, Inc.
+   Copyright (C) 2001-2014 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -46,7 +46,14 @@
 #include "params.h"
 #include "coverage.h"
 #include "tree-pass.h"
-#include "tree-flow.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "tree-cfg.h"
+#include "tree-ssa.h"
 #include "tree-inline.h"
 #include "cfgloop.h"
 
@@ -223,9 +230,9 @@ find_trace (basic_block bb, basic_block *trace)
 static bool
 tail_duplicate (void)
 {
-  fibnode_t *blocks = XCNEWVEC (fibnode_t, last_basic_block);
-  basic_block *trace = XNEWVEC (basic_block, n_basic_blocks);
-  int *counts = XNEWVEC (int, last_basic_block);
+  fibnode_t *blocks = XCNEWVEC (fibnode_t, last_basic_block_for_fn (cfun));
+  basic_block *trace = XNEWVEC (basic_block, n_basic_blocks_for_fn (cfun));
+  int *counts = XNEWVEC (int, last_basic_block_for_fn (cfun));
   int ninsns = 0, nduplicated = 0;
   gcov_type weighted_insns = 0, traced_insns = 0;
   fibheap_t heap = fibheap_new ();
@@ -236,7 +243,7 @@ tail_duplicate (void)
 
   /* Create an oversized sbitmap to reduce the chance that we need to
      resize it.  */
-  bb_seen = sbitmap_alloc (last_basic_block * 2);
+  bb_seen = sbitmap_alloc (last_basic_block_for_fn (cfun) * 2);
   bitmap_clear (bb_seen);
   initialize_original_copy_tables ();
 
@@ -249,7 +256,7 @@ tail_duplicate (void)
   branch_ratio_cutoff =
     (REG_BR_PROB_BASE / 100 * PARAM_VALUE (TRACER_MIN_BRANCH_RATIO));
 
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       int n = count_insns (bb);
       if (!ignore_bb_p (bb))
@@ -368,7 +375,7 @@ tracer (void)
 {
   bool changed;
 
-  if (n_basic_blocks <= NUM_FIXED_BLOCKS + 1)
+  if (n_basic_blocks_for_fn (cfun) <= NUM_FIXED_BLOCKS + 1)
     return 0;
 
   mark_dfs_back_edges ();
@@ -397,23 +404,40 @@ gate_tracer (void)
   return (optimize > 0 && flag_tracer && flag_reorder_blocks);
 }
 
-struct gimple_opt_pass pass_tracer =
+namespace {
+
+const pass_data pass_data_tracer =
 {
- {
-  GIMPLE_PASS,
-  "tracer",                             /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_tracer,                          /* gate */
-  tracer,                               /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_TRACER,                            /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_update_ssa
-    | TODO_verify_ssa                   /* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "tracer", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_TRACER, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_update_ssa | TODO_verify_ssa ), /* todo_flags_finish */
 };
+
+class pass_tracer : public gimple_opt_pass
+{
+public:
+  pass_tracer (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_tracer, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_tracer (); }
+  unsigned int execute () { return tracer (); }
+
+}; // class pass_tracer
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_tracer (gcc::context *ctxt)
+{
+  return new pass_tracer (ctxt);
+}

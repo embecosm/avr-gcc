@@ -1,5 +1,5 @@
 /* Routines for manipulation of expression nodes.
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -3581,14 +3581,6 @@ gfc_check_pointer_assign (gfc_expr *lvalue, gfc_expr *rvalue)
 	  return false;
 	}
 
-      if (!gfc_compare_interfaces (s2, s1, name, 0, 1,
-				   err, sizeof(err), NULL, NULL))
-	{
-	  gfc_error ("Interface mismatch in procedure pointer assignment "
-		     "at %L: %s", &rvalue->where, err);
-	  return false;
-	}
-
       return true;
     }
 
@@ -3626,11 +3618,9 @@ gfc_check_pointer_assign (gfc_expr *lvalue, gfc_expr *rvalue)
       return false;
     }
 
-    /* Make sure the vtab is present.  */
-  if (lvalue->ts.type == BT_CLASS && rvalue->ts.type == BT_DERIVED)
-    gfc_find_derived_vtab (rvalue->ts.u.derived);
-  else if (UNLIMITED_POLY (lvalue) && !UNLIMITED_POLY (rvalue))
-    gfc_find_intrinsic_vtab (&rvalue->ts);
+  /* Make sure the vtab is present.  */
+  if (lvalue->ts.type == BT_CLASS && !UNLIMITED_POLY (rvalue))
+    gfc_find_vtab (&rvalue->ts);
 
   /* Check rank remapping.  */
   if (rank_remap)
@@ -3764,7 +3754,10 @@ gfc_check_pointer_assign (gfc_expr *lvalue, gfc_expr *rvalue)
 	    ns && ns->proc_name && ns->proc_name->attr.flavor != FL_PROCEDURE;
 	    ns = ns->parent)
 	if (ns->parent == lvalue->symtree->n.sym->ns)
-	  warn = true;
+	  {
+	    warn = true;
+	    break;
+	  }
 
       if (warn)
 	gfc_warning ("Pointer at %L in pointer assignment might outlive the "
@@ -3821,6 +3814,7 @@ gfc_check_assign_symbol (gfc_symbol *sym, gfc_component *comp, gfc_expr *rvalue)
     r = gfc_check_assign (&lvalue, rvalue, 1);
 
   free (lvalue.symtree);
+  free (lvalue.ref);
 
   if (!r)
     return r;
@@ -4657,6 +4651,7 @@ gfc_build_intrinsic_call (gfc_namespace *ns, gfc_isym_id id, const char* name,
   result->symtree->n.sym->intmod_sym_id = id;
   result->symtree->n.sym->attr.flavor = FL_PROCEDURE;
   result->symtree->n.sym->attr.intrinsic = 1;
+  result->symtree->n.sym->attr.artificial = 1;
 
   va_start (ap, numarg);
   atail = NULL;
@@ -4696,9 +4691,9 @@ gfc_check_vardef_context (gfc_expr* e, bool pointer, bool alloc_obj,
   bool is_pointer;
   bool check_intentin;
   bool ptr_component;
-  bool unlimited;
   symbol_attribute attr;
   gfc_ref* ref;
+  int i;
 
   if (e->expr_type == EXPR_VARIABLE)
     {
@@ -4710,8 +4705,6 @@ gfc_check_vardef_context (gfc_expr* e, bool pointer, bool alloc_obj,
       gcc_assert (e->symtree);
       sym = e->value.function.esym ? e->value.function.esym : e->symtree->n.sym;
     }
-
-  unlimited = e->ts.type == BT_CLASS && UNLIMITED_POLY (sym);
 
   attr = gfc_expr_attr (e);
   if (!pointer && e->expr_type == EXPR_FUNCTION && attr.pointer)
@@ -4752,7 +4745,7 @@ gfc_check_vardef_context (gfc_expr* e, bool pointer, bool alloc_obj,
   /* Find out whether the expr is a pointer; this also means following
      component references to the last one.  */
   is_pointer = (attr.pointer || attr.proc_pointer);
-  if (pointer && !is_pointer && !unlimited)
+  if (pointer && !is_pointer)
     {
       if (context)
 	gfc_error ("Non-POINTER in pointer association context (%s)"
@@ -4921,5 +4914,49 @@ gfc_check_vardef_context (gfc_expr* e, bool pointer, bool alloc_obj,
 	}
     }
 
+  /* Check for same value in vector expression subscript.  */
+
+  if (e->rank > 0)
+    for (ref = e->ref; ref != NULL; ref = ref->next)
+      if (ref->type == REF_ARRAY && ref->u.ar.type == AR_SECTION)
+	for (i = 0; i < GFC_MAX_DIMENSIONS
+	       && ref->u.ar.dimen_type[i] != 0; i++)
+	  if (ref->u.ar.dimen_type[i] == DIMEN_VECTOR)
+	    {
+	      gfc_expr *arr = ref->u.ar.start[i];
+	      if (arr->expr_type == EXPR_ARRAY)
+		{
+		  gfc_constructor *c, *n;
+		  gfc_expr *ec, *en;
+		  
+		  for (c = gfc_constructor_first (arr->value.constructor);
+		       c != NULL; c = gfc_constructor_next (c))
+		    {
+		      if (c == NULL || c->iterator != NULL)
+			continue;
+		      
+		      ec = c->expr;
+
+		      for (n = gfc_constructor_next (c); n != NULL;
+			   n = gfc_constructor_next (n))
+			{
+			  if (n->iterator != NULL)
+			    continue;
+			  
+			  en = n->expr;
+			  if (gfc_dep_compare_expr (ec, en) == 0)
+			    {
+			      gfc_error_now ("Elements with the same value at %L"
+					     " and %L in vector subscript"
+					     " in a variable definition"
+					     " context (%s)", &(ec->where),
+					     &(en->where), context);
+			      return false;
+			    }
+			}
+		    }
+		}
+	    }
+  
   return true;
 }

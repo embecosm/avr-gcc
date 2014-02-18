@@ -1,5 +1,5 @@
 /* Tail call optimization on trees.
-   Copyright (C) 2003-2013 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,10 +22,25 @@ along with GCC; see the file COPYING3.  If not see
 #include "coretypes.h"
 #include "tm.h"
 #include "tree.h"
+#include "stor-layout.h"
 #include "tm_p.h"
 #include "basic-block.h"
 #include "function.h"
-#include "tree-flow.h"
+#include "tree-ssa-alias.h"
+#include "internal-fn.h"
+#include "gimple-expr.h"
+#include "is-a.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimplify-me.h"
+#include "gimple-ssa.h"
+#include "tree-cfg.h"
+#include "tree-phinodes.h"
+#include "stringpool.h"
+#include "tree-ssanames.h"
+#include "tree-into-ssa.h"
+#include "expr.h"
+#include "tree-dfa.h"
 #include "gimple-pretty-print.h"
 #include "except.h"
 #include "tree-pass.h"
@@ -35,6 +50,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "target.h"
 #include "cfgloop.h"
 #include "common/common-target.h"
+#include "ipa-utils.h"
 
 /* The file implements the tail recursion elimination.  It is also used to
    analyze the tail calls in general, passing the results to the rtl level
@@ -305,7 +321,7 @@ process_assignment (gimple stmt, gimple_stmt_iterator call, tree *m,
   if (rhs_class == GIMPLE_UNARY_RHS)
     ;
   else if (op0 == *ass_var
-      && (non_ass_var = independent_of_stmt_p (op1, stmt, call)))
+	   && (non_ass_var = independent_of_stmt_p (op1, stmt, call)))
     ;
   else if (op1 == *ass_var
 	   && (non_ass_var = independent_of_stmt_p (op0, stmt, call)))
@@ -320,17 +336,20 @@ process_assignment (gimple stmt, gimple_stmt_iterator call, tree *m,
       *ass_var = dest;
       return true;
 
+    case POINTER_PLUS_EXPR:
+      if (op0 != *ass_var)
+	return false;
+      *a = non_ass_var;
+      *ass_var = dest;
+      return true;
+
     case MULT_EXPR:
       *m = non_ass_var;
       *ass_var = dest;
       return true;
 
     case NEGATE_EXPR:
-      if (FLOAT_TYPE_P (TREE_TYPE (op0)))
-        *m = build_real (TREE_TYPE (op0), dconstm1);
-      else
-        *m = build_int_cst (TREE_TYPE (op0), -1);
-
+      *m = build_minus_one_cst (TREE_TYPE (op0));
       *ass_var = dest;
       return true;
 
@@ -339,11 +358,7 @@ process_assignment (gimple stmt, gimple_stmt_iterator call, tree *m,
         *a = fold_build1 (NEGATE_EXPR, TREE_TYPE (non_ass_var), non_ass_var);
       else
         {
-          if (FLOAT_TYPE_P (TREE_TYPE (non_ass_var)))
-            *m = build_real (TREE_TYPE (non_ass_var), dconstm1);
-          else
-            *m = build_int_cst (TREE_TYPE (non_ass_var), -1);
-
+	  *m = build_minus_one_cst (TREE_TYPE (non_ass_var));
           *a = fold_build1 (NEGATE_EXPR, TREE_TYPE (non_ass_var), non_ass_var);
         }
 
@@ -446,7 +461,9 @@ find_tail_calls (basic_block bb, struct tailcall **ret)
   /* We found the call, check whether it is suitable.  */
   tail_recursion = false;
   func = gimple_call_fndecl (call);
-  if (func == current_function_decl)
+  if (func
+      && !DECL_BUILT_IN (func)
+      && recursive_call_p (current_function_decl, func))
     {
       tree arg;
 
@@ -570,6 +587,10 @@ find_tail_calls (basic_block bb, struct tailcall **ret)
   if (!tail_recursion && (m || a))
     return;
 
+  /* For pointers only allow additions.  */
+  if (m && POINTER_TYPE_P (TREE_TYPE (DECL_RESULT (current_function_decl))))
+    return;
+
   nw = XNEW (struct tailcall);
 
   nw->call_gsi = gsi;
@@ -612,15 +633,23 @@ adjust_return_value_with_ops (enum tree_code code, const char *label,
   tree result = make_temp_ssa_name (ret_type, NULL, label);
   gimple stmt;
 
-  if (types_compatible_p (TREE_TYPE (acc), TREE_TYPE (op1)))
+  if (POINTER_TYPE_P (ret_type))
+    {
+      gcc_assert (code == PLUS_EXPR && TREE_TYPE (acc) == sizetype);
+      code = POINTER_PLUS_EXPR;
+    }
+  if (types_compatible_p (TREE_TYPE (acc), TREE_TYPE (op1))
+      && code != POINTER_PLUS_EXPR)
     stmt = gimple_build_assign_with_ops (code, result, acc, op1);
   else
     {
-      tree rhs = fold_convert (TREE_TYPE (acc),
-			       fold_build2 (code,
-					    TREE_TYPE (op1),
-					    fold_convert (TREE_TYPE (op1), acc),
-					    op1));
+      tree tem;
+      if (code == POINTER_PLUS_EXPR)
+	tem = fold_build2 (code, TREE_TYPE (op1), op1, acc);
+      else
+	tem = fold_build2 (code, TREE_TYPE (op1),
+			   fold_convert (TREE_TYPE (op1), acc), op1);
+      tree rhs = fold_convert (ret_type, tem);
       rhs = force_gimple_operand_gsi (&gsi, rhs,
 				      false, NULL, true, GSI_SAME_STMT);
       stmt = gimple_build_assign (result, rhs);
@@ -796,7 +825,7 @@ eliminate_tail_call (struct tailcall *t)
 
   gcc_assert (is_gimple_call (stmt));
 
-  first = single_succ (ENTRY_BLOCK_PTR);
+  first = single_succ (ENTRY_BLOCK_PTR_FOR_FN (cfun));
 
   /* Remove the code after call_gsi that will become unreachable.  The
      possibly unreachable code in other blocks is removed later in
@@ -817,9 +846,10 @@ eliminate_tail_call (struct tailcall *t)
 
   /* Number of executions of function has reduced by the tailcall.  */
   e = single_succ_edge (gsi_bb (t->call_gsi));
-  decrease_profile (EXIT_BLOCK_PTR, e->count, EDGE_FREQUENCY (e));
-  decrease_profile (ENTRY_BLOCK_PTR, e->count, EDGE_FREQUENCY (e));
-  if (e->dest != EXIT_BLOCK_PTR)
+  decrease_profile (EXIT_BLOCK_PTR_FOR_FN (cfun), e->count, EDGE_FREQUENCY (e));
+  decrease_profile (ENTRY_BLOCK_PTR_FOR_FN (cfun), e->count,
+		    EDGE_FREQUENCY (e));
+  if (e->dest != EXIT_BLOCK_PTR_FOR_FN (cfun))
     decrease_profile (e->dest, e->count, EDGE_FREQUENCY (e));
 
   /* Replace the call by a jump to the start of function.  */
@@ -879,6 +909,7 @@ optimize_tail_call (struct tailcall *t, bool opt_tailcalls)
       gimple stmt = gsi_stmt (t->call_gsi);
 
       gimple_call_set_tail (stmt, true);
+      cfun->tail_call_marked = true;
       if (dump_file && (dump_flags & TDF_DETAILS))
         {
 	  fprintf (dump_file, "Found tail call ");
@@ -900,6 +931,9 @@ static tree
 create_tailcall_accumulator (const char *label, basic_block bb, tree init)
 {
   tree ret_type = TREE_TYPE (DECL_RESULT (current_function_decl));
+  if (POINTER_TYPE_P (ret_type))
+    ret_type = sizetype;
+
   tree tmp = make_temp_ssa_name (ret_type, NULL, label);
   gimple phi;
 
@@ -920,7 +954,7 @@ tree_optimize_tail_calls_1 (bool opt_tailcalls)
   bool phis_constructed = false;
   struct tailcall *tailcalls = NULL, *act, *next;
   bool changed = false;
-  basic_block first = single_succ (ENTRY_BLOCK_PTR);
+  basic_block first = single_succ (ENTRY_BLOCK_PTR_FOR_FN (cfun));
   tree param;
   gimple stmt;
   edge_iterator ei;
@@ -930,7 +964,7 @@ tree_optimize_tail_calls_1 (bool opt_tailcalls)
   if (opt_tailcalls)
     opt_tailcalls = suitable_for_tail_call_opt_p ();
 
-  FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR->preds)
+  FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR_FOR_FN (cfun)->preds)
     {
       /* Only traverse the normal exits, i.e. those that end with return
 	 statement.  */
@@ -954,7 +988,8 @@ tree_optimize_tail_calls_1 (bool opt_tailcalls)
 	     or if there are existing degenerate PHI nodes.  */
 	  if (!single_pred_p (first)
 	      || !gimple_seq_empty_p (phi_nodes (first)))
-	    first = split_edge (single_succ_edge (ENTRY_BLOCK_PTR));
+	    first =
+	      split_edge (single_succ_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun)));
 
 	  /* Copy the args if needed.  */
 	  for (param = DECL_ARGUMENTS (current_function_decl);
@@ -1001,7 +1036,7 @@ tree_optimize_tail_calls_1 (bool opt_tailcalls)
   if (a_acc || m_acc)
     {
       /* Modify the remaining return statements.  */
-      FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR->preds)
+      FOR_EACH_EDGE (e, ei, EXIT_BLOCK_PTR_FOR_FN (cfun)->preds)
 	{
 	  stmt = last_stmt (e->src);
 
@@ -1048,42 +1083,79 @@ execute_tail_calls (void)
   return tree_optimize_tail_calls_1 (true);
 }
 
-struct gimple_opt_pass pass_tail_recursion =
+namespace {
+
+const pass_data pass_data_tail_recursion =
 {
- {
-  GIMPLE_PASS,
-  "tailr",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_tail_calls,			/* gate */
-  execute_tail_recursion,		/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_NONE,				/* tv_id */
-  PROP_cfg | PROP_ssa,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_verify_ssa	                /* todo_flags_finish */
- }
+  GIMPLE_PASS, /* type */
+  "tailr", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_ssa, /* todo_flags_finish */
 };
 
-struct gimple_opt_pass pass_tail_calls =
+class pass_tail_recursion : public gimple_opt_pass
 {
- {
-  GIMPLE_PASS,
-  "tailc",				/* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_tail_calls,			/* gate */
-  execute_tail_calls,			/* execute */
-  NULL,					/* sub */
-  NULL,					/* next */
-  0,					/* static_pass_number */
-  TV_NONE,				/* tv_id */
-  PROP_cfg | PROP_ssa,			/* properties_required */
-  0,					/* properties_provided */
-  0,					/* properties_destroyed */
-  0,					/* todo_flags_start */
-  TODO_verify_ssa	                /* todo_flags_finish */
- }
+public:
+  pass_tail_recursion (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_tail_recursion, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  opt_pass * clone () { return new pass_tail_recursion (m_ctxt); }
+  bool gate () { return gate_tail_calls (); }
+  unsigned int execute () { return execute_tail_recursion (); }
+
+}; // class pass_tail_recursion
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_tail_recursion (gcc::context *ctxt)
+{
+  return new pass_tail_recursion (ctxt);
+}
+
+namespace {
+
+const pass_data pass_data_tail_calls =
+{
+  GIMPLE_PASS, /* type */
+  "tailc", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_NONE, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_verify_ssa, /* todo_flags_finish */
 };
+
+class pass_tail_calls : public gimple_opt_pass
+{
+public:
+  pass_tail_calls (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_tail_calls, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_tail_calls (); }
+  unsigned int execute () { return execute_tail_calls (); }
+
+}; // class pass_tail_calls
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_tail_calls (gcc::context *ctxt)
+{
+  return new pass_tail_calls (ctxt);
+}

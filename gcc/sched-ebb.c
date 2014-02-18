@@ -1,5 +1,5 @@
 /* Instruction scheduling pass.
-   Copyright (C) 1992-2013 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com) Enhanced by,
    and currently maintained by, Jim Wilson (wilson@cygnus.com)
 
@@ -625,7 +625,7 @@ schedule_ebbs (void)
 
   /* Taking care of this degenerate case makes the rest of
      this code simpler.  */
-  if (n_basic_blocks == NUM_FIXED_BLOCKS)
+  if (n_basic_blocks_for_fn (cfun) == NUM_FIXED_BLOCKS)
     return;
 
   if (profile_info && flag_branch_probabilities)
@@ -637,7 +637,7 @@ schedule_ebbs (void)
   schedule_ebbs_init ();
 
   /* Schedule every region in the subroutine.  */
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       rtx head = BB_HEAD (bb);
 
@@ -648,7 +648,7 @@ schedule_ebbs (void)
 	{
 	  edge e;
 	  tail = BB_END (bb);
-	  if (bb->next_bb == EXIT_BLOCK_PTR
+	  if (bb->next_bb == EXIT_BLOCK_PTR_FOR_FN (cfun)
 	      || LABEL_P (BB_HEAD (bb->next_bb)))
 	    break;
 	  e = find_fallthru_edge (bb->succs);
@@ -683,7 +683,7 @@ ebb_add_block (basic_block bb, basic_block after)
   /* Recovery blocks are always bounded by BARRIERS,
      therefore, they always form single block EBB,
      therefore, we can use rec->index to identify such EBBs.  */
-  if (after == EXIT_BLOCK_PTR)
+  if (after == EXIT_BLOCK_PTR_FOR_FN (cfun))
     bitmap_set_bit (&dont_calc_deps, bb->index);
   else if (after == last_bb)
     last_bb = bb;
@@ -737,7 +737,7 @@ ebb_fix_recovery_cfg (int bbi ATTRIBUTE_UNUSED, int jump_bbi,
   gcc_assert (last_bb->index != bbi);
 
   if (jump_bb_nexti == last_bb->index)
-    last_bb = BASIC_BLOCK (jump_bbi);
+    last_bb = BASIC_BLOCK_FOR_FN (cfun, jump_bbi);
 }
 
 #endif /* INSN_SCHEDULING */

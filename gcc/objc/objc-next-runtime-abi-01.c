@@ -1,5 +1,5 @@
 /* Next Runtime (ABI-0/1) private.
-   Copyright (C) 2011-2013 Free Software Foundation, Inc.
+   Copyright (C) 2011-2014 Free Software Foundation, Inc.
    Contributed by Iain Sandoe (split from objc-act.c)
 
 This file is part of GCC.
@@ -27,6 +27,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
+#include "stringpool.h"
 
 #ifdef OBJCPLUS
 #include "cp/cp-tree.h"
@@ -583,7 +584,7 @@ build_v1_protocol_template (void)
   objc_finish_struct (objc_protocol_template, decls);
 }
 
-/* --- names, decls identifers --- */
+/* --- names, decls identifiers --- */
 
 static tree
 next_runtime_abi_01_super_superclassfield_id (void)
@@ -881,7 +882,7 @@ build_objc_method_call (location_t loc, int super_flag, tree method_prototype,
   /* Build an obj_type_ref, with the correct cast for the method call.  */
   t = build3 (OBJ_TYPE_REF, sender_cast, method,
 			    lookup_object, size_zero_node);
-  t = build_function_call_vec (loc, t, parms, NULL);
+  t = build_function_call_vec (loc, vNULL, t, parms, NULL);
   vec_free (parms);
   return t;
 }
@@ -2332,36 +2333,6 @@ generate_classref_translation_entry (tree chain)
   return;
 }
 
-
-/* The Fix-and-Continue functionality available in Mac OS X 10.3 and
-   later requires that ObjC translation units participating in F&C be
-   specially marked.  The following routine accomplishes this.  */
-
-/* static int _OBJC_IMAGE_INFO[2] = { 0, 1 }; */
-
-static void
-generate_objc_image_info (void)
-{
-  tree decl;
-  int flags
-    = ((flag_replace_objc_classes && imp_count ? 1 : 0)
-       | (flag_objc_gc ? 2 : 0));
-  vec<constructor_elt, va_gc> *v = NULL;
-  tree array_type;
-
-  array_type  = build_sized_array_type (integer_type_node, 2);
-
-  decl = start_var_decl (array_type, "_OBJC_ImageInfo");
-
-  CONSTRUCTOR_APPEND_ELT (v, NULL_TREE, integer_zero_node);
-  CONSTRUCTOR_APPEND_ELT (v, NULL_TREE, build_int_cst (integer_type_node, flags));
-  /* The runtime wants this and refers to it in a manner hidden from the compiler.
-     So we must force the output.  */
-  DECL_PRESERVE_P (decl) = 1;
-  OBJCMETA (decl, objc_meta, meta_info);
-  finish_var_decl (decl, objc_build_constructor (TREE_TYPE (decl), v));
-}
-
 static void
 objc_generate_v1_next_metadata (void)
 {
@@ -2411,9 +2382,6 @@ objc_generate_v1_next_metadata (void)
   vers = OBJC_VERSION;
   attr = build_tree_list (objc_meta, meta_modules);
   build_module_descriptor (vers, attr);
-
-  /* This conveys information on GC usage and zero-link.  */
-  generate_objc_image_info ();
 
   /* Dump the class references.  This forces the appropriate classes
      to be linked into the executable image, preserving unix archive
@@ -2898,7 +2866,8 @@ build_throw_stmt (location_t loc, tree throw_expr, bool rethrown ATTRIBUTE_UNUSE
   /* A throw is just a call to the runtime throw function with the
      object as a parameter.  */
   parms->quick_push (throw_expr);
-  t = build_function_call_vec (loc, objc_exception_throw_decl, parms, NULL);
+  t = build_function_call_vec (loc, vNULL, objc_exception_throw_decl, parms,
+			       NULL);
   vec_free (parms);
   return add_stmt (t);
 }

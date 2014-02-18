@@ -24,6 +24,7 @@ typedef int __gcc_CMPtype __attribute__ ((mode (__libgcc_cmp_return__)));
 #define _FP_NANFRAC_Q		_FP_QNANBIT_Q, 0
 
 #define _FP_KEEPNANFRACP	1
+#define _FP_QNANNEGATEDP 0
 
 #define _FP_NANSIGN_S		1
 #define _FP_NANSIGN_D		1
@@ -55,6 +56,8 @@ typedef int __gcc_CMPtype __attribute__ ((mode (__libgcc_cmp_return__)));
 #define FP_EX_OVERFLOW		0x08
 #define FP_EX_UNDERFLOW		0x10
 #define FP_EX_INEXACT		0x20
+
+#define _FP_TININESS_AFTER_ROUNDING 1
 
 void __sfp_handle_exceptions (int);
 

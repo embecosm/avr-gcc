@@ -10,7 +10,8 @@
 // Mac-specific details.
 //===----------------------------------------------------------------------===//
 
-#ifdef __APPLE__
+#include "sanitizer_common/sanitizer_platform.h"
+#if SANITIZER_MAC
 
 #include "asan_interceptors.h"
 #include "asan_internal.h"
@@ -18,7 +19,7 @@
 #include "asan_mapping.h"
 #include "asan_stack.h"
 #include "asan_thread.h"
-#include "asan_thread_registry.h"
+#include "sanitizer_common/sanitizer_atomic.h"
 #include "sanitizer_common/sanitizer_libc.h"
 
 #include <crt_externs.h>  // for _NSGetArgv
@@ -50,15 +51,17 @@ void GetPcSpBp(void *context, uptr *pc, uptr *sp, uptr *bp) {
 # endif  // SANITIZER_WORDSIZE
 }
 
-int GetMacosVersion() {
+MacosVersion cached_macos_version = MACOS_VERSION_UNINITIALIZED;
+
+MacosVersion GetMacosVersionInternal() {
   int mib[2] = { CTL_KERN, KERN_OSRELEASE };
   char version[100];
   uptr len = 0, maxlen = sizeof(version) / sizeof(version[0]);
   for (uptr i = 0; i < maxlen; i++) version[i] = '\0';
   // Get the version length.
-  CHECK(sysctl(mib, 2, 0, &len, 0, 0) != -1);
-  CHECK(len < maxlen);
-  CHECK(sysctl(mib, 2, version, &len, 0, 0) != -1);
+  CHECK_NE(sysctl(mib, 2, 0, &len, 0, 0), -1);
+  CHECK_LT(len, maxlen);
+  CHECK_NE(sysctl(mib, 2, version, &len, 0, 0), -1);
   switch (version[0]) {
     case '9': return MACOS_VERSION_LEOPARD;
     case '1': {
@@ -66,11 +69,24 @@ int GetMacosVersion() {
         case '0': return MACOS_VERSION_SNOW_LEOPARD;
         case '1': return MACOS_VERSION_LION;
         case '2': return MACOS_VERSION_MOUNTAIN_LION;
+        case '3': return MACOS_VERSION_MAVERICKS;
         default: return MACOS_VERSION_UNKNOWN;
       }
     }
     default: return MACOS_VERSION_UNKNOWN;
   }
+}
+
+MacosVersion GetMacosVersion() {
+  atomic_uint32_t *cache =
+      reinterpret_cast<atomic_uint32_t*>(&cached_macos_version);
+  MacosVersion result =
+      static_cast<MacosVersion>(atomic_load(cache, memory_order_acquire));
+  if (result == MACOS_VERSION_UNINITIALIZED) {
+    result = GetMacosVersionInternal();
+    atomic_store(cache, result, memory_order_release);
+  }
+  return result;
 }
 
 bool PlatformHasDifferentMemcpyAndMemmove() {
@@ -156,7 +172,7 @@ void MaybeReexec() {
       // Set DYLD_INSERT_LIBRARIES equal to the runtime dylib name.
       setenv(kDyldInsertLibraries, info.dli_fname, /*overwrite*/0);
     }
-    if (flags()->verbosity >= 1) {
+    if (common_flags()->verbosity >= 1) {
       Report("exec()-ing the program with\n");
       Report("%s=%s\n", kDyldInsertLibraries, new_env);
       Report("to enable ASan wrappers.\n");
@@ -227,18 +243,6 @@ bool AsanInterceptsSignal(int signum) {
 void AsanPlatformThreadInit() {
 }
 
-void GetStackTrace(StackTrace *stack, uptr max_s, uptr pc, uptr bp, bool fast) {
-  (void)fast;
-  stack->size = 0;
-  stack->trace[0] = pc;
-  if ((max_s) > 1) {
-    stack->max_size = max_s;
-    if (!asan_inited) return;
-    if (AsanThread *t = asanThreadRegistry().GetCurrent())
-      stack->FastUnwindStack(pc, bp, t->stack_top(), t->stack_bottom());
-  }
-}
-
 void ReadContextStack(void *context, uptr *stack, uptr *ssize) {
   UNIMPLEMENTED();
 }
@@ -286,32 +290,16 @@ typedef struct {
   u32 parent_tid;
 } asan_block_context_t;
 
-// We use extern declarations of libdispatch functions here instead
-// of including <dispatch/dispatch.h>. This header is not present on
-// Mac OS X Leopard and eariler, and although we don't expect ASan to
-// work on legacy systems, it's bad to break the build of
-// LLVM compiler-rt there.
-extern "C" {
-void dispatch_async_f(dispatch_queue_t dq, void *ctxt,
-                      dispatch_function_t func);
-void dispatch_sync_f(dispatch_queue_t dq, void *ctxt,
-                     dispatch_function_t func);
-void dispatch_after_f(dispatch_time_t when, dispatch_queue_t dq, void *ctxt,
-                      dispatch_function_t func);
-void dispatch_barrier_async_f(dispatch_queue_t dq, void *ctxt,
-                              dispatch_function_t func);
-void dispatch_group_async_f(dispatch_group_t group, dispatch_queue_t dq,
-                            void *ctxt, dispatch_function_t func);
-}  // extern "C"
-
-static ALWAYS_INLINE
+ALWAYS_INLINE
 void asan_register_worker_thread(int parent_tid, StackTrace *stack) {
-  AsanThread *t = asanThreadRegistry().GetCurrent();
+  AsanThread *t = GetCurrentThread();
   if (!t) {
-    t = AsanThread::Create(parent_tid, 0, 0, stack);
-    asanThreadRegistry().RegisterThread(t);
+    t = AsanThread::Create(0, 0);
+    CreateThreadContextArgs args = { t, stack };
+    asanThreadRegistry().CreateThread(*(uptr*)t, true, parent_tid, &args);
     t->Init();
-    asanThreadRegistry().SetCurrent(t);
+    asanThreadRegistry().StartThread(t->tid(), 0, 0);
+    SetCurrentThread(t);
   }
 }
 
@@ -321,7 +309,7 @@ extern "C"
 void asan_dispatch_call_block_and_release(void *block) {
   GET_STACK_TRACE_THREAD;
   asan_block_context_t *context = (asan_block_context_t*)block;
-  if (flags()->verbosity >= 2) {
+  if (common_flags()->verbosity >= 2) {
     Report("asan_dispatch_call_block_and_release(): "
            "context: %p, pthread_self: %p\n",
            block, pthread_self());
@@ -345,7 +333,7 @@ asan_block_context_t *alloc_asan_context(void *ctxt, dispatch_function_t func,
       (asan_block_context_t*) asan_malloc(sizeof(asan_block_context_t), stack);
   asan_ctxt->block = ctxt;
   asan_ctxt->func = func;
-  asan_ctxt->parent_tid = asanThreadRegistry().GetCurrentTidOrInvalid();
+  asan_ctxt->parent_tid = GetCurrentTidOrInvalid();
   return asan_ctxt;
 }
 
@@ -356,7 +344,7 @@ asan_block_context_t *alloc_asan_context(void *ctxt, dispatch_function_t func,
                                   dispatch_function_t func) {                 \
     GET_STACK_TRACE_THREAD;                                                   \
     asan_block_context_t *asan_ctxt = alloc_asan_context(ctxt, func, &stack); \
-    if (flags()->verbosity >= 2) {                                            \
+    if (common_flags()->verbosity >= 2) {                                     \
       Report(#dispatch_x_f "(): context: %p, pthread_self: %p\n",             \
              asan_ctxt, pthread_self());                                      \
        PRINT_CURRENT_STACK();                                                 \
@@ -374,7 +362,7 @@ INTERCEPTOR(void, dispatch_after_f, dispatch_time_t when,
                                     dispatch_function_t func) {
   GET_STACK_TRACE_THREAD;
   asan_block_context_t *asan_ctxt = alloc_asan_context(ctxt, func, &stack);
-  if (flags()->verbosity >= 2) {
+  if (common_flags()->verbosity >= 2) {
     Report("dispatch_after_f: %p\n", asan_ctxt);
     PRINT_CURRENT_STACK();
   }
@@ -387,7 +375,7 @@ INTERCEPTOR(void, dispatch_group_async_f, dispatch_group_t group,
                                           dispatch_function_t func) {
   GET_STACK_TRACE_THREAD;
   asan_block_context_t *asan_ctxt = alloc_asan_context(ctxt, func, &stack);
-  if (flags()->verbosity >= 2) {
+  if (common_flags()->verbosity >= 2) {
     Report("dispatch_group_async_f(): context: %p, pthread_self: %p\n",
            asan_ctxt, pthread_self());
     PRINT_CURRENT_STACK();
@@ -411,7 +399,7 @@ void dispatch_source_set_event_handler(dispatch_source_t ds, void(^work)(void));
 
 #define GET_ASAN_BLOCK(work) \
   void (^asan_block)(void);  \
-  int parent_tid = asanThreadRegistry().GetCurrentTidOrInvalid(); \
+  int parent_tid = GetCurrentTidOrInvalid(); \
   asan_block = ^(void) { \
     GET_STACK_TRACE_THREAD; \
     asan_register_worker_thread(parent_tid, &stack); \
@@ -449,4 +437,4 @@ INTERCEPTOR(void, dispatch_source_set_event_handler,
 }
 #endif
 
-#endif  // __APPLE__
+#endif  // SANITIZER_MAC

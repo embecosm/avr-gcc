@@ -27,13 +27,13 @@ bool DescribeAddressIfStack(uptr addr, uptr access_size);
 // Determines memory type on its own.
 void DescribeAddress(uptr addr, uptr access_size);
 
-void DescribeThread(AsanThreadSummary *summary);
+void DescribeThread(AsanThreadContext *context);
 
 // Different kinds of error reports.
 void NORETURN ReportSIGSEGV(uptr pc, uptr sp, uptr bp, uptr addr);
-void NORETURN ReportDoubleFree(uptr addr, StackTrace *stack);
-void NORETURN ReportFreeNotMalloced(uptr addr, StackTrace *stack);
-void NORETURN ReportAllocTypeMismatch(uptr addr, StackTrace *stack,
+void NORETURN ReportDoubleFree(uptr addr, StackTrace *free_stack);
+void NORETURN ReportFreeNotMalloced(uptr addr, StackTrace *free_stack);
+void NORETURN ReportAllocTypeMismatch(uptr addr, StackTrace *free_stack,
                                       AllocType alloc_type,
                                       AllocType dealloc_type);
 void NORETURN ReportMallocUsableSizeNotOwned(uptr addr,

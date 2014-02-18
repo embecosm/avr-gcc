@@ -25,6 +25,10 @@ var canonicalHeaderKeyTests = []canonicalHeaderKeyTest{
 	{"user-agent", "User-Agent"},
 	{"USER-AGENT", "User-Agent"},
 	{"üser-agenT", "üser-Agent"}, // non-ASCII unchanged
+
+	// This caused a panic due to mishandling of a space:
+	{"C Ontent-Transfer-Encoding", "C-Ontent-Transfer-Encoding"},
+	{"foo bar", "Foo-Bar"},
 }
 
 func TestCanonicalMIMEHeaderKey(t *testing.T) {
@@ -290,6 +294,7 @@ Non-Interned: test
 `, "\n", "\r\n", -1)
 
 func BenchmarkReadMIMEHeader(b *testing.B) {
+	b.ReportAllocs()
 	var buf bytes.Buffer
 	br := bufio.NewReader(&buf)
 	r := NewReader(br)
@@ -319,6 +324,7 @@ func BenchmarkReadMIMEHeader(b *testing.B) {
 }
 
 func BenchmarkUncommon(b *testing.B) {
+	b.ReportAllocs()
 	var buf bytes.Buffer
 	br := bufio.NewReader(&buf)
 	r := NewReader(br)

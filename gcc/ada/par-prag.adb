@@ -232,18 +232,16 @@ function Prag (Pragma_Node : Node_Id; Semi : Source_Ptr) return Node_Id is
          Id := Chars (Arg);
          Expr := Expression (Arg);
 
-         if Id = No_Name
-           and then Nkind (Expr) = N_Identifier
-         then
-            case Get_Restriction_Id (Chars (Expr)) is
-               when No_Obsolescent_Features =>
+         if Id = No_Name and then Nkind (Expr) = N_Identifier then
+            case Chars (Expr) is
+               when Name_No_Obsolescent_Features =>
                   Set_Restriction (No_Obsolescent_Features, Pragma_Node);
                   Restriction_Warnings (No_Obsolescent_Features) :=
                     Prag_Id = Pragma_Restriction_Warnings;
 
-               when SPARK =>
-                  Set_Restriction (SPARK, Pragma_Node);
-                  Restriction_Warnings (SPARK) :=
+               when Name_SPARK | Name_SPARK_05 =>
+                  Set_Restriction (SPARK_05, Pragma_Node);
+                  Restriction_Warnings (SPARK_05) :=
                     Prag_Id = Pragma_Restriction_Warnings;
 
                when others =>
@@ -309,6 +307,7 @@ begin
       when Pragma_Ada_83 =>
          Ada_Version := Ada_83;
          Ada_Version_Explicit := Ada_83;
+         Ada_Version_Pragma := Pragma_Node;
 
       ------------
       -- Ada_95 --
@@ -321,6 +320,7 @@ begin
       when Pragma_Ada_95 =>
          Ada_Version := Ada_95;
          Ada_Version_Explicit := Ada_95;
+         Ada_Version_Pragma := Pragma_Node;
 
       ---------------------
       -- Ada_05/Ada_2005 --
@@ -335,6 +335,7 @@ begin
          if Arg_Count = 0 then
             Ada_Version := Ada_2005;
             Ada_Version_Explicit := Ada_2005;
+            Ada_Version_Pragma := Pragma_Node;
          end if;
 
       ---------------------
@@ -350,6 +351,7 @@ begin
          if Arg_Count = 0 then
             Ada_Version := Ada_2012;
             Ada_Version_Explicit := Ada_2012;
+            Ada_Version_Pragma := Pragma_Node;
          end if;
 
       -----------
@@ -405,7 +407,7 @@ begin
 
          --  We unconditionally make a List_On entry for the pragma, so that
          --  in the List (Off) case, the pragma will print even in a region
-         --  of code with listing turned off (this is required!)
+         --  of code with listing turned off (this is required).
 
          List_Pragmas.Increment_Last;
          List_Pragmas.Table (List_Pragmas.Last) :=
@@ -1107,11 +1109,14 @@ begin
 
       when Pragma_Abort_Defer                    |
            Pragma_Abstract_State                 |
+           Pragma_Async_Readers                  |
+           Pragma_Async_Writers                  |
            Pragma_Assertion_Policy               |
            Pragma_Assume                         |
            Pragma_Assume_No_Invalid_Values       |
            Pragma_AST_Entry                      |
            Pragma_All_Calls_Remote               |
+           Pragma_Allow_Integer_Address          |
            Pragma_Annotate                       |
            Pragma_Assert                         |
            Pragma_Assert_And_Cut                 |
@@ -1150,6 +1155,8 @@ begin
            Pragma_Disable_Atomic_Synchronization |
            Pragma_Discard_Names                  |
            Pragma_Dispatching_Domain             |
+           Pragma_Effective_Reads                |
+           Pragma_Effective_Writes               |
            Pragma_Eliminate                      |
            Pragma_Elaborate                      |
            Pragma_Elaborate_All                  |
@@ -1183,7 +1190,9 @@ begin
            Pragma_Import_Valued_Procedure        |
            Pragma_Independent                    |
            Pragma_Independent_Components         |
+           Pragma_Initial_Condition              |
            Pragma_Initialize_Scalars             |
+           Pragma_Initializes                    |
            Pragma_Inline                         |
            Pragma_Inline_Always                  |
            Pragma_Inline_Generic                 |
@@ -1227,16 +1236,21 @@ begin
            Pragma_Overflow_Mode                  |
            Pragma_Overriding_Renamings           |
            Pragma_Pack                           |
+           Pragma_Part_Of                        |
            Pragma_Partition_Elaboration_Policy   |
            Pragma_Passive                        |
            Pragma_Preelaborable_Initialization   |
            Pragma_Polling                        |
            Pragma_Persistent_BSS                 |
+           Pragma_Post                           |
            Pragma_Postcondition                  |
+           Pragma_Post_Class                     |
+           Pragma_Pre                            |
            Pragma_Precondition                   |
            Pragma_Predicate                      |
            Pragma_Preelaborate                   |
            Pragma_Preelaborate_05                |
+           Pragma_Pre_Class                      |
            Pragma_Priority                       |
            Pragma_Priority_Specific_Dispatching  |
            Pragma_Profile                        |
@@ -1248,6 +1262,10 @@ begin
            Pragma_Pure_12                        |
            Pragma_Pure_Function                  |
            Pragma_Queuing_Policy                 |
+           Pragma_Refined_Depends                |
+           Pragma_Refined_Global                 |
+           Pragma_Refined_Post                   |
+           Pragma_Refined_State                  |
            Pragma_Relative_Deadline              |
            Pragma_Remote_Access_Type             |
            Pragma_Remote_Call_Interface          |
@@ -1262,6 +1280,7 @@ begin
            Pragma_Short_Circuit_And_Or           |
            Pragma_Short_Descriptors              |
            Pragma_Simple_Storage_Pool_Type       |
+           Pragma_SPARK_Mode                     |
            Pragma_Storage_Size                   |
            Pragma_Storage_Unit                   |
            Pragma_Static_Elaboration_Desired     |
@@ -1280,6 +1299,8 @@ begin
            Pragma_Thread_Local_Storage           |
            Pragma_Time_Slice                     |
            Pragma_Title                          |
+           Pragma_Type_Invariant                 |
+           Pragma_Type_Invariant_Class           |
            Pragma_Unchecked_Union                |
            Pragma_Unimplemented_Unit             |
            Pragma_Universal_Aliasing             |

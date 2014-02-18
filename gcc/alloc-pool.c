@@ -1,5 +1,5 @@
 /* Functions to support a pool of allocatable objects.
-   Copyright (C) 1987-2013 Free Software Foundation, Inc.
+   Copyright (C) 1987-2014 Free Software Foundation, Inc.
    Contributed by Daniel Berlin <dan@cgsoftware.com>
 
 This file is part of GCC.
@@ -316,7 +316,7 @@ pool_alloc (alloc_pool pool)
 
   /* Pull the first free element from the free list, and return it.  */
   header = pool->returned_free_list;
-  VALGRIND_DISCARD (VALGRIND_MAKE_MEM_DEFINED (header, sizeof(*header)));
+  VALGRIND_DISCARD (VALGRIND_MAKE_MEM_DEFINED (header, sizeof (*header)));
   pool->returned_free_list = header->next;
   pool->elts_free--;
 

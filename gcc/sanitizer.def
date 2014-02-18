@@ -1,6 +1,6 @@
 /* This file contains the definitions and documentation for the
    Address Sanitizer and Thread Sanitizer builtins used in the GNU compiler.
-   Copyright (C) 2012-2013 Free Software Foundation, Inc.
+   Copyright (C) 2012-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -27,7 +27,7 @@ along with GCC; see the file COPYING3.  If not see
    for other FEs by asan.c.  */
 
 /* Address Sanitizer */
-DEF_SANITIZER_BUILTIN(BUILT_IN_ASAN_INIT, "__asan_init_v1",
+DEF_SANITIZER_BUILTIN(BUILT_IN_ASAN_INIT, "__asan_init_v3",
 		      BT_FN_VOID, ATTR_NOTHROW_LEAF_LIST)
 /* Do not reorder the BUILT_IN_ASAN_REPORT* builtins, e.g. cfgcleanup.c
    relies on this order.  */
@@ -60,6 +60,12 @@ DEF_SANITIZER_BUILTIN(BUILT_IN_ASAN_UNREGISTER_GLOBALS,
 DEF_SANITIZER_BUILTIN(BUILT_IN_ASAN_HANDLE_NO_RETURN,
 		      "__asan_handle_no_return",
 		      BT_FN_VOID, ATTR_TMPURE_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_ASAN_BEFORE_DYNAMIC_INIT,
+		      "__asan_before_dynamic_init",
+		      BT_FN_VOID_CONST_PTR, ATTR_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_ASAN_AFTER_DYNAMIC_INIT,
+		      "__asan_after_dynamic_init",
+		      BT_FN_VOID, ATTR_NOTHROW_LEAF_LIST)
 
 /* Thread Sanitizer */
 DEF_SANITIZER_BUILTIN(BUILT_IN_TSAN_INIT, "__tsan_init", 
@@ -283,3 +289,49 @@ DEF_SANITIZER_BUILTIN(BUILT_IN_TSAN_ATOMIC_THREAD_FENCE,
 DEF_SANITIZER_BUILTIN(BUILT_IN_TSAN_ATOMIC_SIGNAL_FENCE,
 		      "__tsan_atomic_signal_fence",
 		      BT_FN_VOID_INT, ATTR_NOTHROW_LEAF_LIST)
+
+/* Undefined Behavior Sanitizer */
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_DIVREM_OVERFLOW,
+		      "__ubsan_handle_divrem_overflow",
+		      BT_FN_VOID_PTR_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_SHIFT_OUT_OF_BOUNDS,
+		      "__ubsan_handle_shift_out_of_bounds",
+		      BT_FN_VOID_PTR_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_BUILTIN_UNREACHABLE,
+		      "__ubsan_handle_builtin_unreachable",
+		      BT_FN_VOID_PTR,
+		      ATTR_COLD_NORETURN_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_MISSING_RETURN,
+		      "__ubsan_handle_missing_return",
+		      BT_FN_VOID_PTR,
+		      ATTR_NORETURN_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_VLA_BOUND_NOT_POSITIVE,
+		      "__ubsan_handle_vla_bound_not_positive",
+		      BT_FN_VOID_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_TYPE_MISMATCH,
+		      "__ubsan_handle_type_mismatch",
+		      BT_FN_VOID_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_ADD_OVERFLOW,
+		      "__ubsan_handle_add_overflow",
+		      BT_FN_VOID_PTR_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_SUB_OVERFLOW,
+		      "__ubsan_handle_sub_overflow",
+		      BT_FN_VOID_PTR_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_MUL_OVERFLOW,
+		      "__ubsan_handle_mul_overflow",
+		      BT_FN_VOID_PTR_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_NEGATE_OVERFLOW,
+		      "__ubsan_handle_negate_overflow",
+		      BT_FN_VOID_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)
+DEF_SANITIZER_BUILTIN(BUILT_IN_UBSAN_HANDLE_LOAD_INVALID_VALUE,
+		      "__ubsan_handle_load_invalid_value",
+		      BT_FN_VOID_PTR_PTR,
+		      ATTR_COLD_NOTHROW_LEAF_LIST)

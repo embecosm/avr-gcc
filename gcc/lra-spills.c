@@ -1,5 +1,5 @@
 /* Change pseudos by memory.
-   Copyright (C) 2010-2013 Free Software Foundation, Inc.
+   Copyright (C) 2010-2014 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -163,7 +163,6 @@ assign_mem_slot (int i)
       x = assign_stack_local (mode, total_size,
 			      min_align > inherent_align
 			      || total_size > inherent_size ? -1 : 0);
-      x = lra_eliminate_regs_1 (x, GET_MODE (x), false, false, true);
       stack_slot = x;
       /* Cancel the big-endian correction done in assign_stack_local.
 	 Get the address of the beginning of the slot.	This is so we
@@ -281,7 +280,7 @@ assign_spill_hard_regs (int *pseudo_regnos, int n)
 	  add_to_hard_reg_set (&reserved_hard_regs[p],
 			       lra_reg_info[i].biggest_mode, hard_regno);
   bitmap_initialize (&ok_insn_bitmap, &reg_obstack);
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     FOR_BB_INSNS (bb, insn)
       if (DEBUG_INSN_P (insn)
 	  || ((set = single_set (insn)) != NULL_RTX
@@ -334,8 +333,8 @@ assign_spill_hard_regs (int *pseudo_regnos, int n)
       for (nr = 0;
 	   nr < hard_regno_nregs[hard_regno][lra_reg_info[regno].biggest_mode];
 	   nr++)
-	/* Just loop.  */;
-      df_set_regs_ever_live (hard_regno + nr, true);
+	/* Just loop.  */
+	df_set_regs_ever_live (hard_regno + nr, true);
     }
   bitmap_clear (&ok_insn_bitmap);
   free (reserved_hard_regs);
@@ -430,8 +429,15 @@ remove_pseudos (rtx *loc, rtx insn)
 	 into scratches back.  */
       && ! lra_former_scratch_p (i))
     {
-      hard_reg = spill_hard_reg[i];
-      *loc = copy_rtx (hard_reg != NULL_RTX ? hard_reg : pseudo_slots[i].mem);
+      if ((hard_reg = spill_hard_reg[i]) != NULL_RTX)
+	*loc = copy_rtx (hard_reg);
+      else
+	{
+	  rtx x = lra_eliminate_regs_1 (insn, pseudo_slots[i].mem,
+					GET_MODE (pseudo_slots[i].mem),
+					false, false, true);
+	  *loc = x != pseudo_slots[i].mem ? x : copy_rtx (x);
+	}
       return;
     }
 
@@ -472,14 +478,35 @@ spill_pseudos (void)
 	  bitmap_ior_into (&changed_insns, &lra_reg_info[i].insn_bitmap);
 	}
     }
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     {
       FOR_BB_INSNS (bb, insn)
 	if (bitmap_bit_p (&changed_insns, INSN_UID (insn)))
 	  {
+	    rtx *link_loc, link;
 	    remove_pseudos (&PATTERN (insn), insn);
 	    if (CALL_P (insn))
 	      remove_pseudos (&CALL_INSN_FUNCTION_USAGE (insn), insn);
+	    for (link_loc = &REG_NOTES (insn);
+		 (link = *link_loc) != NULL_RTX;
+		 link_loc = &XEXP (link, 1))
+	      {
+		switch (REG_NOTE_KIND (link))
+		  {
+		  case REG_FRAME_RELATED_EXPR:
+		  case REG_CFA_DEF_CFA:
+		  case REG_CFA_ADJUST_CFA:
+		  case REG_CFA_OFFSET:
+		  case REG_CFA_REGISTER:
+		  case REG_CFA_EXPRESSION:
+		  case REG_CFA_RESTORE:
+		  case REG_CFA_SET_VDRAP:
+		    remove_pseudos (&XEXP (link, 0), insn);
+		    break;
+		  default:
+		    break;
+		  }
+	      }
 	    if (lra_dump_file != NULL)
 	      fprintf (lra_dump_file,
 		       "Changing spilled pseudos to memory in insn #%u\n",
@@ -618,6 +645,33 @@ alter_subregs (rtx *loc, bool final_p)
   return res;
 }
 
+/* Return true if REGNO is used for return in the current
+   function.  */
+static bool
+return_regno_p (unsigned int regno)
+{
+  rtx outgoing = crtl->return_rtx;
+
+  if (! outgoing)
+    return false;
+
+  if (REG_P (outgoing))
+    return REGNO (outgoing) == regno;
+  else if (GET_CODE (outgoing) == PARALLEL)
+    {
+      int i;
+
+      for (i = 0; i < XVECLEN (outgoing, 0); i++)
+	{
+	  rtx x = XEXP (XVECEXP (outgoing, 0, i), 0);
+
+	  if (REG_P (x) && REGNO (x) == regno)
+	    return true;
+	}
+    }
+  return false;
+}
+
 /* Final change of pseudos got hard registers into the corresponding
    hard registers and removing temporary clobbers.  */
 void
@@ -632,7 +686,7 @@ lra_final_code_change (void)
     if (lra_reg_info[i].nrefs != 0
 	&& (hard_regno = lra_get_regno_hard_regno (i)) >= 0)
       SET_REGNO (regno_reg_rtx[i], hard_regno);
-  FOR_EACH_BB (bb)
+  FOR_EACH_BB_FN (bb, cfun)
     FOR_BB_INSNS_SAFE (bb, insn, curr)
       if (INSN_P (insn))
 	{
@@ -648,6 +702,24 @@ lra_final_code_change (void)
 	      continue;
 	    }
 
+	  /* IRA can generate move insns involving pseudos.  It is
+	     better remove them earlier to speed up compiler a bit.
+	     It is also better to do it here as they might not pass
+	     final RTL check in LRA, (e.g. insn moving a control
+	     register into itself).  So remove an useless move insn
+	     unless next insn is USE marking the return reg (we should
+	     save this as some subsequent optimizations assume that
+	     such original insns are saved).  */
+	  if (NONJUMP_INSN_P (insn) && GET_CODE (pat) == SET
+	      && REG_P (SET_SRC (pat)) && REG_P (SET_DEST (pat))
+	      && REGNO (SET_SRC (pat)) == REGNO (SET_DEST (pat))
+	      && ! return_regno_p (REGNO (SET_SRC (pat))))
+	    {
+	      lra_invalidate_insn_data (insn);
+	      delete_insn (insn);
+	      continue;
+	    }
+	
 	  lra_insn_recog_data_t id = lra_get_insn_recog_data (insn);
 	  struct lra_static_insn_data *static_id = id->insn_static_data;
 	  bool insn_change_p = false;

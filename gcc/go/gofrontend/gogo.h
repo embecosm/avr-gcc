@@ -48,6 +48,7 @@ class Bstatement;
 class Bblock;
 class Bvariable;
 class Blabel;
+class Bfunction;
 
 // This file declares the basic classes used to hold the internal
 // representation of Go which is built by the parser.
@@ -387,6 +388,16 @@ class Gogo
   void
   mark_locals_used();
 
+  // Return a name to use for an error case.  This should only be used
+  // after reporting an error, and is used to avoid useless knockon
+  // errors.
+  static std::string
+  erroneous_name();
+
+  // Return whether the name indicates an error.
+  static bool
+  is_erroneous_name(const std::string&);
+
   // Return a name to use for a thunk function.  A thunk function is
   // one we create during the compilation, for a go statement or a
   // defer statement or a method expression.
@@ -476,6 +487,18 @@ class Gogo
   void
   lower_constant(Named_object*);
 
+  // Flatten all the statements in a block.
+  void
+  flatten_block(Named_object* function, Block*);
+
+  // Flatten an expression.
+  void
+  flatten_expression(Named_object* function, Statement_inserter*, Expression**);
+
+  // Create all necessary function descriptors.
+  void
+  create_function_descriptors();
+
   // Finalize the method lists and build stub methods for named types.
   void
   finalize_methods();
@@ -515,6 +538,10 @@ class Gogo
   // Use temporary variables to force order of evaluation.
   void
   order_evaluations();
+
+  // Flatten parse tree.
+  void
+  flatten();
 
   // Build thunks for functions which call recover.
   void
@@ -561,7 +588,7 @@ class Gogo
 	       tree rettype, ...);
 
   // Build a call to the runtime error function.
-  tree
+  Expression*
   runtime_error(int code, Location);
 
   // Build a builtin struct with a list of fields.
@@ -614,10 +641,6 @@ class Gogo
   receive_from_channel(tree type_tree, tree type_descriptor_tree, tree channel,
 		       Location);
 
-  // Make a trampoline which calls FNADDR passing CLOSURE.
-  tree
-  make_trampoline(tree fnaddr, tree closure, Location);
-
  private:
   // During parsing, we keep a stack of functions.  Each function on
   // the stack is one that we are currently parsing.  For each
@@ -668,10 +691,6 @@ class Gogo
   // to the pointer.
   tree
   ptr_go_string_constant_tree(const std::string&);
-
-  // Return the type of a trampoline.
-  static tree
-  trampoline_type_tree();
 
   // Type used to map import names to packages.
   typedef std::map<std::string, Package*> Imports;
@@ -915,6 +934,14 @@ class Function
   result_variables()
   { return this->results_; }
 
+  bool
+  is_sink() const
+  { return this->is_sink_; }
+
+  void
+  set_is_sink()
+  { this->is_sink_ = true; }
+
   // Whether the result variables have names.
   bool
   results_are_named() const
@@ -936,6 +963,15 @@ class Function
   {
     go_assert(this->is_method());
     this->nointerface_ = true;
+  }
+
+  // Record that this function is a stub method created for an unnamed
+  // type.
+  void
+  set_is_unnamed_type_stub_method()
+  {
+    go_assert(this->is_method());
+    this->is_unnamed_type_stub_method_ = true;
   }
 
   // Add a new field to the closure variable.
@@ -1059,17 +1095,29 @@ class Function
   void
   determine_types();
 
-  // Return the function's decl given an identifier.
-  tree
-  get_or_make_decl(Gogo*, Named_object*, tree id);
+  // Return an expression for the function descriptor, given the named
+  // object for this function.  This may only be called for functions
+  // without a closure.  This will be an immutable struct with one
+  // field that points to the function's code.
+  Expression*
+  descriptor(Gogo*, Named_object*);
+
+  // Set the descriptor for this function.  This is used when a
+  // function declaration is followed by a function definition.
+  void
+  set_descriptor(Expression* descriptor)
+  {
+    go_assert(this->descriptor_ == NULL);
+    this->descriptor_ = descriptor;
+  }
+
+  // Return the backend representation.
+  Bfunction*
+  get_or_make_decl(Gogo*, Named_object*);
 
   // Return the function's decl after it has been built.
   tree
-  get_decl() const
-  {
-    go_assert(this->fndecl_ != NULL);
-    return this->fndecl_;
-  }
+  get_decl() const;
 
   // Set the function decl to hold a tree of the function code.
   void
@@ -1137,22 +1185,29 @@ class Function
   Labels labels_;
   // The number of local types defined in this function.
   unsigned int local_type_count_;
+  // The function descriptor, if any.
+  Expression* descriptor_;
   // The function decl.
-  tree fndecl_;
+  Bfunction* fndecl_;
   // The defer stack variable.  A pointer to this variable is used to
   // distinguish the defer stack for one function from another.  This
   // is NULL unless we actually need a defer stack.
   Temporary_statement* defer_stack_;
+  // True if this function is sink-named.  No code is generated.
+  bool is_sink_ : 1;
   // True if the result variables are named.
-  bool results_are_named_;
+  bool results_are_named_ : 1;
   // True if this method should not be included in the type descriptor.
-  bool nointerface_;
+  bool nointerface_ : 1;
+  // True if this function is a stub method created for an unnamed
+  // type.
+  bool is_unnamed_type_stub_method_ : 1;
   // True if this function calls the predeclared recover function.
-  bool calls_recover_;
+  bool calls_recover_ : 1;
   // True if this a thunk built for a function which calls recover.
-  bool is_recover_thunk_;
+  bool is_recover_thunk_ : 1;
   // True if this function already has a recover thunk.
-  bool has_recover_thunk_;
+  bool has_recover_thunk_ : 1;
   // True if this function should be put in a unique section.  This is
   // turned on for field tracking.
   bool in_unique_section_ : 1;
@@ -1198,7 +1253,8 @@ class Function_declaration
 {
  public:
   Function_declaration(Function_type* fntype, Location location)
-    : fntype_(fntype), location_(location), asm_name_(), fndecl_(NULL)
+    : fntype_(fntype), location_(location), asm_name_(), descriptor_(NULL),
+      fndecl_(NULL)
   { }
 
   Function_type*
@@ -1218,9 +1274,26 @@ class Function_declaration
   set_asm_name(const std::string& asm_name)
   { this->asm_name_ = asm_name; }
 
-  // Return a decl for the function given an identifier.
-  tree
-  get_or_make_decl(Gogo*, Named_object*, tree id);
+  // Return an expression for the function descriptor, given the named
+  // object for this function.  This may only be called for functions
+  // without a closure.  This will be an immutable struct with one
+  // field that points to the function's code.
+  Expression*
+  descriptor(Gogo*, Named_object*);
+
+  // Return true if we have created a descriptor for this declaration.
+  bool
+  has_descriptor() const
+  { return this->descriptor_ != NULL; }
+
+  // Return a backend representation.
+  Bfunction*
+  get_or_make_decl(Gogo*, Named_object*);
+
+  // If there is a descriptor, build it into the backend
+  // representation.
+  void
+  build_backend_descriptor(Gogo*);
 
   // Export a function declaration.
   void
@@ -1235,8 +1308,10 @@ class Function_declaration
   // The assembler name: this is the name to use in references to the
   // function.  This is normally empty.
   std::string asm_name_;
+  // The function descriptor, if any.
+  Expression* descriptor_;
   // The function decl if needed.
-  tree fndecl_;
+  Bfunction* fndecl_;
 };
 
 // A variable.
@@ -1384,6 +1459,10 @@ class Variable
   void
   lower_init_expression(Gogo*, Named_object*, Statement_inserter*);
 
+  // Flatten the initialization expression after ordering evaluations.
+  void
+  flatten_init_expression(Gogo*, Named_object*, Statement_inserter*);
+
   // A special case: the init value is used only to determine the
   // type.  This is used if the variable is defined using := with the
   // comma-ok form of a map index or a receive expression.  The init
@@ -1517,6 +1596,8 @@ class Variable
   bool seen_ : 1;
   // True if we have lowered the initialization expression.
   bool init_is_lowered_ : 1;
+  // True if we have flattened the initialization expression.
+  bool init_is_flattened_ : 1;
   // True if init is a tuple used to set the type.
   bool type_from_init_tuple_ : 1;
   // True if init is a range clause and the type is the index type.
@@ -1630,7 +1711,7 @@ class Named_constant
   Named_constant(Type* type, Expression* expr, int iota_value,
 		 Location location)
     : type_(type), expr_(expr), iota_value_(iota_value), location_(location),
-      lowering_(false)
+      lowering_(false), is_sink_(false)
   { }
 
   Type*
@@ -1663,6 +1744,14 @@ class Named_constant
   void
   clear_lowering()
   { this->lowering_ = false; }
+
+  bool
+  is_sink() const
+  { return this->is_sink_; }
+
+  void
+  set_is_sink()
+  { this->is_sink_ = true; }
 
   // Traverse the expression.
   int
@@ -1699,6 +1788,8 @@ class Named_constant
   Location location_;
   // Whether we are currently lowering this constant.
   bool lowering_;
+  // Whether this constant is blank named and needs only type checking.
+  bool is_sink_;
 };
 
 // A type declaration.
@@ -2117,8 +2208,8 @@ class Named_object
   Bvariable*
   get_backend_variable(Gogo*, Named_object* function);
 
-  // Return a tree for the external identifier for this object.
-  tree
+  // Return the external identifier for this object.
+  std::string
   get_id(Gogo*);
 
   // Return a tree representing this object.

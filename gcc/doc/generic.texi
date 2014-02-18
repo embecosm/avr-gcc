@@ -1,4 +1,4 @@
-@c Copyright (C) 2004-2013 Free Software Foundation, Inc.
+@c Copyright (C) 2004-2014 Free Software Foundation, Inc.
 @c This is part of the GCC manual.
 @c For copying conditions, see the file gcc.texi.
 
@@ -924,6 +924,11 @@ structures, something like the following should be used
    (BASE_STRUCT_CHECK(NODE)->base_struct.fieldname
 @end smallexample
 
+Reading them from the generated @file{all-tree.def} file (which in
+turn includes all the @file{tree.def} files), @file{gencheck.c} is
+used during GCC's build to generate the @code{*_CHECK} macros for all
+tree codes.
+
 @end table
 
 
@@ -1274,6 +1279,7 @@ the byte offset of the field, but should not be used directly; call
 @tindex SAVE_EXPR
 @tindex TARGET_EXPR
 @tindex VA_ARG_EXPR
+@tindex ANNOTATE_EXPR
 
 @table @code
 @item NEGATE_EXPR
@@ -1610,29 +1616,31 @@ of temporaries during the evaluation of that expression should be
 performed immediately after the expression is evaluated.
 
 @item CONSTRUCTOR
-These nodes represent the brace-enclosed initializers for a structure or
-array.  The first operand is reserved for use by the back end.  The
-second operand is a @code{TREE_LIST}.  If the @code{TREE_TYPE} of the
-@code{CONSTRUCTOR} is a @code{RECORD_TYPE} or @code{UNION_TYPE}, then
-the @code{TREE_PURPOSE} of each node in the @code{TREE_LIST} will be a
-@code{FIELD_DECL} and the @code{TREE_VALUE} of each node will be the
-expression used to initialize that field.
+These nodes represent the brace-enclosed initializers for a structure or an
+array.  They contain a sequence of component values made out of a vector of
+constructor_elt, which is a (@code{INDEX}, @code{VALUE}) pair.
 
-If the @code{TREE_TYPE} of the @code{CONSTRUCTOR} is an
-@code{ARRAY_TYPE}, then the @code{TREE_PURPOSE} of each element in the
-@code{TREE_LIST} will be an @code{INTEGER_CST} or a @code{RANGE_EXPR} of
-two @code{INTEGER_CST}s.  A single @code{INTEGER_CST} indicates which
-element of the array (indexed from zero) is being assigned to.  A
-@code{RANGE_EXPR} indicates an inclusive range of elements to
-initialize.  In both cases the @code{TREE_VALUE} is the corresponding
+If the @code{TREE_TYPE} of the @code{CONSTRUCTOR} is a @code{RECORD_TYPE},
+@code{UNION_TYPE} or @code{QUAL_UNION_TYPE} then the @code{INDEX} of each
+node in the sequence will be a @code{FIELD_DECL} and the @code{VALUE} will
+be the expression used to initialize that field.
+
+If the @code{TREE_TYPE} of the @code{CONSTRUCTOR} is an @code{ARRAY_TYPE},
+then the @code{INDEX} of each node in the sequence will be an
+@code{INTEGER_CST} or a @code{RANGE_EXPR} of two @code{INTEGER_CST}s.
+A single @code{INTEGER_CST} indicates which element of the array is being
+assigned to.  A @code{RANGE_EXPR} indicates an inclusive range of elements
+to initialize.  In both cases the @code{VALUE} is the corresponding
 initializer.  It is re-evaluated for each element of a
-@code{RANGE_EXPR}.  If the @code{TREE_PURPOSE} is @code{NULL_TREE}, then
+@code{RANGE_EXPR}.  If the @code{INDEX} is @code{NULL_TREE}, then
 the initializer is for the next available array element.
 
 In the front end, you should not depend on the fields appearing in any
 particular order.  However, in the middle end, fields must appear in
 declaration order.  You should not assume that all fields will be
-represented.  Unrepresented fields will be set to zero.
+represented.  Unrepresented fields will be cleared (zeroed), unless the
+CONSTRUCTOR_NO_CLEARING flag is set, in which case their value becomes
+undefined.
 
 @item COMPOUND_LITERAL_EXPR
 @findex COMPOUND_LITERAL_EXPR_DECL_EXPR
@@ -1687,7 +1695,12 @@ mechanism.  It represents expressions like @code{va_arg (ap, type)}.
 Its @code{TREE_TYPE} yields the tree representation for @code{type} and
 its sole argument yields the representation for @code{ap}.
 
+@item ANNOTATE_EXPR
+This node is used to attach markers to an expression. The first operand
+is the annotated expression, the second is an @code{INTEGER_CST} with
+a value from @code{enum annot_expr_kind}.
 @end table
+
 
 @node Vectors
 @subsection Vectors
@@ -2199,7 +2212,7 @@ regular critical section around the expression is used.
 @item OMP_CLAUSE
 
 Represents clauses associated with one of the @code{OMP_} directives.
-Clauses are represented by separate sub-codes defined in
+Clauses are represented by separate subcodes defined in
 @file{tree.h}.  Clauses codes can be one of:
 @code{OMP_CLAUSE_PRIVATE}, @code{OMP_CLAUSE_SHARED},
 @code{OMP_CLAUSE_FIRSTPRIVATE},
@@ -3154,6 +3167,30 @@ several statements chained together.
 
 Used to represent a @code{break} statement.  There are no additional
 fields.
+
+@item CILK_SPAWN_STMT
+
+Used to represent a spawning function in the Cilk Plus language extension.  
+This tree has one field that holds the name of the spawning function.
+@code{_Cilk_spawn} can be written in C in the following way:
+
+@smallexample
+@code{_Cilk_spawn} <function_name> (<parameters>);
+@end smallexample
+
+Detailed description for usage and functionality of @code{_Cilk_spawn} can be 
+found at http://www.cilkplus.org
+
+@item CILK_SYNC_STMT
+
+This statement is part of the Cilk Plus language extension.  It indicates that
+the current function cannot continue in parallel with its spawned children.  
+There are no additional fields.  @code{_Cilk_sync} can be written in C in the 
+following way:
+
+@smallexample
+@code{_Cilk_sync};
+@end smallexample
 
 @item CLEANUP_STMT
 

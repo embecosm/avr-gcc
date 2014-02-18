@@ -1,5 +1,5 @@
 /* CPU mode switching
-   Copyright (C) 1998-2013 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -211,7 +211,7 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
      fallthrough edge; there can be at most one, but there could be
      none at all, e.g. when exit is called.  */
   pre_exit = 0;
-  FOR_EACH_EDGE (eg, ei, EXIT_BLOCK_PTR->preds)
+  FOR_EACH_EDGE (eg, ei, EXIT_BLOCK_PTR_FOR_FN (cfun)->preds)
     if (eg->flags & EDGE_FALLTHRU)
       {
 	basic_block src_bb = eg->src;
@@ -221,7 +221,7 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 	/* If this function returns a value at the end, we have to
 	   insert the final mode switch before the return value copy
 	   to its hard register.  */
-	if (EDGE_COUNT (EXIT_BLOCK_PTR->preds) == 1
+	if (EDGE_COUNT (EXIT_BLOCK_PTR_FOR_FN (cfun)->preds) == 1
 	    && NONJUMP_INSN_P ((last_insn = BB_END (src_bb)))
 	    && GET_CODE (PATTERN (last_insn)) == USE
 	    && GET_CODE ((ret_reg = XEXP (PATTERN (last_insn), 0))) == REG)
@@ -229,9 +229,9 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 	    int ret_start = REGNO (ret_reg);
 	    int nregs = hard_regno_nregs[ret_start][GET_MODE (ret_reg)];
 	    int ret_end = ret_start + nregs;
-	    int short_block = 0;
-	    int maybe_builtin_apply = 0;
-	    int forced_late_switch = 0;
+	    bool short_block = false;
+	    bool multi_reg_return = false;
+	    bool forced_late_switch = false;
 	    rtx before_return_copy;
 
 	    do
@@ -251,19 +251,20 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 		       copy yet, the copy must have been deleted.  */
 		    if (CALL_P (return_copy))
 		      {
-			short_block = 1;
+			short_block = true;
 			break;
 		      }
 		    return_copy_pat = PATTERN (return_copy);
 		    switch (GET_CODE (return_copy_pat))
 		      {
 		      case USE:
-			/* Skip __builtin_apply pattern.  */
+			/* Skip USEs of multiple return registers.
+			   __builtin_apply pattern is also handled here.  */
 			if (GET_CODE (XEXP (return_copy_pat, 0)) == REG
 			    && (targetm.calls.function_value_regno_p
 				(REGNO (XEXP (return_copy_pat, 0)))))
 			  {
-			    maybe_builtin_apply = 1;
+			    multi_reg_return = true;
 			    last_insn = return_copy;
 			    continue;
 			  }
@@ -326,16 +327,14 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 			   there are no return copy insns at all.  This
 			   avoids an ice on that invalid function.  */
 			if (ret_start + nregs == ret_end)
-			  short_block = 1;
+			  short_block = true;
 			break;
 		      }
 		    if (!targetm.calls.function_value_regno_p (copy_start))
-		      {
-			last_insn = return_copy;
-			continue;
-		      }
-		    copy_num
-		      = hard_regno_nregs[copy_start][GET_MODE (copy_reg)];
+		      copy_num = 0;
+		    else
+		      copy_num
+			= hard_regno_nregs[copy_start][GET_MODE (copy_reg)];
 
 		    /* If the return register is not likely spilled, - as is
 		       the case for floating point on SH4 - then it might
@@ -356,10 +355,10 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 			   another mode than MODE_EXIT, even if it is
 			   unrelated to the return value, so we want to put
 			   the final mode switch after it.  */
-			if (maybe_builtin_apply
+			if (multi_reg_return
 			    && targetm.calls.function_value_regno_p
 			        (copy_start))
-			  forced_late_switch = 1;
+			  forced_late_switch = true;
 
 			/* For the SH4, floating point loads depend on fpscr,
 			   thus we might need to put the final mode switch
@@ -369,14 +368,19 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 			if (copy_start >= ret_start
 			    && copy_start + copy_num <= ret_end
 			    && OBJECT_P (SET_SRC (return_copy_pat)))
-			  forced_late_switch = 1;
+			  forced_late_switch = true;
 			break;
+		      }
+		    if (copy_num == 0)
+		      {
+			last_insn = return_copy;
+			continue;
 		      }
 
 		    if (copy_start >= ret_start
 			&& copy_start + copy_num <= ret_end)
 		      nregs -= copy_num;
-		    else if (!maybe_builtin_apply
+		    else if (!multi_reg_return
 			     || !targetm.calls.function_value_regno_p
 				 (copy_start))
 		      break;
@@ -390,7 +394,7 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 		   isolated use.  */
 		if (return_copy == BB_HEAD (src_bb))
 		  {
-		    short_block = 1;
+		    short_block = true;
 		    break;
 		  }
 		last_insn = return_copy;
@@ -417,7 +421,7 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 			|| (GET_MODE_CLASS (GET_MODE (ret_reg)) != MODE_INT
 			    && nregs != 1));
 
-	    if (INSN_P (last_insn))
+	    if (!NOTE_INSN_BASIC_BLOCK_P (last_insn))
 	      {
 		before_return_copy
 		  = emit_note_before (NOTE_INSN_DELETED, last_insn);
@@ -425,9 +429,8 @@ create_pre_exit (int n_entities, int *entity_map, const int *num_modes)
 		   require a different mode than MODE_EXIT, so if we might
 		   have such instructions, keep them in a separate block
 		   from pre_exit.  */
-		if (last_insn != BB_HEAD (src_bb))
-		  src_bb = split_block (src_bb,
-					PREV_INSN (before_return_copy))->dest;
+		src_bb = split_block (src_bb,
+				      PREV_INSN (before_return_copy))->dest;
 	      }
 	    else
 	      before_return_copy = last_insn;
@@ -477,7 +480,8 @@ optimize_mode_switching (void)
 	entry_exit_extra = 3;
 #endif
 	bb_info[n_entities]
-	  = XCNEWVEC (struct bb_info, last_basic_block + entry_exit_extra);
+	  = XCNEWVEC (struct bb_info,
+		      last_basic_block_for_fn (cfun) + entry_exit_extra);
 	entity_map[n_entities++] = e;
 	if (num_modes[e] > max_num_modes)
 	  max_num_modes = num_modes[e];
@@ -489,7 +493,7 @@ optimize_mode_switching (void)
 #if defined (MODE_ENTRY) && defined (MODE_EXIT)
   /* Split the edge from the entry block, so that we can note that
      there NORMAL_MODE is supplied.  */
-  post_entry = split_edge (single_succ_edge (ENTRY_BLOCK_PTR));
+  post_entry = split_edge (single_succ_edge (ENTRY_BLOCK_PTR_FOR_FN (cfun)));
   pre_exit = create_pre_exit (n_entities, entity_map, num_modes);
 #endif
 
@@ -497,11 +501,11 @@ optimize_mode_switching (void)
 
   /* Create the bitmap vectors.  */
 
-  antic = sbitmap_vector_alloc (last_basic_block, n_entities);
-  transp = sbitmap_vector_alloc (last_basic_block, n_entities);
-  comp = sbitmap_vector_alloc (last_basic_block, n_entities);
+  antic = sbitmap_vector_alloc (last_basic_block_for_fn (cfun), n_entities);
+  transp = sbitmap_vector_alloc (last_basic_block_for_fn (cfun), n_entities);
+  comp = sbitmap_vector_alloc (last_basic_block_for_fn (cfun), n_entities);
 
-  bitmap_vector_ones (transp, last_basic_block);
+  bitmap_vector_ones (transp, last_basic_block_for_fn (cfun));
 
   for (j = n_entities - 1; j >= 0; j--)
     {
@@ -512,7 +516,7 @@ optimize_mode_switching (void)
       /* Determine what the first use (if any) need for a mode of entity E is.
 	 This will be the mode that is anticipatable for this block.
 	 Also compute the initial transparency settings.  */
-      FOR_EACH_BB (bb)
+      FOR_EACH_BB_FN (bb, cfun)
 	{
 	  struct seginfo *ptr;
 	  int last_mode = no_mode;
@@ -568,12 +572,15 @@ optimize_mode_switching (void)
 
 	  info[bb->index].computing = last_mode;
 	  /* Check for blocks without ANY mode requirements.
-	     N.B. because of MODE_AFTER, last_mode might still be different
-	     from no_mode.  */
+	     N.B. because of MODE_AFTER, last_mode might still
+	     be different from no_mode, in which case we need to
+	     mark the block as nontransparent.  */
 	  if (!any_set_required)
 	    {
 	      ptr = new_seginfo (no_mode, BB_END (bb), bb->index, live_now);
 	      add_seginfo (info + bb->index, ptr);
+	      if (last_mode != no_mode)
+		bitmap_clear_bit (transp[bb->index], j);
 	    }
 	}
 #if defined (MODE_ENTRY) && defined (MODE_EXIT)
@@ -602,7 +609,7 @@ optimize_mode_switching (void)
 #endif /* NORMAL_MODE */
     }
 
-  kill = sbitmap_vector_alloc (last_basic_block, n_entities);
+  kill = sbitmap_vector_alloc (last_basic_block_for_fn (cfun), n_entities);
   for (i = 0; i < max_num_modes; i++)
     {
       int current_mode[N_ENTITIES];
@@ -610,14 +617,14 @@ optimize_mode_switching (void)
       sbitmap *insert;
 
       /* Set the anticipatable and computing arrays.  */
-      bitmap_vector_clear (antic, last_basic_block);
-      bitmap_vector_clear (comp, last_basic_block);
+      bitmap_vector_clear (antic, last_basic_block_for_fn (cfun));
+      bitmap_vector_clear (comp, last_basic_block_for_fn (cfun));
       for (j = n_entities - 1; j >= 0; j--)
 	{
 	  int m = current_mode[j] = MODE_PRIORITY_TO_MODE (entity_map[j], i);
 	  struct bb_info *info = bb_info[j];
 
-	  FOR_EACH_BB (bb)
+	  FOR_EACH_BB_FN (bb, cfun)
 	    {
 	      if (info[bb->index].seginfo->mode == m)
 		bitmap_set_bit (antic[bb->index], j);
@@ -630,7 +637,7 @@ optimize_mode_switching (void)
       /* Calculate the optimal locations for the
 	 placement mode switches to modes with priority I.  */
 
-      FOR_EACH_BB (bb)
+      FOR_EACH_BB_FN (bb, cfun)
 	bitmap_not (kill[bb->index], transp[bb->index]);
       edge_list = pre_edge_lcm (n_entities, transp, comp, antic,
 				kill, &insert, &del);
@@ -667,10 +674,12 @@ optimize_mode_switching (void)
 
 	      REG_SET_TO_HARD_REG_SET (live_at_edge, df_get_live_out (src_bb));
 
+	      rtl_profile_for_edge (eg);
 	      start_sequence ();
 	      EMIT_MODE_SET (entity_map[j], mode, live_at_edge);
 	      mode_set = get_insns ();
 	      end_sequence ();
+	      default_rtl_profile ();
 
 	      /* Do not bother to insert empty sequence.  */
 	      if (mode_set == NULL_RTX)
@@ -683,7 +692,7 @@ optimize_mode_switching (void)
 	      insert_insn_on_edge (mode_set, eg);
 	    }
 
-	  FOR_EACH_BB_REVERSE (bb)
+	  FOR_EACH_BB_REVERSE_FN (bb, cfun)
 	    if (bitmap_bit_p (del[bb->index], j))
 	      {
 		make_preds_opaque (bb, j);
@@ -703,7 +712,7 @@ optimize_mode_switching (void)
     {
       int no_mode = num_modes[entity_map[j]];
 
-      FOR_EACH_BB_REVERSE (bb)
+      FOR_EACH_BB_REVERSE_FN (bb, cfun)
 	{
 	  struct seginfo *ptr, *next;
 	  for (ptr = bb_info[j][bb->index].seginfo; ptr; ptr = next)
@@ -713,6 +722,7 @@ optimize_mode_switching (void)
 		{
 		  rtx mode_set;
 
+		  rtl_profile_for_bb (bb);
 		  start_sequence ();
 		  EMIT_MODE_SET (entity_map[j], ptr->mode, ptr->regs_live);
 		  mode_set = get_insns ();
@@ -727,6 +737,8 @@ optimize_mode_switching (void)
 		      else
 			emit_insn_before (mode_set, ptr->insn_ptr);
 		    }
+
+		  default_rtl_profile ();
 		}
 
 	      free (ptr);
@@ -777,23 +789,43 @@ rest_of_handle_mode_switching (void)
 }
 
 
-struct rtl_opt_pass pass_mode_switching =
+namespace {
+
+const pass_data pass_data_mode_switching =
 {
- {
-  RTL_PASS,
-  "mode_sw",                            /* name */
-  OPTGROUP_NONE,                        /* optinfo_flags */
-  gate_mode_switching,                  /* gate */
-  rest_of_handle_mode_switching,        /* execute */
-  NULL,                                 /* sub */
-  NULL,                                 /* next */
-  0,                                    /* static_pass_number */
-  TV_MODE_SWITCH,                       /* tv_id */
-  0,                                    /* properties_required */
-  0,                                    /* properties_provided */
-  0,                                    /* properties_destroyed */
-  0,                                    /* todo_flags_start */
-  TODO_df_finish | TODO_verify_rtl_sharing |
-  0                                     /* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "mode_sw", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_MODE_SWITCH, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  ( TODO_df_finish | TODO_verify_rtl_sharing | 0 ), /* todo_flags_finish */
 };
+
+class pass_mode_switching : public rtl_opt_pass
+{
+public:
+  pass_mode_switching (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_mode_switching, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  /* The epiphany backend creates a second instance of this pass, so we need
+     a clone method.  */
+  opt_pass * clone () { return new pass_mode_switching (m_ctxt); }
+  bool gate () { return gate_mode_switching (); }
+  unsigned int execute () { return rest_of_handle_mode_switching (); }
+
+}; // class pass_mode_switching
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_mode_switching (gcc::context *ctxt)
+{
+  return new pass_mode_switching (ctxt);
+}

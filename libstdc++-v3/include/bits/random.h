@@ -1,6 +1,6 @@
 // random number generation -*- C++ -*-
 
-// Copyright (C) 2009-2013 Free Software Foundation, Inc.
+// Copyright (C) 2009-2014 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -1638,9 +1638,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     union
     {
-    FILE*        _M_file;
-    mt19937      _M_mt;
-  };
+      void*      _M_file;
+      mt19937    _M_mt;
+    };
   };
 
   /* @} */ // group random_generators
@@ -2178,7 +2178,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       result_type
       min() const
-      { return std::numeric_limits<result_type>::min(); }
+      { return std::numeric_limits<result_type>::lowest(); }
 
       /**
        * @brief Returns the least upper bound value of the distribution.
@@ -3011,7 +3011,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       result_type
       min() const
-      { return std::numeric_limits<result_type>::min(); }
+      { return std::numeric_limits<result_type>::lowest(); }
 
       /**
        * @brief Returns the least upper bound value of the distribution.
@@ -3333,7 +3333,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     };
 
   /**
-   * @brief Return true if two Fisher f distributions are diferent.
+   * @brief Return true if two Fisher f distributions are different.
    */
   template<typename _RealType>
     inline bool
@@ -3428,7 +3428,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       result_type
       min() const
-      { return std::numeric_limits<result_type>::min(); }
+      { return std::numeric_limits<result_type>::lowest(); }
 
       /**
        * @brief Returns the least upper bound value of the distribution.
@@ -3978,7 +3978,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       template<typename _UniformRandomNumberGenerator>
 	result_type
-	_M_waiting(_UniformRandomNumberGenerator& __urng, _IntType __t);
+	_M_waiting(_UniformRandomNumberGenerator& __urng,
+		   _IntType __t, double __q);
 
       param_type _M_param;
 
@@ -5135,7 +5136,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       result_type
       min() const
-      { return std::numeric_limits<result_type>::min(); }
+      { return std::numeric_limits<result_type>::lowest(); }
 
       /**
        * @brief Returns the least upper bound value of the distribution.
@@ -5684,11 +5685,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { return __d1._M_param == __d2._M_param; }
 
       /**
-       * @brief Inserts a %piecewise_constan_distribution random
+       * @brief Inserts a %piecewise_constant_distribution random
        *        number distribution @p __x into the output stream @p __os.
        *
        * @param __os An output stream.
-       * @param __x  A %piecewise_constan_distribution random number
+       * @param __x  A %piecewise_constant_distribution random number
        *             distribution.
        *
        * @returns The output stream with the state of @p __x inserted or in
@@ -5700,11 +5701,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		   const std::piecewise_constant_distribution<_RealType1>& __x);
 
       /**
-       * @brief Extracts a %piecewise_constan_distribution random
+       * @brief Extracts a %piecewise_constant_distribution random
        *        number distribution @p __x from the input stream @p __is.
        *
        * @param __is An input stream.
-       * @param __x A %piecewise_constan_distribution random number
+       * @param __x A %piecewise_constant_distribution random number
        *            generator engine.
        *
        * @returns The input stream with @p __x extracted or in an error

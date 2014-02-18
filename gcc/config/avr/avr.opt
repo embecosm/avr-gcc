@@ -1,6 +1,6 @@
 ; Options for the ATMEL AVR port of the compiler.
 
-; Copyright (C) 2005-2013 Free Software Foundation, Inc.
+; Copyright (C) 2005-2014 Free Software Foundation, Inc.
 ;
 ; This file is part of GCC.
 ;
@@ -77,7 +77,7 @@ The device has no SPH special function register. This option will be overridden 
 
 Waddr-space-convert
 Warning C Report Var(avr_warn_addr_space_convert) Init(0)
-Warn if the address space of an address is change.
+Warn if the address space of an address is changed.
 
 mfract-convert-truncate
 Target Report Mask(FRACT_CONV_TRUNC)

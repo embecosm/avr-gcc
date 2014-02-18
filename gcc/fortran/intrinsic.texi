@@ -1,5 +1,5 @@
 @ignore
-Copyright (C) 2005-2013 Free Software Foundation, Inc.
+Copyright (C) 2005-2014 Free Software Foundation, Inc.
 This is part of the GNU Fortran manual.   
 For copying conditions, see the file gfortran.texi.
 
@@ -3461,7 +3461,7 @@ program test_time_and_date
     call date_and_time(TIME=time)
     call date_and_time(VALUES=values)
     print '(a,2x,a,2x,a)', date, time, zone
-    print '(8i5))', values
+    print '(8i5)', values
 end program test_time_and_date
 @end smallexample
 
@@ -10173,9 +10173,12 @@ end program
 Restarts or queries the state of the pseudorandom number generator used by 
 @code{RANDOM_NUMBER}.
 
-If @code{RANDOM_SEED} is called without arguments, it is initialized to
-a default state. The example below shows how to initialize the random 
-seed based on the system's time.
+If @code{RANDOM_SEED} is called without arguments, it is initialized
+to a default state. The example below shows how to initialize the
+random seed with a varying seed in order to ensure a different random
+number sequence for each invocation of the program. Note that setting
+any of the seed values to zero should be avoided as it can result in
+poor quality random numbers being generated.
 
 @item @emph{Standard}:
 Fortran 95 and later
@@ -10203,20 +10206,53 @@ the @var{SIZE} argument.
 
 @item @emph{Example}:
 @smallexample
-SUBROUTINE init_random_seed()
-  INTEGER :: i, n, clock
-  INTEGER, DIMENSION(:), ALLOCATABLE :: seed
-
-  CALL RANDOM_SEED(size = n)
-  ALLOCATE(seed(n))
-
-  CALL SYSTEM_CLOCK(COUNT=clock)
-
-  seed = clock + 37 * (/ (i - 1, i = 1, n) /)
-  CALL RANDOM_SEED(PUT = seed)
-
-  DEALLOCATE(seed)
-END SUBROUTINE
+subroutine init_random_seed()
+  implicit none
+  integer, allocatable :: seed(:)
+  integer :: i, n, un, istat, dt(8), pid, t(2), s
+  integer(8) :: count, tms
+  
+  call random_seed(size = n)
+  allocate(seed(n))
+  ! First try if the OS provides a random number generator
+  open(newunit=un, file="/dev/urandom", access="stream", &
+       form="unformatted", action="read", status="old", iostat=istat)
+  if (istat == 0) then
+     read(un) seed
+     close(un)
+  else
+     ! Fallback to XOR:ing the current time and pid. The PID is
+     ! useful in case one launches multiple instances of the same
+     ! program in parallel.
+     call system_clock(count)
+     if (count /= 0) then
+        t = transfer(count, t)
+     else
+        call date_and_time(values=dt)
+        tms = (dt(1) - 1970) * 365_8 * 24 * 60 * 60 * 1000 &
+             + dt(2) * 31_8 * 24 * 60 * 60 * 1000 &
+             + dt(3) * 24 * 60 * 60 * 60 * 1000 &
+             + dt(5) * 60 * 60 * 1000 &
+             + dt(6) * 60 * 1000 + dt(7) * 1000 &
+             + dt(8)
+        t = transfer(tms, t)
+     end if
+     s = ieor(t(1), t(2))
+     pid = getpid() + 1099279 ! Add a prime
+     s = ieor(s, pid)
+     if (n >= 3) then
+        seed(1) = t(1) + 36269
+        seed(2) = t(2) + 72551
+        seed(3) = pid
+        if (n > 3) then
+           seed(4:) = s + 37 * (/ (i, i = 0, n - 4) /)
+        end if
+     else 
+        seed = s + 37 * (/ (i, i = 0, n - 1 ) /)
+     end if
+  end if
+  call random_seed(put=seed)
+end subroutine init_random_seed
 @end smallexample
 
 @item @emph{See also}:
@@ -13141,7 +13177,7 @@ Both are equivalent to the value @code{NULL} in C.
 @section OpenMP Modules @code{OMP_LIB} and @code{OMP_LIB_KINDS}
 @table @asis
 @item @emph{Standard}:
-OpenMP Application Program Interface v3.1
+OpenMP Application Program Interface v4.0
 @end table
 
 
@@ -13154,8 +13190,8 @@ the named constants defined in the modules are listed
 below.
 
 For details refer to the actual
-@uref{http://www.openmp.org/mp-documents/spec31.pdf,
-OpenMP Application Program Interface v3.1}.
+@uref{http://www.openmp.org/mp-documents/OpenMP4.0.0.pdf,
+OpenMP Application Program Interface v4.0}.
 
 @code{OMP_LIB_KINDS} provides the following scalar default-integer
 named constants:
@@ -13163,15 +13199,17 @@ named constants:
 @table @asis
 @item @code{omp_lock_kind}
 @item @code{omp_nest_lock_kind}
+@item @code{omp_proc_bind_kind}
 @item @code{omp_sched_kind}
 @end table
 
 @code{OMP_LIB} provides the scalar default-integer
 named constant @code{openmp_version} with a value of the form
 @var{yyyymm}, where @code{yyyy} is the year and @var{mm} the month
-of the OpenMP version; for OpenMP v3.1 the value is @code{201107}.
+of the OpenMP version; for OpenMP v3.1 the value is @code{201107}
+and for OpenMP v4.0 the value is @code{201307}.
 
-And the following scalar integer named constants of the
+The following scalar integer named constants of the
 kind @code{omp_sched_kind}:
 
 @table @asis
@@ -13179,4 +13217,15 @@ kind @code{omp_sched_kind}:
 @item @code{omp_sched_dynamic}
 @item @code{omp_sched_guided}
 @item @code{omp_sched_auto}
+@end table
+
+And the following scalar integer named constants of the 
+kind @code{omp_proc_bind_kind}:
+
+@table @asis
+@item @code{omp_proc_bind_false}
+@item @code{omp_proc_bind_true}
+@item @code{omp_proc_bind_master}
+@item @code{omp_proc_bind_close}
+@item @code{omp_proc_bind_spread}
 @end table

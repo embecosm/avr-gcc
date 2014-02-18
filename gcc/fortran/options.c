@@ -1,5 +1,5 @@
 /* Parse and display command line options.
-   Copyright (C) 2000-2013 Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -109,6 +109,7 @@ gfc_init_options (unsigned int decoded_options_count,
   gfc_option.warn_align_commons = 1;
   gfc_option.warn_real_q_constant = 0;
   gfc_option.warn_unused_dummy_argument = 0;
+  gfc_option.warn_zerotrip = 0;
   gfc_option.warn_realloc_lhs = 0;
   gfc_option.warn_realloc_lhs_all = 0;
   gfc_option.warn_compare_reals = 0;
@@ -161,6 +162,10 @@ gfc_init_options (unsigned int decoded_options_count,
   gfc_option.flag_frontend_optimize = -1;
   
   gfc_option.fpe = 0;
+  /* All except GFC_FPE_INEXACT.  */
+  gfc_option.fpe_summary = GFC_FPE_INVALID | GFC_FPE_DENORMAL
+			   | GFC_FPE_ZERO | GFC_FPE_OVERFLOW
+			   | GFC_FPE_UNDERFLOW;
   gfc_option.rtcheck = 0;
   gfc_option.coarray = GFC_FCOARRAY_NONE;
 
@@ -462,6 +467,7 @@ set_Wall (int setting)
   gfc_option.warn_real_q_constant = setting;
   gfc_option.warn_unused_dummy_argument = setting;
   gfc_option.warn_target_lifetime = setting;
+  gfc_option.warn_zerotrip = setting;
 
   warn_return_type = setting;
   warn_uninitialized = setting;
@@ -492,8 +498,10 @@ gfc_handle_module_path_options (const char *arg)
 }
 
 
+/* Handle options -ffpe-trap= and -ffpe-summary=.  */
+
 static void
-gfc_handle_fpe_trap_option (const char *arg)
+gfc_handle_fpe_option (const char *arg, bool trap)
 {
   int result, pos = 0, n;
   /* precision is a backwards compatibility alias for inexact.  */
@@ -505,7 +513,11 @@ gfc_handle_fpe_trap_option (const char *arg)
 				       GFC_FPE_UNDERFLOW, GFC_FPE_INEXACT,
 				       GFC_FPE_INEXACT,
 				       0 };
- 
+
+  /* As the default for -ffpe-summary= is nonzero, set it to 0. */
+  if (!trap)
+    gfc_option.fpe_summary = 0;
+
   while (*arg)
     {
       while (*arg == ',')
@@ -515,19 +527,42 @@ gfc_handle_fpe_trap_option (const char *arg)
 	pos++;
 
       result = 0;
-      for (n = 0; exception[n] != NULL; n++)
+      if (!trap && strncmp ("none", arg, pos) == 0)
 	{
+	  gfc_option.fpe_summary = 0;
+	  arg += pos;
+	  pos = 0;
+	  continue;
+	}
+      else if (!trap && strncmp ("all", arg, pos) == 0)
+	{
+	  gfc_option.fpe_summary = GFC_FPE_INVALID | GFC_FPE_DENORMAL
+				   | GFC_FPE_ZERO | GFC_FPE_OVERFLOW
+				   | GFC_FPE_UNDERFLOW | GFC_FPE_INEXACT;
+	  arg += pos;
+	  pos = 0;
+	  continue;
+	}
+      else
+	for (n = 0; exception[n] != NULL; n++)
+	  {
 	  if (exception[n] && strncmp (exception[n], arg, pos) == 0)
 	    {
-	      gfc_option.fpe |= opt_exception[n];
+	      if (trap)
+		gfc_option.fpe |= opt_exception[n];
+	      else
+		gfc_option.fpe_summary |= opt_exception[n];
 	      arg += pos;
 	      pos = 0;
 	      result = 1;
 	      break;
 	    }
-	}
-      if (!result)
+	  }
+      if (!result && !trap)
 	gfc_fatal_error ("Argument to -ffpe-trap is not valid: %s", arg);
+      else if (!result)
+	gfc_fatal_error ("Argument to -ffpe-summary is not valid: %s", arg);
+
     }
 }
 
@@ -714,6 +749,10 @@ gfc_handle_option (size_t scode, const char *arg, int value,
       gfc_option.warn_unused_dummy_argument = value;
       break;
 
+    case OPT_Wzerotrip:
+      gfc_option.warn_zerotrip = value;
+      break;
+
     case OPT_fall_intrinsics:
       gfc_option.flag_all_intrinsics = 1;
       break;
@@ -795,6 +834,10 @@ gfc_handle_option (size_t scode, const char *arg, int value,
 
     case OPT_fopenmp:
       gfc_option.gfc_flag_openmp = value;
+      break;
+
+    case OPT_fopenmp_simd:
+      gfc_option.gfc_flag_openmp_simd = value;
       break;
 
     case OPT_ffree_line_length_none:
@@ -981,7 +1024,11 @@ gfc_handle_option (size_t scode, const char *arg, int value,
       break;
 
     case OPT_ffpe_trap_:
-      gfc_handle_fpe_trap_option (arg);
+      gfc_handle_fpe_option (arg, true);
+      break;
+
+    case OPT_ffpe_summary_:
+      gfc_handle_fpe_option (arg, false);
       break;
 
     case OPT_std_f95:
@@ -1122,6 +1169,10 @@ gfc_get_option_string (void)
   unsigned j;
   size_t len, pos;
   char *result;
+
+  /* Allocate and return a one-character string with '\0'.  */
+  if (!save_decoded_options_count)
+    return XCNEWVEC (char, 1);
 
   /* Determine required string length.  */
 

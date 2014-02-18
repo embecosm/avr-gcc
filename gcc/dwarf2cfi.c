@@ -1,5 +1,5 @@
 /* Dwarf2 Call Frame Information helper routines.
-   Copyright (C) 1992-2013 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -24,6 +24,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "version.h"
 #include "flags.h"
 #include "rtl.h"
+#include "tree.h"
+#include "stor-layout.h"
 #include "function.h"
 #include "basic-block.h"
 #include "dwarf2.h"
@@ -246,7 +248,8 @@ init_return_column_size (enum machine_mode mode, rtx mem, unsigned int c)
 {
   HOST_WIDE_INT offset = c * GET_MODE_SIZE (mode);
   HOST_WIDE_INT size = GET_MODE_SIZE (Pmode);
-  emit_move_insn (adjust_address (mem, mode, offset), GEN_INT (size));
+  emit_move_insn (adjust_address (mem, mode, offset),
+		  gen_int_mode (size, mode));
 }
 
 /* Generate code to initialize the register size table.  */
@@ -457,9 +460,9 @@ update_row_reg_save (dw_cfi_row *row, unsigned column, dw_cfi_ref cfi)
    descriptor sequence.  */
 
 static void
-get_cfa_from_loc_descr (dw_cfa_location *cfa, struct dw_loc_descr_struct *loc)
+get_cfa_from_loc_descr (dw_cfa_location *cfa, struct dw_loc_descr_node *loc)
 {
-  struct dw_loc_descr_struct *ptr;
+  struct dw_loc_descr_node *ptr;
   cfa->offset = 0;
   cfa->base_offset = 0;
   cfa->indirect = 0;
@@ -752,7 +755,7 @@ def_cfa_0 (dw_cfa_location *old_cfa, dw_cfa_location *new_cfa)
       /* Construct a DW_CFA_def_cfa_expression instruction to
 	 calculate the CFA using a full location expression since no
 	 register-offset pair is available.  */
-      struct dw_loc_descr_struct *loc_list;
+      struct dw_loc_descr_node *loc_list;
 
       cfi->dw_cfi_opc = DW_CFA_def_cfa_expression;
       loc_list = build_cfa_loc (new_cfa, 0);
@@ -903,6 +906,7 @@ notice_eh_throw (rtx insn)
 static inline unsigned
 dwf_regno (const_rtx reg)
 {
+  gcc_assert (REGNO (reg) < FIRST_PSEUDO_REGISTER);
   return DWARF_FRAME_REGNUM (REGNO (reg));
 }
 
@@ -1145,18 +1149,15 @@ dwarf2out_frame_debug_cfa_offset (rtx set)
   else
     {
       /* We have a PARALLEL describing where the contents of SRC live.
-   	 Queue register saves for each piece of the PARALLEL.  */
-      int par_index;
-      int limit;
+   	 Adjust the offset for each piece of the PARALLEL.  */
       HOST_WIDE_INT span_offset = offset;
 
       gcc_assert (GET_CODE (span) == PARALLEL);
 
-      limit = XVECLEN (span, 0);
-      for (par_index = 0; par_index < limit; par_index++)
+      const int par_len = XVECLEN (span, 0);
+      for (int par_index = 0; par_index < par_len; par_index++)
 	{
 	  rtx elem = XVECEXP (span, 0, par_index);
-
 	  sregno = dwf_regno (src);
 	  reg_save (sregno, INVALID_REGNUM, span_offset);
 	  span_offset += GET_MODE_SIZE (GET_MODE (elem));
@@ -1225,10 +1226,31 @@ dwarf2out_frame_debug_cfa_expression (rtx set)
 static void
 dwarf2out_frame_debug_cfa_restore (rtx reg)
 {
-  unsigned int regno = dwf_regno (reg);
+  gcc_assert (REG_P (reg));
 
-  add_cfi_restore (regno);
-  update_row_reg_save (cur_row, regno, NULL);
+  rtx span = targetm.dwarf_register_span (reg);
+  if (!span)
+    {
+      unsigned int regno = dwf_regno (reg);
+      add_cfi_restore (regno);
+      update_row_reg_save (cur_row, regno, NULL);
+    }
+  else
+    {
+      /* We have a PARALLEL describing where the contents of REG live.
+	 Restore the register for each piece of the PARALLEL.  */
+      gcc_assert (GET_CODE (span) == PARALLEL);
+
+      const int par_len = XVECLEN (span, 0);
+      for (int par_index = 0; par_index < par_len; par_index++)
+	{
+	  reg = XVECEXP (span, 0, par_index);
+	  gcc_assert (REG_P (reg));
+	  unsigned int regno = dwf_regno (reg);
+	  add_cfi_restore (regno);
+	  update_row_reg_save (cur_row, regno, NULL);
+	}
+    }
 }
 
 /* A subroutine of dwarf2out_frame_debug, process a REG_CFA_WINDOW_SAVE.
@@ -1880,23 +1902,23 @@ dwarf2out_frame_debug_expr (rtx expr)
 	    }
 	}
 
-      span = NULL;
       if (REG_P (src))
 	span = targetm.dwarf_register_span (src);
+      else
+	span = NULL;
+
       if (!span)
 	queue_reg_save (src, NULL_RTX, offset);
       else
 	{
 	  /* We have a PARALLEL describing where the contents of SRC live.
 	     Queue register saves for each piece of the PARALLEL.  */
-	  int par_index;
-	  int limit;
 	  HOST_WIDE_INT span_offset = offset;
 
 	  gcc_assert (GET_CODE (span) == PARALLEL);
 
-	  limit = XVECLEN (span, 0);
-	  for (par_index = 0; par_index < limit; par_index++)
+	  const int par_len = XVECLEN (span, 0);
+	  for (int par_index = 0; par_index < par_len; par_index++)
 	    {
 	      rtx elem = XVECEXP (span, 0, par_index);
 	      queue_reg_save (elem, NULL_RTX, span_offset);
@@ -2840,14 +2862,14 @@ create_cie_data (void)
   dw_stack_pointer_regnum = DWARF_FRAME_REGNUM (STACK_POINTER_REGNUM);
   dw_frame_pointer_regnum = DWARF_FRAME_REGNUM (HARD_FRAME_POINTER_REGNUM);
 
-  memset (&cie_trace, 0, sizeof(cie_trace));
+  memset (&cie_trace, 0, sizeof (cie_trace));
   cur_trace = &cie_trace;
 
   add_cfi_vec = &cie_cfi_vec;
   cie_cfi_row = cur_row = new_cfi_row ();
 
   /* On entry, the Canonical Frame Address is at SP.  */
-  memset(&loc, 0, sizeof (loc));
+  memset (&loc, 0, sizeof (loc));
   loc.reg = dw_stack_pointer_regnum;
   loc.offset = INCOMING_FRAME_SP_OFFSET;
   def_cfa_1 (&loc);
@@ -3267,7 +3289,7 @@ dump_cfi_row (FILE *f, dw_cfi_row *row)
   if (!cfi)
     {
       dw_cfa_location dummy;
-      memset(&dummy, 0, sizeof(dummy));
+      memset (&dummy, 0, sizeof (dummy));
       dummy.reg = INVALID_REGNUM;
       cfi = def_cfa_0 (&dummy, &row->cfa);
     }
@@ -3370,24 +3392,42 @@ gate_dwarf2_frame (void)
   return dwarf2out_do_frame ();
 }
 
-struct rtl_opt_pass pass_dwarf2_frame =
+namespace {
+
+const pass_data pass_data_dwarf2_frame =
 {
- {
-  RTL_PASS,
-  "dwarf2",			/* name */
-  OPTGROUP_NONE,                /* optinfo_flags */
-  gate_dwarf2_frame,		/* gate */
-  execute_dwarf2_frame,		/* execute */
-  NULL,				/* sub */
-  NULL,				/* next */
-  0,				/* static_pass_number */
-  TV_FINAL,			/* tv_id */
-  0,				/* properties_required */
-  0,				/* properties_provided */
-  0,				/* properties_destroyed */
-  0,				/* todo_flags_start */
-  0				/* todo_flags_finish */
- }
+  RTL_PASS, /* type */
+  "dwarf2", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_gate */
+  true, /* has_execute */
+  TV_FINAL, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
 };
+
+class pass_dwarf2_frame : public rtl_opt_pass
+{
+public:
+  pass_dwarf2_frame (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_dwarf2_frame, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  bool gate () { return gate_dwarf2_frame (); }
+  unsigned int execute () { return execute_dwarf2_frame (); }
+
+}; // class pass_dwarf2_frame
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_dwarf2_frame (gcc::context *ctxt)
+{
+  return new pass_dwarf2_frame (ctxt);
+}
 
 #include "gt-dwarf2cfi.h"
