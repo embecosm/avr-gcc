@@ -6391,6 +6391,32 @@ package body Exp_Util is
       end case;
    end Process_Statements_For_Controlled_Objects;
 
+   ------------------
+   -- Power_Of_Two --
+   ------------------
+
+   function Power_Of_Two (N : Node_Id) return Nat is
+      Typ : constant Entity_Id := Etype (N);
+      pragma Assert (Is_Integer_Type (Typ));
+      Siz : constant Nat := UI_To_Int (Esize (Typ));
+      Val : Uint;
+
+   begin
+      if not Compile_Time_Known_Value (N) then
+         return 0;
+
+      else
+         Val := Expr_Value (N);
+         for J in 1 .. Siz - 1 loop
+            if Val = Uint_2 ** J then
+               return J;
+            end if;
+         end loop;
+
+         return 0;
+      end if;
+   end Power_Of_Two;
+
    ----------------------
    -- Remove_Init_Call --
    ----------------------
@@ -6972,17 +6998,28 @@ package body Exp_Util is
       Scope_Suppress.Suppress := (others => True);
 
       --  If it is a scalar type and we need to capture the value, just make
-      --  a copy. Likewise for a function call, an attribute reference, an
-      --  allocator, or an operator. And if we have a volatile reference and
-      --  Name_Req is not set (see comments above for Side_Effect_Free).
+      --  a copy. Likewise for a function call, an attribute reference, a
+      --  conditional expression, an allocator, or an operator. And if we have
+      --  a volatile reference and Name_Req is not set (see comments above for
+      --  Side_Effect_Free).
 
       if Is_Elementary_Type (Exp_Type)
+
+        --  Note: this test is rather mysterious??? Why can't we just test ONLY
+        --  Is_Elementary_Type and be done with it. If we try that approach, we
+        --  get some failures (infinite recursions) from the Duplicate_Subexpr
+        --  call at the end of Checks.Apply_Predicate_Check. To be
+        --  investigated ???
+
         and then (Variable_Ref
-                   or else Nkind_In (Exp, N_Function_Call,
-                                          N_Attribute_Reference,
-                                          N_Allocator)
+                   or else Nkind_In (Exp, N_Attribute_Reference,
+                                          N_Allocator,
+                                          N_Case_Expression,
+                                          N_If_Expression,
+                                          N_Function_Call)
                    or else Nkind (Exp) in N_Op
-                   or else (not Name_Req and then Is_Volatile_Reference (Exp)))
+                   or else (not Name_Req
+                             and then Is_Volatile_Reference (Exp)))
       then
          Def_Id := Make_Temporary (Loc, 'R', Exp);
          Set_Etype (Def_Id, Exp_Type);
@@ -7230,6 +7267,7 @@ package body Exp_Util is
          E := Exp;
          if Nkind (E) = N_Explicit_Dereference then
             New_Exp := Relocate_Node (Prefix (E));
+
          else
             E := Relocate_Node (E);
 
