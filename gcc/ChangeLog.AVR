@@ -1,3 +1,11 @@
+2014-02-19  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_can_eliminate): Allow elimination from
+	ARG_POINTER_REGNUM
+	to STACK_POINTER_REGNUM if !frame_pointer_needed.
+	* config/avr/avr.h (ELIMINABLE_REGS): Add elimination from
+	ARG_POINTER_REGNUM to STACK_POINTER_REGNUM.
+
 2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.h (WCHAR_TYPE, WINT_TYPE): Define to "int".
