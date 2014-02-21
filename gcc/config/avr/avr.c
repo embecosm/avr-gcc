@@ -8489,14 +8489,20 @@ avr_asm_function_rodata_section (tree decl)
             {
               const char *rname = ACONCAT ((new_prefix,
                                             name + strlen (old_prefix), NULL));
-#if 0
-              flags &= ~SECTION_CODE;
-              flags |= AVR_HAVE_JMP_CALL ? 0 : SECTION_CODE;
-#else
-	      /* The flags have to match the existing section where the
-		 function proper went.  */
-              flags |= SECTION_CODE;
-#endif
+	      if (i == 0)
+		{
+		  flags &= ~SECTION_CODE;
+		  flags |= AVR_HAVE_JMP_CALL ? 0 : SECTION_CODE;
+		}
+	      else
+		{
+		  /* The flags have to match the existing section where the
+		     function proper went, lest varasm.c:get_section will
+		     complain: ...include/bits/locale_facets_nonio.tcc:
+		     In member function '<447 chars of c++ name>':
+		      <447 chars of c++ name> causes a section type conflict  */
+		  flags |= SECTION_CODE;
+		}
 
               return get_section (rname, flags, frodata->named.decl);
             }
