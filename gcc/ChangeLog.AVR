@@ -1,3 +1,8 @@
+2014-03-05  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (TARGET_UNWIND_WORD_MODE): Define.
+	(avr_unwind_word_mode): New function.
+
 2014-02-21  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.c (avr_asm_function_rodata_section):

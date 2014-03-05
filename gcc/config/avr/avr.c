@@ -12524,6 +12524,16 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
 #undef  TARGET_PRINT_OPERAND_PUNCT_VALID_P
 #define TARGET_PRINT_OPERAND_PUNCT_VALID_P avr_print_operand_punct_valid_p
 
+#undef  TARGET_UNWIND_WORD_MODE
+#define TARGET_UNWIND_WORD_MODE avr_unwind_word_mode
+
+static enum machine_mode
+avr_unwind_word_mode (void)
+{
+  return Pmode;
+}
+
+
 struct gcc_target targetm = TARGET_INITIALIZER;
 
 
