@@ -347,7 +347,7 @@ avr_cpu_cpp_builtins (struct cpp_reader *pfile)
   if (TARGET_NO_INTERRUPTS)
     cpp_define (pfile, "__NO_INTERRUPTS__");
 
-  if (avr_current_device->errata_skip)
+  if (TARGET_SKIP_BUG)
     {
       cpp_define (pfile, "__AVR_ERRATA_SKIP__");
 
@@ -375,7 +375,7 @@ avr_cpu_cpp_builtins (struct cpp_reader *pfile)
             /* Only supply __FLASH<n> macro if the address space is reasonable
                for this target.  The address space qualifier itself is still
                supported, but using it will throw an error.  */
-            && avr_addrspace[i].segment < avr_current_device->n_flash)
+            && avr_addrspace[i].segment < avr_n_flash)
           {
             const char *name = avr_addrspace[i].name;
             char *Name = (char*) alloca (1 + strlen (name));

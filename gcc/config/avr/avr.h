@@ -75,6 +75,7 @@ enum
 
 /* Handling of 8-bit SP versus 16-bit SP is as follows:
 
+FIXME: DRIVER_SELF_SPECS has changed.
    -msp8 is used internally to select the right multilib for targets with
    8-bit SP.  -msp8 is set automatically by DRIVER_SELF_SPECS for devices
    with 8-bit SP or by multilib generation machinery.  If a frame pointer is
@@ -504,7 +505,7 @@ extern const char *avr_device_to_sp8 (int argc, const char **argv);
   { "device_to_devicelib", avr_device_to_devicelib },   \
   { "device_to_sp8", avr_device_to_sp8 },
 
-#define DRIVER_SELF_SPECS " %:device_to_sp8(%{mmcu=*:%*}) "
+#define DRIVER_SELF_SPECS " %{mmcu=*:-specs=device-specs/specs-%*%s %<mmcu=*} "
 #define CPP_SPEC ""
 
 #define CC1_SPEC ""

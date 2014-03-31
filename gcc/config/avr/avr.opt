@@ -23,8 +23,16 @@ Target Report Mask(CALL_PROLOGUES)
 Use subroutines for function prologues and epilogues
 
 mmcu=
-Target RejectNegative Joined Var(avr_mcu_index) Init(0) Enum(avr_mcu)
+Target RejectNegative Joined Var(avr_mcu_string) Init("avr2")
 -mmcu=MCU	Select the target MCU
+
+mn-flash=
+Target RejectNegative Joined Var(avr_n_flash) UInteger Init(-1)
+Set the number of 64 KiB flash segments
+
+mskip-bug
+Target Report Mask(SKIP_BUG)
+Indicate presence of a processor erratum
 
 mdeb
 Target Report Undocumented Mask(ALL_DEBUG)

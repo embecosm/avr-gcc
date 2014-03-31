@@ -323,8 +323,20 @@ avr_option_override (void)
   if (flag_pie == 2)
     warning (OPT_fPIE, "-fPIE is not supported");
 
-  avr_current_device = &avr_mcu_types[avr_mcu_index];
+  /* Search for mcu arch.  Should we speed this up, e.g. with a hash table?  */
+
+  for (avr_current_device = avr_mcu_types; ; avr_current_device++)
+    {
+      if (!avr_current_device->name)
+	fatal_error ("mcu not found");
+      if (!avr_current_device->macro
+	  && strcmp (avr_current_device->name, avr_mcu_string) == 0)
+	break;
+    }
+
   avr_current_arch = &avr_arch_types[avr_current_device->arch];
+  if (avr_n_flash < 0)
+    avr_n_flash = avr_current_device->n_flash;
 
   /* RAM addresses of some SFRs common to all devices in respective arch. */
 
@@ -2748,7 +2760,7 @@ avr_xload_libgcc_p (enum machine_mode mode)
   int n_bytes = GET_MODE_SIZE (mode);
 
   return (n_bytes > 1
-          || avr_current_device->n_flash > 1);
+          || avr_n_flash > 1);
 }
 
 
@@ -8209,7 +8221,7 @@ avr_nonconst_pointer_addrspace (tree typ)
 
       if (!ADDR_SPACE_GENERIC_P (as)
           && (!TYPE_READONLY (target)
-              || avr_addrspace[as].segment >= avr_current_device->n_flash))
+              || avr_addrspace[as].segment >= avr_n_flash))
         {
           return as;
         }
@@ -8273,7 +8285,7 @@ avr_pgm_check_var_decl (tree node)
 
   if (reason)
     {
-      if (avr_addrspace[as].segment >= avr_current_device->n_flash)
+      if (avr_addrspace[as].segment >= avr_n_flash)
         {
           if (TYPE_P (node))
             error ("%qT uses address space %qs beyond flash of %qs",
@@ -8325,7 +8337,7 @@ avr_insert_attributes (tree node, tree *attributes)
 
       as = TYPE_ADDR_SPACE (TREE_TYPE (node));
 
-      if (avr_addrspace[as].segment >= avr_current_device->n_flash)
+      if (avr_addrspace[as].segment >= avr_n_flash)
         {
           error ("variable %q+D located in address space %qs"
                  " beyond flash of %qs",
@@ -10116,7 +10128,7 @@ test_hard_reg_class (enum reg_class rclass, rtx x)
 static bool
 avr_2word_insn_p (rtx insn)
 {
-  if (avr_current_device->errata_skip
+  if (TARGET_SKIP_BUG
       || !insn
       || 2 != get_attr_length (insn))
     {
@@ -11153,7 +11165,7 @@ avr_emit_movmemhi (rtx *xop)
       int segment = avr_addrspace[as].segment;
 
       if (segment
-          && avr_current_device->n_flash > 1)
+          && avr_n_flash > 1)
         {
           a_hi8 = GEN_INT (segment);
           emit_move_insn (rampz_rtx, a_hi8 = copy_to_mode_reg (QImode, a_hi8));

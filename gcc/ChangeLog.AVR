@@ -1,3 +1,26 @@
+2014-03-31  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* confit/avr/avr.opt (mmcu=): Change to have a string value.
+	(mn-flash=, mskip-bug): New options.
+	* config/avr/avr.h (DRIVER_SELF_SPECS): Translare -mmcu into a
+	-specs option.
+	* config/avr/gen-avr-mmcu-specs.c: New file.
+	* config/avr/t-avr (gen-avr-mmcu-specs$(build_exeext)): New rule.
+	(s-device-specs): Likewise.
+	(GCC_PASSES): Add s-device-specs.
+	(install-driver): Depend on install-device-specs.
+	(install-device-specs): New rule.
+	* config/avr/avr.c (avr_option_override): Look of mcu arch by base
+	mcu name and provide fallback initialization for avr_n_flash.
+	(avr_xload_libgcc_p, avr_nonconst_pointer_addrspace):  Use
+	avr_n_flash instead of avr_current_device->n_flash.
+	(avr_pgm_check_var_decl, avr_insert_attributes): Likewise.
+	(avr_emit_movmemhi): Likewise.
+	* config/avr/avr-c.c (avr_cpu_cpp_builtins): Likewise.
+	Use TARGET_SKIP_BUG instead of avr_current_device->errata_skip.
+	* config/avr/avr.c (avr_2word_insn_p): Likewise.
+	* config/avr/avr.md (*cpse.ne): Likewise.
+
 2014-02-19  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.c (avr_can_eliminate): Allow elimination from
