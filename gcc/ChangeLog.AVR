@@ -1,8 +1,8 @@
 2014-03-31  Joern Rennecke  <joern.rennecke@embecosm.com>
 
-	* confit/avr/avr.opt (mmcu=): Change to have a string value.
+	* config/avr/avr.opt (mmcu=): Change to have a string value.
 	(mn-flash=, mskip-bug): New options.
-	* config/avr/avr.h (DRIVER_SELF_SPECS): Translare -mmcu into a
+	* config/avr/avr.h (DRIVER_SELF_SPECS): Translate -mmcu into a
 	-specs option.
 	* config/avr/gen-avr-mmcu-specs.c: New file.
 	* config/avr/t-avr (gen-avr-mmcu-specs$(build_exeext)): New rule.
