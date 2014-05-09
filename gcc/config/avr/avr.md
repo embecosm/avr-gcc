@@ -575,7 +575,7 @@
   ""
   {
     rtx dest = operands[0];
-    rtx src  = operands[1];
+    rtx src  = avr_eval_addr_attrib (operands[1]);
 
     if (avr_mem_flash_p (dest))
       DONE;
