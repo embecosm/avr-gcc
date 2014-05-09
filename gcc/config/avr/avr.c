@@ -2240,11 +2240,13 @@ avr_print_operand (FILE *file, rtx x, int code)
       else
         avr_print_operand_address (file, addr);
     }
-  else if (code == 'i'
-	   && (GET_CODE (x) != SYMBOL_REF
-	       || (SYMBOL_REF_FLAGS (x) & SYMBOL_FLAG_IO) == 0))
+  else if (code == 'i')
     {
-      fatal_insn ("bad address, not an I/O address:", x);
+      if (GET_CODE (x) == SYMBOL_REF && (SYMBOL_REF_FLAGS (x) & SYMBOL_FLAG_IO))
+	avr_print_operand_address
+	  (file, plus_constant (HImode, x, -avr_current_arch->sfr_offset));
+      else
+	fatal_insn ("bad address, not an I/O address:", x);
     }
   else if (code == 'x')
     {
