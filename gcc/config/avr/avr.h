@@ -610,5 +610,6 @@ extern int avr_accumulate_outgoing_args (void);
 #define INIT_EXPANDERS avr_init_expanders()
 
 /* Flags used for io and address attributes.  */
-#define SYMBOL_FLAG_IO		(SYMBOL_FLAG_MACH_DEP << 4)
-#define SYMBOL_FLAG_ADDRESS	(SYMBOL_FLAG_MACH_DEP << 5)
+#define SYMBOL_FLAG_IO_LOW	(SYMBOL_FLAG_MACH_DEP << 4)
+#define SYMBOL_FLAG_IO		(SYMBOL_FLAG_MACH_DEP << 5)
+#define SYMBOL_FLAG_ADDRESS	(SYMBOL_FLAG_MACH_DEP << 6)

@@ -1,3 +1,17 @@
+2014-05-12  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.h (SYMBOL_FLAG_IO_LOW): Define.
+	* config/avr/avr.c (avr_handle_addr_attribute): Handle io_low
+	attribute.
+	(avr_encode_section_info): Likewise.
+	(avr_attribute_table): Add "io_low".
+	(avr_out_sbxx_branch): Handle symbolic io addresses.
+	* config/avr/avr.md (cbi, sbi): Change constraint for
+	low_io_address_operand operand to "i".
+	(sbix_branch, sbix_branch_bit7, insv.io, insv.not.io): Likewise.
+	* config/avr/predicates.md (low_io_address_operand):
+	Allow SYMBOL_REF with SYMBOL_FLAG_IO_LOW.
+
 2014-05-09  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.c (avr_print_operand) <i>: When outputting

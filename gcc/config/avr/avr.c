@@ -8130,7 +8130,7 @@ static tree
 avr_handle_addr_attribute (tree *node, tree name, tree args,
 			   int flags ATTRIBUTE_UNUSED, bool *no_add)
 {
-  bool io_p = (strcmp (IDENTIFIER_POINTER (name), "io") == 0);
+  bool io_p = (strncmp (IDENTIFIER_POINTER (name), "io", 2) == 0);
   location_t loc = DECL_SOURCE_LOCATION (*node);
 
   if (TREE_CODE (*node) != VAR_DECL)
@@ -8152,8 +8152,9 @@ avr_handle_addr_attribute (tree *node, tree name, tree args,
 	}
       else if (io_p
 	       && (!tree_fits_shwi_p (arg)
-		   || !io_address_operand (GEN_INT (TREE_INT_CST_LOW (arg)),
-					   QImode)))
+		   || !(strcmp (IDENTIFIER_POINTER (name), "io_low") == 0
+			? low_io_address_operand : io_address_operand)
+			 (GEN_INT (TREE_INT_CST_LOW (arg)), QImode)))
 	{
 	  warning_at (loc, 0, "%qE attribute address out of range", name);
 	  *no_add = true;
@@ -8161,12 +8162,18 @@ avr_handle_addr_attribute (tree *node, tree name, tree args,
       else
 	{
 	  tree attribs = DECL_ATTRIBUTES (*node);
-	  tree other = lookup_attribute (io_p ? "address" : "io", attribs);
-	  if (other && TREE_VALUE (other))
+	  const char *names[] = { "io", "io_low", "address", NULL } ;
+	  for (const char **p = names; *p; p++)
 	    {
-	      warning_at (loc, 0,
-			  "both io and address attribute provide address");
-	      *no_add = true;
+	      tree other = lookup_attribute (*p, attribs);
+	      if (other && TREE_VALUE (other))
+		{
+		  warning_at (loc, 0,
+			      "both %s and %qE attribute provide address",
+			      *p, name);
+		  *no_add = true;
+		  break;
+		}
 	    }
 	}
     }
@@ -8219,6 +8226,8 @@ avr_attribute_table[] =
   { "OS_main",   0, 0, false, true,  true,   avr_handle_fntype_attribute,
     false },
   { "io",        0, 1, false, false, false,  avr_handle_addr_attribute,
+    false },
+  { "io_low",    0, 1, false, false, false,  avr_handle_addr_attribute,
     false },
   { "address",   1, 1, false, false, false,  avr_handle_addr_attribute,
     false },
@@ -8761,13 +8770,22 @@ avr_encode_section_info (tree decl, rtx rtl, int new_decl_p)
 
       AVR_SYMBOL_SET_ADDR_SPACE (sym, as);
 
+      tree io_low_attr = lookup_attribute ("io_low", attr);
       tree io_attr = lookup_attribute ("io", attr);
       tree addr_attr;
-      if (io_attr && TREE_VALUE (io_attr) && TREE_VALUE (TREE_VALUE (io_attr)))
+      if (io_low_attr
+	  && TREE_VALUE (io_low_attr) && TREE_VALUE (TREE_VALUE (io_low_attr)))
+	addr_attr = io_attr;
+      else if (io_attr
+	       && TREE_VALUE (io_attr) && TREE_VALUE (TREE_VALUE (io_attr)))
 	addr_attr = io_attr;
       else
 	addr_attr = lookup_attribute ("address", attr);
-      if (io_attr)
+      if (io_low_attr
+	  || (io_attr && addr_attr && 
+	      low_io_address_operand (GEN_INT (TREE_INT_CST_LOW (TREE_VALUE (TREE_VALUE (addr_attr)))), QImode)))
+	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_IO_LOW;
+      if (io_attr || io_low_attr)
 	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_IO;
       if (addr_attr)
 	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_ADDRESS;
@@ -10890,6 +10908,8 @@ avr_out_sbxx_branch (rtx insn, rtx operands[])
       gcc_unreachable();
 
     case CONST_INT:
+    case CONST:
+    case SYMBOL_REF:
 
       if (low_io_address_operand (operands[1], QImode))
         {
@@ -10900,6 +10920,7 @@ avr_out_sbxx_branch (rtx insn, rtx operands[])
         }
       else
         {
+	  gcc_assert (io_address_operand (operands[1], QImode));
           output_asm_insn ("in __tmp_reg__,%i1", operands);
           if (comp == EQ)
             output_asm_insn ("sbrs __tmp_reg__,%2", operands);
