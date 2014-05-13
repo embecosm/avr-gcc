@@ -8787,7 +8787,11 @@ avr_encode_section_info (tree decl, rtx rtl, int new_decl_p)
 	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_IO_LOW;
       if (io_attr || io_low_attr)
 	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_IO;
-      if (addr_attr)
+      /* If we have an (io) address attribute specification, but the variable
+	 is external, treat the address as only a tentative definition
+	 to be used to determine if an io port is in the lower range, but
+	 don't use the exact value for constant propagation.  */
+      if (addr_attr && !DECL_EXTERNAL (decl))
 	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_ADDRESS;
     }
 }
