@@ -1,3 +1,7 @@
+2014-05-13  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* doc/extend.texi (io, address): Document io_low variable attribute.
+
 2014-05-12  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.h (SYMBOL_FLAG_IO_LOW): Define.
