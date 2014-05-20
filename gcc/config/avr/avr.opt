@@ -26,6 +26,10 @@ mmcu=
 Target RejectNegative Joined Var(avr_mcu_string) Init("avr2")
 -mmcu=MCU	Select the target MCU
 
+mlib=
+Target RejectNegative Joined
+Select multilib
+
 mn-flash=
 Target RejectNegative Joined Var(avr_n_flash) UInteger Init(-1)
 Set the number of 64 KiB flash segments

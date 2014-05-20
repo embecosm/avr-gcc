@@ -53,10 +53,12 @@ print_mcu (const avr_mcu_t *mcu)
 
   errata_skip = mcu->errata_skip ? " -mskip-bug" : "";
 
+  const char *arch_name = avr_arch_types[mcu->arch].arch_name;
+
+  fprintf (f, "*self_spec:\n-mlib=%s\n\n", arch_name);
+
   if (mcu->macro)
     fprintf (f, "*cpp:\n-D%s\n\n", mcu->macro);
-
-  const char *arch_name = avr_arch_types[mcu->arch].arch_name;
 
   fprintf (f, "*cc1:\n-mmcu=%s%s%s", arch_name, sp8, errata_skip);
   if (mcu->n_flash != arch_mcu->n_flash)
@@ -97,6 +99,7 @@ print_mcu (const avr_mcu_t *mcu)
       && strncmp (mcu->name, "mmcu=attiny15", strlen ("mmcu=attiny15")) != 0
       && strncmp (mcu->name, "mmcu=attiny28", strlen ("mmcu=attiny28")) != 0)
     fprintf (f, "-lc");
+  fprintf (f, "\n\n");
 
   fprintf (f, "*libgcc:\n");
   if (strncmp (mcu->name, "mmcu=at90s1", strlen ("mmcu=at90s1")) != 0
