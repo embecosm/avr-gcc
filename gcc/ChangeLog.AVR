@@ -6,6 +6,9 @@
 	* config/avr/genmultilib.awk: Use -mlib=.
 	* config/avr/t-multilib: Regenerate.
 
+	* config/avr/gen-avr-mmcu-specs.c (print_mcu): Output sp8 as part
+	of *self_spec, but don't repeat in *cc1/*cc1plus/*link.
+
 2014-03-31  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.opt (mmcu=): Change to have a string value.
