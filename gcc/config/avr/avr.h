@@ -490,21 +490,6 @@ typedef struct avr_args
 #define ADJUST_INSN_LENGTH(INSN, LENGTH)                \
     (LENGTH = avr_adjust_insn_length (INSN, LENGTH))
 
-extern const char *avr_device_to_as (int argc, const char **argv);
-extern const char *avr_device_to_ld (int argc, const char **argv);
-extern const char *avr_device_to_data_start (int argc, const char **argv);
-extern const char *avr_device_to_startfiles (int argc, const char **argv);
-extern const char *avr_device_to_devicelib (int argc, const char **argv);
-extern const char *avr_device_to_sp8 (int argc, const char **argv);
-
-#define EXTRA_SPEC_FUNCTIONS                            \
-  { "device_to_as", avr_device_to_as },                 \
-  { "device_to_ld", avr_device_to_ld },                 \
-  { "device_to_data_start", avr_device_to_data_start }, \
-  { "device_to_startfile", avr_device_to_startfiles },  \
-  { "device_to_devicelib", avr_device_to_devicelib },   \
-  { "device_to_sp8", avr_device_to_sp8 },
-
 #define DRIVER_SELF_SPECS " %{mmcu=*:-specs=device-specs/specs-%*%s %<mmcu=*} "
 #define CPP_SPEC ""
 
@@ -514,7 +499,7 @@ extern const char *avr_device_to_sp8 (int argc, const char **argv);
     %{!fenforce-eh-specs:-fno-enforce-eh-specs} \
     %{!fexceptions:-fno-exceptions}"
 
-#define ASM_SPEC "%:device_to_as(%{mmcu=*:%*}) "
+#define ASM_SPEC "%{march=*:-mmcu=%*}"
   
 #define LINK_SPEC "\
 %{mrelax:--relax\
@@ -525,8 +510,7 @@ extern const char *avr_device_to_sp8 (int argc, const char **argv);
                              %{mmcu=atmega64*|\
                                mmcu=at90can64*|\
                                mmcu=at90usb64*:--pmem-wrap-around=64k}}}\
-%:device_to_ld(%{mmcu=*:%*})\
-%:device_to_data_start(%{mmcu=*:%*})\
+%{march=*:-m%*}\
 %{shared:%eshared is not supported}"
 
 #define LIB_SPEC \
@@ -538,7 +522,8 @@ extern const char *avr_device_to_sp8 (int argc, const char **argv);
 #define LIBGCC_SPEC \
   "%{!mmcu=at90s1*:%{!mmcu=attiny11:%{!mmcu=attiny12:%{!mmcu=attiny15:%{!mmcu=attiny28: -lgcc }}}}}"
 
-#define STARTFILE_SPEC "%:device_to_startfile(%{mmcu=*:%*})"
+/* The actual definition will come from the device-specific spec file.  */
+#define STARTFILE_SPEC ""
 
 #define ENDFILE_SPEC ""
 

@@ -1,3 +1,33 @@
+2014-05-28  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr-arch.h: Add double include guard.
+	* config/avr/avr.c (avr_option_override): Use avr_arch_index instead
+	of avr_mcu_string.
+	* config/avr/avr.h (avr_device_to_as, avr_device_to_ld): Don't declare.
+	(avr_device_to_data_start, avr_device_to_startfiles): Likewise.
+	(avr_device_to_devicelib, avr_device_to_sp8): Likewise.
+	(EXTRA_SPEC_FUNCTIONS): Don't define.
+	(ASM_SPEC): Translate -arch= option to -mmcu= option.
+	(LINK_SPEC): Translate -arch= option to -m= option.
+	Don't use device_to_ld / device_to_data_start.
+	(STARTFILE_SPEC): Now empty.
+	* config/avr/avr.opt (HeaderInclude): New.
+	(mmcu=): Remove Var / Init clauses.
+	(mlib=): Remove.
+	(march=): New option.
+	* config/avr/driver-avr.c (avr_device_to_as): Delete.
+	(avr_device_to_ld, avr_device_to_data_start): Likewise.
+	(avr_device_to_startfiles, avr_device_to_devicelib): Likewise.
+	(avr_device_to_sp8): Likewise.
+	* config/avr/gen-avr-mmcu-specs.c (print_mcu) <self_spec>:
+	Unless -march= was given, supply -march= setting.
+	<cc1, cc1plus>: Remove -mmcu= setting.
+	<asm>: Supply -mmcu according to -march=.
+	<link> Supply -m according to -march=.
+	* config/avr/genmultilib.awk: use -march=.
+	* config/avr/genopt.sh:  Instead avr_mcu, emit an Enum for avr_arch.
+	* config/avr/avr-tables.opt, config/avr/t-multilib: Regenerate.
+
 2014-05-20  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.opt (mlib=): New option.

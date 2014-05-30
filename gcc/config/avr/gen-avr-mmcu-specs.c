@@ -55,23 +55,23 @@ print_mcu (const avr_mcu_t *mcu)
 
   const char *arch_name = avr_arch_types[mcu->arch].arch_name;
 
-  fprintf (f, "*self_spec:\n-mlib=%s%s\n\n", arch_name, sp8);
+  fprintf (f, "*self_spec:\n%%{!march=*:-march=%s}%s\n\n", arch_name, sp8);
 
   if (mcu->macro)
     fprintf (f, "*cpp:\n-D%s\n\n", mcu->macro);
 
-  fprintf (f, "*cc1:\n-mmcu=%s%s", arch_name, errata_skip);
+  fprintf (f, "*cc1:\n%s", errata_skip);
   if (mcu->n_flash != arch_mcu->n_flash)
     fprintf (f, " %{!mn-flash:-mn-flash=%d}", mcu->n_flash);
   fprintf (f, "\n\n");
-  fprintf (f, "*cc1plus:\n-mmcu=%s%s ", arch_name, errata_skip);
+  fprintf (f, "*cc1plus:\n%s ", errata_skip);
   if (mcu->n_flash != arch_mcu->n_flash)
     fprintf (f, "%{!mn-flash:-mn-flash=%d}", mcu->n_flash);
   fprintf (f, "%{!frtti: -fno-rtti}"
 	   "%{!fenforce-eh-specs: -fno-enforce-eh-specs}"
 	   "%{!fexceptions: -fno-exceptions}\n\n");
 
-  fprintf (f, "*asm:\n-mmcu=%s%s\n\n", arch_name,
+  fprintf (f, "*asm:\n%%{march=*:-mmcu=%%*}%s\n\n",
 	   mcu->errata_skip ? "" : " -mno-skip-bug");
 
   fprintf (f, "*link:\n%{mrelax:--relax");
@@ -86,7 +86,7 @@ print_mcu (const avr_mcu_t *mcu)
       || strncmp (mcu->name, "at90can64", strlen ("at90can64")) == 0
       || strncmp (mcu->name, "at90usb64", strlen ("at90usb64")) == 0)
     fprintf (f, "%{mpmem-wrap-around: --pmem-wrap-around=64k}");
-  fprintf (f, "} -m%s", arch_name);
+  fprintf (f, "} %%{march=*:-m%%*}");
   if (mcu->data_section_start
       != avr_arch_types[mcu->arch].default_data_section_start)
     fprintf (f, " -Tdata 0x%lX", 0x800000UL + mcu->data_section_start);

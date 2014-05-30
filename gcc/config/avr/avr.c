@@ -323,18 +323,21 @@ avr_option_override (void)
   if (flag_pie == 2)
     warning (OPT_fPIE, "-fPIE is not supported");
 
-  /* Search for mcu arch.  Should we speed this up, e.g. with a hash table?  */
+  /* Search for mcu arch.
+     ??? We should probably just put the architecture-default device
+     settings in the architecture struct and remove any notion of a current
+     device from gcc.  */
 
   for (avr_current_device = avr_mcu_types; ; avr_current_device++)
     {
       if (!avr_current_device->name)
 	fatal_error ("mcu not found");
       if (!avr_current_device->macro
-	  && strcmp (avr_current_device->name, avr_mcu_string) == 0)
+	  && avr_current_device->arch == avr_arch_index)
 	break;
     }
 
-  avr_current_arch = &avr_arch_types[avr_current_device->arch];
+  avr_current_arch = &avr_arch_types[avr_arch_index];
   if (avr_n_flash < 0)
     avr_n_flash = avr_current_device->n_flash;
 
