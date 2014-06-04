@@ -405,7 +405,8 @@ typedef struct avr_args
   avr_asm_output_aligned_decl_common (STREAM, DECL, NAME, SIZE, ALIGN, false)
 
 #define ASM_OUTPUT_ALIGNED_BSS(FILE, DECL, NAME, SIZE, ALIGN) \
-  asm_output_aligned_bss (FILE, DECL, NAME, SIZE, ALIGN)
+  avr_asm_asm_output_aligned_bss (FILE, DECL, NAME, SIZE, ALIGN, \
+				  asm_output_aligned_bss)
 
 #define ASM_OUTPUT_ALIGNED_DECL_LOCAL(STREAM, DECL, NAME, SIZE, ALIGN)  \
   avr_asm_output_aligned_decl_common (STREAM, DECL, NAME, SIZE, ALIGN, true)
@@ -592,3 +593,8 @@ extern int avr_accumulate_outgoing_args (void);
 #define ACCUMULATE_OUTGOING_ARGS avr_accumulate_outgoing_args()
 
 #define INIT_EXPANDERS avr_init_expanders()
+
+/* Flags used for io and address attributes.  */
+#define SYMBOL_FLAG_IO_LOW	(SYMBOL_FLAG_MACH_DEP << 4)
+#define SYMBOL_FLAG_IO		(SYMBOL_FLAG_MACH_DEP << 5)
+#define SYMBOL_FLAG_ADDRESS	(SYMBOL_FLAG_MACH_DEP << 6)

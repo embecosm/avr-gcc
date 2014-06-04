@@ -32,6 +32,7 @@
 #include "flags.h"
 #include "reload.h"
 #include "tree.h"
+#include "varasm.h"
 #include "print-tree.h"
 #include "calls.h"
 #include "stor-layout.h"
@@ -2244,7 +2245,11 @@ avr_print_operand (FILE *file, rtx x, int code)
     }
   else if (code == 'i')
     {
-      fatal_insn ("bad address, not an I/O address:", x);
+      if (GET_CODE (x) == SYMBOL_REF && (SYMBOL_REF_FLAGS (x) & SYMBOL_FLAG_IO))
+	avr_print_operand_address
+	  (file, plus_constant (HImode, x, -avr_current_arch->sfr_offset));
+      else
+	fatal_insn ("bad address, not an I/O address:", x);
     }
   else if (code == 'x')
     {
@@ -8124,6 +8129,86 @@ avr_handle_fntype_attribute (tree *node, tree name,
   return NULL_TREE;
 }
 
+static tree
+avr_handle_addr_attribute (tree *node, tree name, tree args,
+			   int flags ATTRIBUTE_UNUSED, bool *no_add)
+{
+  bool io_p = (strncmp (IDENTIFIER_POINTER (name), "io", 2) == 0);
+  location_t loc = DECL_SOURCE_LOCATION (*node);
+
+  if (TREE_CODE (*node) != VAR_DECL)
+    {
+      warning_at (loc, 0, "%qE attribute only applies to variables", name);
+      *no_add = true;
+    }
+
+  if (args != NULL_TREE)
+    {
+      if (TREE_CODE (TREE_VALUE (args)) == NON_LVALUE_EXPR)
+	TREE_VALUE (args) = TREE_OPERAND (TREE_VALUE (args), 0);
+      tree arg = TREE_VALUE (args);
+      if (TREE_CODE (arg) != INTEGER_CST)
+	{
+	  warning (0, "%qE attribute allows only an integer constant argument",
+		   name);
+	  *no_add = true;
+	}
+      else if (io_p
+	       && (!tree_fits_shwi_p (arg)
+		   || !(strcmp (IDENTIFIER_POINTER (name), "io_low") == 0
+			? low_io_address_operand : io_address_operand)
+			 (GEN_INT (TREE_INT_CST_LOW (arg)), QImode)))
+	{
+	  warning_at (loc, 0, "%qE attribute address out of range", name);
+	  *no_add = true;
+	}
+      else
+	{
+	  tree attribs = DECL_ATTRIBUTES (*node);
+	  const char *names[] = { "io", "io_low", "address", NULL } ;
+	  for (const char **p = names; *p; p++)
+	    {
+	      tree other = lookup_attribute (*p, attribs);
+	      if (other && TREE_VALUE (other))
+		{
+		  warning_at (loc, 0,
+			      "both %s and %qE attribute provide address",
+			      *p, name);
+		  *no_add = true;
+		  break;
+		}
+	    }
+	}
+    }
+
+  if (*no_add == false && io_p && !TREE_THIS_VOLATILE (*node))
+    warning_at (loc, 0, "%qE attribute on non-volatile variable", name);
+
+  return NULL_TREE;
+}
+
+rtx
+avr_eval_addr_attrib (rtx x)
+{
+  if (GET_CODE (x) == SYMBOL_REF
+      && (SYMBOL_REF_FLAGS (x) & SYMBOL_FLAG_ADDRESS))
+    {
+      tree decl = SYMBOL_REF_DECL (x);
+      tree attr = NULL_TREE;
+
+      if (SYMBOL_REF_FLAGS (x) & SYMBOL_FLAG_IO)
+	{
+	  attr = lookup_attribute ("io", DECL_ATTRIBUTES (decl));
+	  gcc_assert (attr);
+	}
+      if (!attr || !TREE_VALUE (attr))
+	attr = lookup_attribute ("address", DECL_ATTRIBUTES (decl));
+      gcc_assert (attr && TREE_VALUE (attr) && TREE_VALUE (TREE_VALUE (attr)));
+      return GEN_INT (TREE_INT_CST_LOW (TREE_VALUE (TREE_VALUE (attr))));
+    }
+  return x;
+}
+
 
 /* AVR attributes.  */
 static const struct attribute_spec
@@ -8142,6 +8227,12 @@ avr_attribute_table[] =
   { "OS_task",   0, 0, false, true,  true,   avr_handle_fntype_attribute,
     false },
   { "OS_main",   0, 0, false, true,  true,   avr_handle_fntype_attribute,
+    false },
+  { "io",        0, 1, false, false, false,  avr_handle_addr_attribute,
+    false },
+  { "io_low",    0, 1, false, false, false,  avr_handle_addr_attribute,
+    false },
+  { "address",   1, 1, false, false, false,  avr_handle_addr_attribute,
     false },
   { NULL,        0, 0, false, false, false, NULL, false }
 };
@@ -8371,11 +8462,37 @@ avr_insert_attributes (tree node, tree *attributes)
 
 void
 avr_asm_output_aligned_decl_common (FILE * stream,
-                                    const_tree decl ATTRIBUTE_UNUSED,
+                                    tree decl,
                                     const char *name,
                                     unsigned HOST_WIDE_INT size,
                                     unsigned int align, bool local_p)
 {
+  rtx mem = decl == NULL_TREE ? NULL_RTX : DECL_RTL (decl);
+  rtx symbol;
+
+  if (mem != NULL_RTX && MEM_P (mem)
+      && GET_CODE ((symbol = XEXP (mem, 0))) == SYMBOL_REF
+      && (SYMBOL_REF_FLAGS (symbol) & (SYMBOL_FLAG_IO | SYMBOL_FLAG_ADDRESS)))
+    {
+
+      if (!local_p)
+	{
+	  fprintf (stream, "\t.globl\t");
+	  assemble_name (stream, name);
+	  fprintf (stream, "\n");
+	}
+      if (SYMBOL_REF_FLAGS (symbol) & SYMBOL_FLAG_ADDRESS)
+	{
+	  assemble_name (stream, name);
+	  fprintf (stream, " = %ld\n",
+		   (long) INTVAL (avr_eval_addr_attrib (symbol)));
+	}
+      else if (local_p)
+	error_at (DECL_SOURCE_LOCATION (decl),
+		  "static IO declaration for %q+D needs an address", decl);
+      return;
+    }
+
   /* __gnu_lto_v1 etc. are just markers for the linker injected by toplev.c.
      There is no need to trigger __do_clear_bss code for them.  */
 
@@ -8386,6 +8503,29 @@ avr_asm_output_aligned_decl_common (FILE * stream,
     ASM_OUTPUT_ALIGNED_LOCAL (stream, name, size, align);
   else
     ASM_OUTPUT_ALIGNED_COMMON (stream, name, size, align);
+}
+
+void
+avr_asm_asm_output_aligned_bss (FILE *file, tree decl, const char *name,
+				unsigned HOST_WIDE_INT size, int align,
+				void (*default_func)
+				  (FILE *, tree, const char *,
+				   unsigned HOST_WIDE_INT, int))
+{
+  rtx mem = decl == NULL_TREE ? NULL_RTX : DECL_RTL (decl);
+  rtx symbol;
+
+  if (mem != NULL_RTX && MEM_P (mem)
+      && GET_CODE ((symbol = XEXP (mem, 0))) == SYMBOL_REF
+      && (SYMBOL_REF_FLAGS (symbol) & (SYMBOL_FLAG_IO | SYMBOL_FLAG_ADDRESS)))
+    {
+      if (!(SYMBOL_REF_FLAGS (symbol) & SYMBOL_FLAG_ADDRESS))
+	error_at (DECL_SOURCE_LOCATION (decl),
+		  "IO definition for %q+D needs an address", decl);
+      avr_asm_output_aligned_decl_common (file, decl, name, size, align, false);
+    }
+  else
+    default_func (file, decl, name, size, align);
 }
 
 
@@ -8619,17 +8759,43 @@ avr_encode_section_info (tree decl, rtx rtl, int new_decl_p)
    {
       rtx sym = XEXP (rtl, 0);
       tree type = TREE_TYPE (decl);
+      tree attr = DECL_ATTRIBUTES (decl);
       if (type == error_mark_node)
 	return;
+
       addr_space_t as = TYPE_ADDR_SPACE (type);
 
       /* PSTR strings are in generic space but located in flash:
          patch address space.  */
 
-      if (-1 == avr_progmem_p (decl, DECL_ATTRIBUTES (decl)))
+      if (-1 == avr_progmem_p (decl, attr))
         as = ADDR_SPACE_FLASH;
 
       AVR_SYMBOL_SET_ADDR_SPACE (sym, as);
+
+      tree io_low_attr = lookup_attribute ("io_low", attr);
+      tree io_attr = lookup_attribute ("io", attr);
+      tree addr_attr;
+      if (io_low_attr
+	  && TREE_VALUE (io_low_attr) && TREE_VALUE (TREE_VALUE (io_low_attr)))
+	addr_attr = io_attr;
+      else if (io_attr
+	       && TREE_VALUE (io_attr) && TREE_VALUE (TREE_VALUE (io_attr)))
+	addr_attr = io_attr;
+      else
+	addr_attr = lookup_attribute ("address", attr);
+      if (io_low_attr
+	  || (io_attr && addr_attr && 
+	      low_io_address_operand (GEN_INT (TREE_INT_CST_LOW (TREE_VALUE (TREE_VALUE (addr_attr)))), QImode)))
+	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_IO_LOW;
+      if (io_attr || io_low_attr)
+	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_IO;
+      /* If we have an (io) address attribute specification, but the variable
+	 is external, treat the address as only a tentative definition
+	 to be used to determine if an io port is in the lower range, but
+	 don't use the exact value for constant propagation.  */
+      if (addr_attr && !DECL_EXTERNAL (decl))
+	SYMBOL_REF_FLAGS (sym) |= SYMBOL_FLAG_ADDRESS;
     }
 }
 
@@ -10749,6 +10915,8 @@ avr_out_sbxx_branch (rtx insn, rtx operands[])
       gcc_unreachable();
 
     case CONST_INT:
+    case CONST:
+    case SYMBOL_REF:
 
       if (low_io_address_operand (operands[1], QImode))
         {
@@ -10759,6 +10927,7 @@ avr_out_sbxx_branch (rtx insn, rtx operands[])
         }
       else
         {
+	  gcc_assert (io_address_operand (operands[1], QImode));
           output_asm_insn ("in __tmp_reg__,%i1", operands);
           if (comp == EQ)
             output_asm_insn ("sbrs __tmp_reg__,%2", operands);

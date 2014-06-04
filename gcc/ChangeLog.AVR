@@ -39,6 +39,55 @@
 	* config/avr/gen-avr-mmcu-specs.c (print_mcu): Output sp8 as part
 	of *self_spec, but don't repeat in *cc1/*cc1plus/*link.
 
+2014-05-13  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_encode_section_info): Don't set
+	SYMBOL_FLAG_ADDRESS for external symbols.
+
+2014-05-13  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* doc/extend.texi (io, address): Document io_low variable attribute.
+
+2014-05-12  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.h (SYMBOL_FLAG_IO_LOW): Define.
+	* config/avr/avr.c (avr_handle_addr_attribute): Handle io_low
+	attribute.
+	(avr_encode_section_info): Likewise.
+	(avr_attribute_table): Add "io_low".
+	(avr_out_sbxx_branch): Handle symbolic io addresses.
+	* config/avr/avr.md (cbi, sbi): Change constraint for
+	low_io_address_operand operand to "i".
+	(sbix_branch, sbix_branch_bit7, insv.io, insv.not.io): Likewise.
+	* config/avr/predicates.md (low_io_address_operand):
+	Allow SYMBOL_REF with SYMBOL_FLAG_IO_LOW.
+
+2014-05-09  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_print_operand) <i>: When outputting
+	a symbolic I/O address, subtract sfr_offset.
+
+2014-05-09  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.h (SYMBOL_FLAG_IO, SYMBOL_FLAG_ADDRESS): Define.
+	(ASM_OUTPUT_ALIGNED_BSS): Use avr_asm_asm_output_aligned_bss.
+	* config/avr/avr.c (varasm.h): #include.
+	(avr_print_operand) <i>: Allow SYMBOL_REF with SYMBOL_FLAG_IO.
+	(avr_handle_addr_attribute, avr_eval_addr_attrib): New functions.
+	(avr_attribute_table): Add "io" and "address".
+	(avr_asm_output_aligned_decl_common): Change type of decl to tree.
+	Add special handling for symbols with "io" and/or "address" attributes.
+	(avr_asm_asm_output_aligned_bss): New function.
+	(avr_encode_section_info): Set SYMBOL_FLAG_IO and SYMBOL_FLAG_ADDRESS
+	as appropriate.
+	* config/avr/avr.md (mov<mode>): Use avr_eval_addr_attrib.
+	* config/avr/predicates.md (io_address_operand):
+	Allow SYMBOL_REF with SYMBOL_FLAG_IO.
+	* config/avr/avr-protos.h (avr_asm_output_aligned_decl_common):
+	Update prototype.
+	(avr_eval_addr_attrib, avr_asm_asm_output_aligned_bss): Prototype.
+	* doc/extend.texi (io, address): Document new AVR variable attributes.
+
 2014-03-31  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.opt (mmcu=): Change to have a string value.
