@@ -1,3 +1,18 @@
+2014-06-12  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* builtins.c: Include attribs.h and tree-nested.h.
+	(expand_builtin): Implement targetm.calls.stdio_altname hook.
+	* builtins.def (BUILT_IN_ASPRINTF): New builtin.
+	* target.def (calls): Add stdio_altname.
+	* doc/tm.texi.in: Add @hook TARGET_STDIO_ALTNAME.
+	* doc/tm.texi: Regenerate.
+
+	* config/avr/avr-protos.h (avr_stdio_altname): Prototype.
+	* config/avr/avr.c (avr_stdio_altname): New function.
+	(TARGET_STDIO_ALTNAME): Redefine.
+	* config/avr/avr.h (LIB_SPEC): Add -lprintf_flt and -lscanf_flt.
+	* config/avr/gen-avr-mmcu-specs.c (print_mcu) <*link>: Likewise.
+
 2014-05-28  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr-arch.h: Add double include guard.

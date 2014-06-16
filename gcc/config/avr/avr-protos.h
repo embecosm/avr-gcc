@@ -125,6 +125,7 @@ extern bool avr_mem_memx_p (rtx);
 extern bool avr_load_libgcc_p (rtx);
 extern bool avr_xload_libgcc_p (enum machine_mode);
 extern rtx avr_eval_addr_attrib (rtx x);
+extern rtx avr_stdio_altname (rtx x);
 
 extern rtx lpm_reg_rtx;
 extern rtx lpm_addr_reg_rtx;

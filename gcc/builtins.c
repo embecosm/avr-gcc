@@ -59,6 +59,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "builtins.h"
 #include "ubsan.h"
 #include "cilk.h"
+#include "attribs.h"
+#include "tree-nested.h"
 
 
 static tree do_mpc_arg1 (tree, tree, int (*)(mpc_ptr, mpc_srcptr, mpc_rnd_t));
@@ -6826,6 +6828,31 @@ expand_builtin (tree exp, rtx target, rtx subtarget, enum machine_mode mode,
       expand_builtin_cilk_pop_frame (exp);
       return const0_rtx;
 
+    case BUILT_IN_FPRINTF:
+    case BUILT_IN_PRINTF:
+    case BUILT_IN_SNPRINTF:
+    case BUILT_IN_SPRINTF:
+    case BUILT_IN_ASPRINTF:
+    case BUILT_IN_FSCANF:
+    case BUILT_IN_SCANF:
+    case BUILT_IN_SSCANF:
+      {
+	const char *name = targetm.calls.stdio_altname (fndecl, exp);
+	if (!name)
+	  break;
+
+	tree id = get_identifier (name);
+	tree decl = build_decl (BUILTINS_LOCATION, FUNCTION_DECL, id,
+				TREE_TYPE (fndecl));
+	TREE_PUBLIC (decl)         = 1;
+	DECL_EXTERNAL (decl)       = 1;
+	DECL_BUILT_IN_CLASS (decl) = BUILT_IN_MD;
+	decl_attributes (&decl, NULL_TREE, 0);
+	DECL_FUNCTION_CODE (decl) = DECL_FUNCTION_CODE (fndecl);
+	exp = copy_node (exp);
+	CALL_EXPR_FN (exp) = build_addr (decl, current_function_decl);
+      }
+      /* Fall through.  */
     default:	/* just do library call, if unknown builtin */
       break;
     }

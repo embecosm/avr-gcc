@@ -3816,6 +3816,8 @@ nothing when you use @option{-freg-struct-return} mode.
 
 @hook TARGET_GET_RAW_ARG_MODE
 
+@hook TARGET_STDIO_ALTNAME
+
 @node Caller Saves
 @subsection Caller-Saves Register Allocation
 

@@ -4251,6 +4251,12 @@ DEFHOOK
  enum machine_mode, (int regno),
  default_get_reg_raw_mode)
 
+DEFHOOK
+(stdio_altname,
+ "Return an alternate name for a stdio function.",
+ const char *, (const_tree fndecl, const_tree exp),
+ hook_constcharptr_const_tree_const_tree_null)
+
 HOOK_VECTOR_END (calls)
 
 /* Return the diagnostic message string if conversion from FROMTYPE

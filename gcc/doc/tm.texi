@@ -4662,6 +4662,10 @@ This target hook returns the mode to be used when accessing raw return registers
 This target hook returns the mode to be used when accessing raw argument registers in @code{__builtin_apply_args}.  Define this macro if the value in @var{reg_raw_mode} is not correct.
 @end deftypefn
 
+@deftypefn {Target Hook} {const char *} TARGET_STDIO_ALTNAME (const_tree @var{fndecl}, const_tree @var{exp})
+Return an alternate name for a stdio function.
+@end deftypefn
+
 @node Caller Saves
 @subsection Caller-Saves Register Allocation
 

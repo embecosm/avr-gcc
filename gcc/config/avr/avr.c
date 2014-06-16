@@ -12535,6 +12535,33 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
   return NULL_TREE;
 }
 
+const char *
+avr_stdio_altname (const_tree fndecl, const_tree exp)
+{
+  const char *name
+    = IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (CONST_CAST_TREE (fndecl)));
+  int len = IDENTIFIER_LENGTH (DECL_ASSEMBLER_NAME (CONST_CAST_TREE (fndecl)));
+  bool ind = (strcmp (name + len - strlen ("scanf"), "scanf") == 0);
+  const_call_expr_arg_iterator iter;
+  const_tree arg;
+
+  FOR_EACH_CONST_CALL_EXPR_ARG (arg, iter, exp)
+    {
+      tree type = TREE_TYPE (arg);
+      if (POINTER_TYPE_P (type) && ind)
+	type = TREE_TYPE (type);
+      if (FLOAT_TYPE_P (type))
+	return NULL;
+    }
+  const char *prefix = "__int_";
+  int plen = strlen (prefix);
+  char *new_name = (char *) ggc_alloc_atomic (plen + len + 1);
+  strcpy (new_name, prefix);
+  memcpy (new_name + plen, name, len);
+  new_name[plen + len] = '\0';
+  return new_name;
+}
+
 
 
 /* Initialize the GCC target structure.  */
@@ -12695,6 +12722,9 @@ avr_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *arg,
 #define TARGET_PRINT_OPERAND_ADDRESS avr_print_operand_address
 #undef  TARGET_PRINT_OPERAND_PUNCT_VALID_P
 #define TARGET_PRINT_OPERAND_PUNCT_VALID_P avr_print_operand_punct_valid_p
+
+#undef TARGET_STDIO_ALTNAME
+#define TARGET_STDIO_ALTNAME avr_stdio_altname
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

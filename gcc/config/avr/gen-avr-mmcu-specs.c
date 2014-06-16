@@ -98,7 +98,7 @@ print_mcu (const avr_mcu_t *mcu)
       && strncmp (mcu->name, "mmcu=attiny12", strlen ("mmcu=attiny12")) != 0
       && strncmp (mcu->name, "mmcu=attiny15", strlen ("mmcu=attiny15")) != 0
       && strncmp (mcu->name, "mmcu=attiny28", strlen ("mmcu=attiny28")) != 0)
-    fprintf (f, "-lc");
+    fprintf (f, "-lprintf_flt -lscanf_flt -lc");
   fprintf (f, "\n\n");
 
   fprintf (f, "*libgcc:\n");
