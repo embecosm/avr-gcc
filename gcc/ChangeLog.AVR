@@ -1,3 +1,7 @@
+2014-06-16  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.h (POINTERS_EXTEND_UNSIGNED): Define.
+
 2014-06-12  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* builtins.c: Include attribs.h and tree-nested.h.
