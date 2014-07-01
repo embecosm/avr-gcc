@@ -1,3 +1,8 @@
+2014-07-01  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/gen-avr-mmcu-specs.c (print_mcu) <*cpp>:
+	Define __AVR_DEV_LIB_NAME__ .
+
 2014-06-16  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.h (POINTERS_EXTEND_UNSIGNED): Define.

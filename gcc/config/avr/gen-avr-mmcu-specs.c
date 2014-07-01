@@ -57,8 +57,11 @@ print_mcu (const avr_mcu_t *mcu)
 
   fprintf (f, "*self_spec:\n%%{!march=*:-march=%s}%s\n\n", arch_name, sp8);
 
+  fprintf (f, "*cpp:\n-D__AVR_DEV_LIB_NAME__=%s",
+	   mcu->macro ? mcu->library_name : mcu->name);
   if (mcu->macro)
-    fprintf (f, "*cpp:\n-D%s\n\n", mcu->macro);
+    fprintf (f, " -D%s", mcu->macro);
+  fprintf (f, "\n\n");
 
   fprintf (f, "*cc1:\n%s", errata_skip);
   if (mcu->n_flash != arch_mcu->n_flash)
