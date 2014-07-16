@@ -134,7 +134,7 @@ typedef struct
   /* Number of 64k segments in the flash.  */
   int n_flash;
 
-  /* Name of device library.  */
+  /* Old name of device library.  */
   const char *const library_name;
 } avr_mcu_t;
 

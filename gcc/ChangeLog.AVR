@@ -1,3 +1,11 @@
+2014-07-16  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/gen-avr-mmcu-specs.c (print_mcu) <cpp>: Only define
+	__AVR_DEV_LIB_NAME__ when compiling for a specific device.
+	<lib>: When compiling for a device, add libdev.a.
+	<startfile>: Crt file has moved to device directory.
+	* config/avr/avr-arch.h (avr_mcu_t) <library_name>: Update comment.
+
 2014-07-01  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/gen-avr-mmcu-specs.c (print_mcu) <*cpp>:

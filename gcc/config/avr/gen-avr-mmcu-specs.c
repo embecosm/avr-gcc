@@ -57,11 +57,9 @@ print_mcu (const avr_mcu_t *mcu)
 
   fprintf (f, "*self_spec:\n%%{!march=*:-march=%s}%s\n\n", arch_name, sp8);
 
-  fprintf (f, "*cpp:\n-D__AVR_DEV_LIB_NAME__=%s",
-	   mcu->macro ? mcu->library_name : mcu->name);
   if (mcu->macro)
-    fprintf (f, " -D%s", mcu->macro);
-  fprintf (f, "\n\n");
+    fprintf (f, "*cpp:\n-D__AVR_DEV_LIB_NAME__=%s -D%s\n\n",
+	     mcu->library_name, mcu->macro);
 
   fprintf (f, "*cc1:\n%s", errata_skip);
   if (mcu->n_flash != arch_mcu->n_flash)
@@ -101,7 +99,11 @@ print_mcu (const avr_mcu_t *mcu)
       && strncmp (mcu->name, "mmcu=attiny12", strlen ("mmcu=attiny12")) != 0
       && strncmp (mcu->name, "mmcu=attiny15", strlen ("mmcu=attiny15")) != 0
       && strncmp (mcu->name, "mmcu=attiny28", strlen ("mmcu=attiny28")) != 0)
-    fprintf (f, "-lprintf_flt -lscanf_flt -lc");
+    {
+      fprintf (f, "-lprintf_flt -lscanf_flt -lc");
+      if (mcu->macro)
+	fprintf (f, " dev/%s/libdev.a%%s", mcu->name);
+    }
   fprintf (f, "\n\n");
 
   fprintf (f, "*libgcc:\n");
@@ -113,7 +115,7 @@ print_mcu (const avr_mcu_t *mcu)
     fprintf (f, "-lgcc");
   fprintf (f, "\n\n");
 
-  fprintf (f, "*startfile:\ncrt%s.o%%s\n\n", mcu->library_name);
+  fprintf (f, "*startfile:\ndev/%s/crt1.o%%s\n\n", mcu->name);
 }
 
 int main (void)
