@@ -63,35 +63,35 @@ print_mcu (const avr_mcu_t *mcu)
 
   fprintf (f, "*cc1:\n%s", errata_skip);
   if (mcu->n_flash != arch_mcu->n_flash)
-    fprintf (f, " %{!mn-flash:-mn-flash=%d}", mcu->n_flash);
+    fprintf (f, " %%{!mn-flash:-mn-flash=%d}", mcu->n_flash);
   fprintf (f, "\n\n");
   fprintf (f, "*cc1plus:\n%s ", errata_skip);
   if (mcu->n_flash != arch_mcu->n_flash)
-    fprintf (f, "%{!mn-flash:-mn-flash=%d}", mcu->n_flash);
-  fprintf (f, "%{!frtti: -fno-rtti}"
-	   "%{!fenforce-eh-specs: -fno-enforce-eh-specs}"
-	   "%{!fexceptions: -fno-exceptions}\n\n");
+    fprintf (f, "%%{!mn-flash:-mn-flash=%d}", mcu->n_flash);
+  fprintf (f, "%%{!frtti: -fno-rtti}"
+	   "%%{!fenforce-eh-specs: -fno-enforce-eh-specs}"
+	   "%%{!fexceptions: -fno-exceptions}\n\n");
 
   fprintf (f, "*asm:\n%%{march=*:-mmcu=%%*}%s\n\n",
 	   mcu->errata_skip ? "" : " -mno-skip-bug");
 
-  fprintf (f, "*link:\n%{mrelax:--relax");
+  fprintf (f, "*link:\n%%{mrelax:--relax");
   if (strncmp (mcu->name, "at90usb8", strlen ("at90usb8")) == 0)
-    fprintf (f, "%{mpmem-wrap-around: --pmem-wrap-around=8k}");
+    fprintf (f, "%%{mpmem-wrap-around: --pmem-wrap-around=8k}");
   if (strncmp (mcu->name, "atmega16", strlen ("atmega16")) == 0)
-    fprintf (f, "%{mpmem-wrap-around: --pmem-wrap-around=16k}");
+    fprintf (f, "%%{mpmem-wrap-around: --pmem-wrap-around=16k}");
   if (strncmp (mcu->name, "atmega32", strlen ("atmega32")) == 0
       || strncmp (mcu->name, "at90can32", strlen ("at90can32")) == 0)
-    fprintf (f, "%{mpmem-wrap-around: --pmem-wrap-around=32k}");
+    fprintf (f, "%%{mpmem-wrap-around: --pmem-wrap-around=32k}");
   if (strncmp (mcu->name, "atmega64", strlen ("atmega64")) == 0
       || strncmp (mcu->name, "at90can64", strlen ("at90can64")) == 0
       || strncmp (mcu->name, "at90usb64", strlen ("at90usb64")) == 0)
-    fprintf (f, "%{mpmem-wrap-around: --pmem-wrap-around=64k}");
+    fprintf (f, "%%{mpmem-wrap-around: --pmem-wrap-around=64k}");
   fprintf (f, "} %%{march=*:-m%%*}");
   if (mcu->data_section_start
       != avr_arch_types[mcu->arch].default_data_section_start)
     fprintf (f, " -Tdata 0x%lX", 0x800000UL + mcu->data_section_start);
-  fprintf (f, " %{shared:%%eshared is not supported}\n\n");
+  fprintf (f, " %%{shared:%%eshared is not supported}\n\n");
 
   fprintf (f, "*lib:\n");
   if (strncmp (mcu->name, "mmcu=at90s1", strlen ("mmcu=at90s1")) != 0
