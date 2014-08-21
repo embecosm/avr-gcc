@@ -72,7 +72,7 @@ print_mcu (const avr_mcu_t *mcu)
 	   "%%{!fenforce-eh-specs: -fno-enforce-eh-specs}"
 	   "%%{!fexceptions: -fno-exceptions}\n\n");
 
-  fprintf (f, "*asm:\n%%{march=*:-mmcu=%%*}%s\n\n",
+  fprintf (f, "*asm:\n%%{march=*:-mmcu=%%*}%{mrelax: --mlink-relax}%s\n\n",
 	   mcu->errata_skip ? "" : " -mno-skip-bug");
 
   fprintf (f, "*link:\n%%{mrelax:--relax");

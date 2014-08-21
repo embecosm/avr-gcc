@@ -500,7 +500,7 @@ typedef struct avr_args
     %{!fenforce-eh-specs:-fno-enforce-eh-specs} \
     %{!fexceptions:-fno-exceptions}"
 
-#define ASM_SPEC "%{march=*:-mmcu=%*}"
+#define ASM_SPEC "%{march=*:-mmcu=%*}%{mrelax: --mlink-relax}"
   
 #define LINK_SPEC "\
 %{mrelax:--relax\
