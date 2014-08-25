@@ -550,7 +550,11 @@ package Sinfo is
    --  do not lead to data dependences for subprograms can be safely ignored.
 
    --  In addition pragma Debug statements are removed from the tree (rewritten
-   --  to NULL stmt), since they should be taken into account in flow analysis.
+   --  to NULL stmt), since they should be ignored in formal verification.
+
+   --  An error is also issued for missing subunits, similar to the warning
+   --  issued when generating code, to avoid formal verification of a partial
+   --  unit.
 
    -----------------------
    -- Check Flag Fields --
@@ -641,6 +645,12 @@ package Sinfo is
 
    --    Min and Max attributes are expanded into equivalent if expressions,
    --    dealing properly with side effect issues.
+
+   --    Mod for signed integer types is expanded into equivalent expressions
+   --    using Rem (which is % in C) and other C-available operators.
+
+   --    The Actions list of an Expression_With_Actions node does not contain
+   --    any declarations,(so that DO X, .. Y IN Z becomes (X, .. Y, Z) in C).
 
    ------------------------------------
    -- Description of Semantic Fields --
@@ -2918,6 +2928,10 @@ package Sinfo is
       --  Discrete_Subtype_Definitions (List2)
       --  Component_Definition (Node4)
 
+      --  Note: although the language allows the full syntax for discrete
+      --  subtype definitions (i.e. a discrete subtype indication or a range),
+      --  in the generated tree, we always rewrite these as N_Range nodes.
+
       --------------------------------------
       -- 3.6  Discrete Subtype Definition --
       --------------------------------------
@@ -4126,6 +4140,11 @@ package Sinfo is
       --  the case where the computed range exceeds that of Long_Long_Integer,
       --  and we are running in ELIMINATED mode, the operator node will be
       --  changed to be a call to the appropriate routine in System.Bignums.
+
+      --  Note: In Modify_Tree_For_C mode, we do not generate an N_Op_Mod node
+      --  for signed integer types (since there is no equivalent operator in
+      --  C). Instead we rewrite such an operation in terms of REM (which is
+      --  % in C) and other C-available operators.
 
       ------------------------------------
       -- 4.5.7  Conditional Expressions --
@@ -7405,6 +7424,9 @@ package Sinfo is
       --  are not interchangeable, and in particular an N_Null_Statement is
       --  not a proper expression), and in the long term all cases of this
       --  idiom should instead use a new node kind N_Compound_Statement.
+
+      --  Note: In Modify_Tree_For_C, we never generate any declarations in
+      --  the action list, which can contain only non-declarative statements.
 
       --------------------
       -- Free Statement --

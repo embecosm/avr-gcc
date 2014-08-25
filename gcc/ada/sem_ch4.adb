@@ -1356,10 +1356,14 @@ package body Sem_Ch4 is
       --  Local variables
 
       Expr      : constant Node_Id := Expression (N);
-      FirstX    : constant Node_Id := Expression (First (Alternatives (N)));
       Alt       : Node_Id;
       Exp_Type  : Entity_Id;
       Exp_Btype : Entity_Id;
+
+      FirstX : Node_Id := Empty;
+      --  First expression in the case for which there is some type information
+      --  available, i.e. it is not Any_Type, which can happen because of some
+      --  error, or from the use of e.g. raise Constraint_Error.
 
       Others_Present : Boolean;
       --  Indicates if Others was present
@@ -1379,8 +1383,16 @@ package body Sem_Ch4 is
       Alt := First (Alternatives (N));
       while Present (Alt) loop
          Analyze (Expression (Alt));
+
+         if No (FirstX) and then Etype (Expression (Alt)) /= Any_Type then
+            FirstX := Expression (Alt);
+         end if;
+
          Next (Alt);
       end loop;
+
+      --  Get our initial type from the first expression for which we got some
+      --  useful type information from the expression.
 
       if not Is_Overloaded (FirstX) then
          Set_Etype (N, Etype (FirstX));
@@ -6644,7 +6656,7 @@ package body Sem_Ch4 is
          --  can never assign to its prefix). The Comes_From_Source attribute
          --  needs to be propagated for accurate warnings.
 
-         Ref := New_Reference_To (E, Sloc (P));
+         Ref := New_Occurrence_Of (E, Sloc (P));
          Set_Comes_From_Source (Ref, Comes_From_Source (P));
          Generate_Reference (E, Ref);
       end if;
@@ -7728,7 +7740,7 @@ package body Sem_Ch4 is
                   Success := False;
 
                   if No (Matching_Op) then
-                     Hom_Ref := New_Reference_To (Hom, Sloc (Subprog));
+                     Hom_Ref := New_Occurrence_Of (Hom, Sloc (Subprog));
                      Set_Etype (Call_Node, Any_Type);
                      Set_Parent (Call_Node, Parent (Node_To_Replace));
 
@@ -8188,7 +8200,7 @@ package body Sem_Ch4 is
                Set_Is_Overloaded (Call_Node, False);
 
                if No (Matching_Op) then
-                  Prim_Op_Ref := New_Reference_To (Prim_Op, Sloc (Subprog));
+                  Prim_Op_Ref := New_Occurrence_Of (Prim_Op, Sloc (Subprog));
                   Candidate := Prim_Op;
 
                   Set_Parent (Call_Node, Parent (Node_To_Replace));

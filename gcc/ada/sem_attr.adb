@@ -2491,6 +2491,7 @@ package body Sem_Attr is
            Attribute_Default_Iterator     |
            Attribute_Implicit_Dereference |
            Attribute_Iterator_Element     |
+           Attribute_Iterable             |
            Attribute_Variable_Indexing    =>
          Error_Msg_N ("illegal attribute", N);
 
@@ -2506,7 +2507,7 @@ package body Sem_Attr is
 
       when Attribute_Abort_Signal =>
          Check_Standard_Prefix;
-         Rewrite (N, New_Reference_To (Stand.Abort_Signal, Loc));
+         Rewrite (N, New_Occurrence_Of (Stand.Abort_Signal, Loc));
          Analyze (N);
 
       ------------
@@ -2775,7 +2776,7 @@ package body Sem_Attr is
 
          Set_Etype (N, Base_Type (Entity (P)));
          Set_Entity (N, Base_Type (Entity (P)));
-         Rewrite (N, New_Reference_To (Entity (N), Loc));
+         Rewrite (N, New_Occurrence_Of (Entity (N), Loc));
          Analyze (N);
       end Base;
 
@@ -4418,7 +4419,7 @@ package body Sem_Attr is
 
                --  Entities mentioned within the prefix of attribute 'Old must
                --  be global to the related postcondition. If this is not the
-               --  case, then the scope of the local entity is be nested within
+               --  case, then the scope of the local entity is nested within
                --  that of the subprogram.
 
                elsif Nkind (Nod) = N_Identifier
@@ -4465,7 +4466,22 @@ package body Sem_Attr is
             --  contract case as this is the only postcondition-like part of
             --  the pragma.
 
-            if Expr /= Expression (Parent (Expr)) then
+            if Expr = Expression (Parent (Expr)) then
+
+               --  Warn that a potentially unevaluated prefix is always
+               --  evaluated when the corresponding consequence is selected.
+
+               if Is_Potentially_Unevaluated (P) then
+                  Error_Msg_Name_1 := Aname;
+                  Error_Msg_N
+                    ("?prefix of attribute % is always evaluated when "
+                     & "related consequence is selected", P);
+               end if;
+
+            --  Attribute 'Old appears in the condition of a contract case.
+            --  Emit an error since this is not a postcondition-like context.
+
+            else
                Error_Attr
                  ("attribute % cannot appear in the condition of a contract "
                   & "case (SPARK RM 6.1.3(2))", P);
@@ -6188,8 +6204,9 @@ package body Sem_Attr is
 
          --  Local variables
 
-         Assoc : Node_Id;
-         Comp  : Node_Id;
+         Assoc     : Node_Id;
+         Comp      : Node_Id;
+         Comp_Type : Entity_Id;
 
       --  Start of processing for Update
 
@@ -6224,6 +6241,7 @@ package body Sem_Attr is
          while Present (Assoc) loop
             Comp := First (Choices (Assoc));
             Analyze (Expression (Assoc));
+            Comp_Type := Empty;
             while Present (Comp) loop
                if Nkind (Comp) = N_Others_Choice then
                   Error_Attr
@@ -6288,6 +6306,21 @@ package body Sem_Attr is
                      Error_Msg_N ("name should be identifier or OTHERS", Comp);
                   else
                      Check_Component_Reference (Comp, P_Type);
+
+                     --  Verify that all choices in an association denote
+                     --  components of the same type.
+
+                     if No (Etype (Comp)) then
+                        null;
+
+                     elsif No (Comp_Type) then
+                        Comp_Type := Base_Type (Etype (Comp));
+
+                     elsif Comp_Type /= Base_Type (Etype (Comp)) then
+                        Error_Msg_N
+                          ("components in choice list must have same type",
+                             Assoc);
+                     end if;
                   end if;
                end if;
 
@@ -7472,6 +7505,7 @@ package body Sem_Attr is
               Attribute_Default_Iterator     |
               Attribute_Implicit_Dereference |
               Attribute_Iterator_Element     |
+              Attribute_Iterable             |
               Attribute_Variable_Indexing    => null;
 
          --  Internal attributes used to deal with Ada 2012 delayed aspects.
@@ -7766,7 +7800,7 @@ package body Sem_Attr is
          elsif Is_VAX_Float (P_Type)
            and then Nkind (Lo_Bound) = N_Identifier
          then
-            Rewrite (N, New_Reference_To (Entity (Lo_Bound), Sloc (N)));
+            Rewrite (N, New_Occurrence_Of (Entity (Lo_Bound), Sloc (N)));
             Analyze (N);
 
          else
@@ -8010,7 +8044,7 @@ package body Sem_Attr is
          elsif Is_VAX_Float (P_Type)
            and then Nkind (Hi_Bound) = N_Identifier
          then
-            Rewrite (N, New_Reference_To (Entity (Hi_Bound), Sloc (N)));
+            Rewrite (N, New_Occurrence_Of (Entity (Hi_Bound), Sloc (N)));
             Analyze (N);
 
          else
@@ -9675,16 +9709,25 @@ package body Sem_Attr is
                   Error_Msg_F ("prefix of % attribute cannot be abstract", P);
                   Set_Etype (N, Any_Type);
 
-               elsif Convention (Entity (P)) = Convention_Intrinsic then
-                  if Ekind (Entity (P)) = E_Enumeration_Literal then
-                     Error_Msg_F
-                       ("prefix of % attribute cannot be enumeration literal",
-                        P);
-                  else
-                     Error_Msg_F
-                       ("prefix of % attribute cannot be intrinsic", P);
-                  end if;
+               elsif Ekind (Entity (P)) = E_Enumeration_Literal then
+                  Error_Msg_F
+                    ("prefix of % attribute cannot be enumeration literal", P);
+                  Set_Etype (N, Any_Type);
 
+               --  An attempt to take 'Access of a function that renames an
+               --  enumeration literal. Issue a specialized error message.
+
+               elsif Ekind (Entity (P)) = E_Function
+                 and then Present (Alias (Entity (P)))
+                 and then Ekind (Alias (Entity (P))) = E_Enumeration_Literal
+               then
+                  Error_Msg_F
+                    ("prefix of % attribute cannot be function renaming "
+                     & "an enumeration literal", P);
+                  Set_Etype (N, Any_Type);
+
+               elsif Convention (Entity (P)) = Convention_Intrinsic then
+                  Error_Msg_F ("prefix of % attribute cannot be intrinsic", P);
                   Set_Etype (N, Any_Type);
                end if;
 
