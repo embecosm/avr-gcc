@@ -811,6 +811,9 @@ typedef struct
   /* Attributes set by compiler extensions (!GCC$ ATTRIBUTES).  */
   unsigned ext_attr:EXT_ATTR_NUM;
 
+  /* Is a parameter associated with a deferred type component.  */
+  unsigned deferred_parameter:1;
+
   /* The namespace where the attribute has been set.  */
   struct gfc_namespace *volatile_ns, *asynchronous_ns;
 }
@@ -2834,6 +2837,7 @@ void gfc_resolve_blocks (gfc_code *, gfc_namespace *);
 int gfc_impure_variable (gfc_symbol *);
 int gfc_pure (gfc_symbol *);
 int gfc_implicit_pure (gfc_symbol *);
+void gfc_unset_implicit_pure (gfc_symbol *);
 int gfc_elemental (gfc_symbol *);
 bool gfc_resolve_iterator (gfc_iterator *, bool, bool);
 bool find_forall_index (gfc_expr *, gfc_symbol *, int);

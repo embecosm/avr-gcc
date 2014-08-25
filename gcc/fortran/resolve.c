@@ -1328,9 +1328,10 @@ resolve_structure_cons (gfc_expr *expr, int init)
 	}
 
       /* F2003, C1272 (3).  */
-      if (gfc_pure (NULL) && cons->expr->expr_type == EXPR_VARIABLE
-	  && (gfc_impure_variable (cons->expr->symtree->n.sym)
-	      || gfc_is_coindexed (cons->expr)))
+      bool impure = cons->expr->expr_type == EXPR_VARIABLE
+		    && (gfc_impure_variable (cons->expr->symtree->n.sym)
+			|| gfc_is_coindexed (cons->expr));
+      if (impure && gfc_pure (NULL))
 	{
 	  t = false;
 	  gfc_error ("Invalid expression in the structure constructor for "
@@ -1338,12 +1339,8 @@ resolve_structure_cons (gfc_expr *expr, int init)
 		     comp->name, &cons->expr->where);
 	}
 
-      if (gfc_implicit_pure (NULL)
-	    && cons->expr->expr_type == EXPR_VARIABLE
-	    && (gfc_impure_variable (cons->expr->symtree->n.sym)
-		|| gfc_is_coindexed (cons->expr)))
-	gfc_current_ns->proc_name->attr.implicit_pure = 0;
-
+      if (impure)
+	gfc_unset_implicit_pure (NULL);
     }
 
   return t;
@@ -3006,8 +3003,7 @@ resolve_function (gfc_expr *expr)
 	  t = false;
 	}
 
-      if (gfc_implicit_pure (NULL))
-	gfc_current_ns->proc_name->attr.implicit_pure = 0;
+      gfc_unset_implicit_pure (NULL);
     }
 
   /* Functions without the RECURSIVE attribution are not allowed to
@@ -3072,8 +3068,7 @@ pure_subroutine (gfc_code *c, gfc_symbol *sym)
     gfc_error ("Subroutine call to '%s' at %L is not PURE", sym->name,
 	       &c->loc);
 
-  if (gfc_implicit_pure (NULL))
-    gfc_current_ns->proc_name->attr.implicit_pure = 0;
+  gfc_unset_implicit_pure (NULL);
 }
 
 
@@ -9170,7 +9165,7 @@ resolve_ordinary_assign (gfc_code *code, gfc_namespace *ns)
       if (lhs->expr_type == EXPR_VARIABLE
 	    && lhs->symtree->n.sym != gfc_current_ns->proc_name
 	    && lhs->symtree->n.sym->ns != gfc_current_ns)
-	gfc_current_ns->proc_name->attr.implicit_pure = 0;
+	gfc_unset_implicit_pure (NULL);
 
       if (lhs->ts.type == BT_DERIVED
 	    && lhs->expr_type == EXPR_VARIABLE
@@ -9178,11 +9173,11 @@ resolve_ordinary_assign (gfc_code *code, gfc_namespace *ns)
 	    && rhs->expr_type == EXPR_VARIABLE
 	    && (gfc_impure_variable (rhs->symtree->n.sym)
 		|| gfc_is_coindexed (rhs)))
-	gfc_current_ns->proc_name->attr.implicit_pure = 0;
+	gfc_unset_implicit_pure (NULL);
 
       /* Fortran 2008, C1283.  */
       if (gfc_is_coindexed (lhs))
-	gfc_current_ns->proc_name->attr.implicit_pure = 0;
+	gfc_unset_implicit_pure (NULL);
     }
 
   /* F2008, 7.2.1.2.  */
@@ -12105,14 +12100,6 @@ resolve_fl_derived0 (gfc_symbol *sym)
       if (c->attr.artificial)
 	continue;
 
-      /* See PRs 51550, 47545, 48654, 49050, 51075 - and 45170.  */
-      if (c->ts.type == BT_CHARACTER && c->ts.deferred && !c->attr.function)
-	{
-	  gfc_error ("Deferred-length character component '%s' at %L is not "
-		     "yet supported", c->name, &c->loc);
-	  return false;
-	}
-
       /* F2008, C442.  */
       if ((!sym->attr.is_class || c != sym->components)
 	  && c->attr.codimension
@@ -12362,6 +12349,25 @@ resolve_fl_derived0 (gfc_symbol *sym)
 		     "length must be a POINTER or ALLOCATABLE",
 		     c->name, sym->name, &c->loc);
 	  return false;
+	}
+
+      /* Add the hidden deferred length field.  */
+      if (c->ts.type == BT_CHARACTER && c->ts.deferred && !c->attr.function
+	  && !sym->attr.is_class)
+	{
+	  char name[GFC_MAX_SYMBOL_LEN+9];
+	  gfc_component *strlen;
+	  sprintf (name, "_%s_length", c->name);
+	  strlen = gfc_find_component (sym, name, true, true);
+	  if (strlen == NULL)
+	    {
+	      if (!gfc_add_component (sym, name, &strlen))
+		return false;
+	      strlen->ts.type = BT_INTEGER;
+	      strlen->ts.kind = gfc_charlen_int_kind;
+	      strlen->attr.access = ACCESS_PRIVATE;
+	      strlen->attr.deferred_parameter = 1;
+	    }
 	}
 
       if (c->ts.type == BT_DERIVED
@@ -13913,6 +13919,33 @@ gfc_implicit_pure (gfc_symbol *sym)
 
   return sym->attr.flavor == FL_PROCEDURE && sym->attr.implicit_pure
     && !sym->attr.pure;
+}
+
+
+void
+gfc_unset_implicit_pure (gfc_symbol *sym)
+{
+  gfc_namespace *ns;
+
+  if (sym == NULL)
+    {
+      /* Check if the current procedure is implicit_pure.  Walk up
+	 the procedure list until we find a procedure.  */
+      for (ns = gfc_current_ns; ns; ns = ns->parent)
+	{
+	  sym = ns->proc_name;
+	  if (sym == NULL)
+	    return;
+
+	  if (sym->attr.flavor == FL_PROCEDURE)
+	    break;
+	}
+    }
+
+  if (sym->attr.flavor == FL_PROCEDURE)
+    sym->attr.implicit_pure = 0;
+  else
+    sym->attr.pure = 0;
 }
 
 

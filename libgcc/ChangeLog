@@ -1,3 +1,31 @@
+2014-03-27  Andreas Krebbel  <Andreas.Krebbel@de.ibm.com>
+
+	* config.host: Append t-floattodi to tmake_file depending on
+	host_address.
+
+2014-03-20  Joel Sherrill  <joel.sherrill@oarcorp.com>
+
+	* config.host (v850*-*-*): Add to tmake_file instead of resetting it.
+
+2014-03-10  Uros Bizjak  <ubizjak@gmail.com>
+
+	PR libgcc/60472
+	* crtstuff.c (frame_dummy): Use void **jcr_list temporary
+	variable to avoid array subscript is above array bounds warnings.
+	Use __builtin_expect when checking *jcr_list for NULL.
+
+2014-03-06  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	PR libgcc/59339
+	* config.host (*-*-linux*, frv-*-*linux*, *-*-kfreebsd*-gnu)
+	(*-*-knetbsd*-gnu, *-*-gnu*, *-*-kopensolaris*-gnu): Only add
+	vtv_*.o to extra_parts if enable_vtable_verify.
+
+2014-03-06  Nick Clifton  <nickc@redhat.com>
+
+	* config/msp430/t-msp430 (LIB2ADD): Add lib2hw_mul.S
+	* config/msp430/lib2hw_mul.S: New: Hardware multiply routines.
+
 2014-02-28  Joey Ye  <joey.ye@arm.com>
 
 	PR libgcc/60166
@@ -408,7 +436,7 @@
 
 2013-12-26  Ganesh Gopalasubramanian  <Ganesh.Gopalasubramanian@amd.com>
 
-        * config/i386/cpuinfo.c (processor_types): Rename AMD cpu names
+	* config/i386/cpuinfo.c (processor_types): Rename AMD cpu names
 	AMD_BOBCAT to AMD_BTVER1 and AMD_JAGUAR to AMD_BTVER2.
 	(get_amd_cpu): Likewise.
 
