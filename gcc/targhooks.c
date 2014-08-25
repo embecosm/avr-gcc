@@ -290,7 +290,7 @@ default_cxx_get_cookie_size (tree type)
 
   sizetype_size = size_in_bytes (sizetype);
   type_align = size_int (TYPE_ALIGN_UNIT (type));
-  if (INT_CST_LT_UNSIGNED (type_align, sizetype_size))
+  if (tree_int_cst_lt (type_align, sizetype_size))
     cookie_size = sizetype_size;
   else
     cookie_size = type_align;
@@ -1447,6 +1447,15 @@ default_get_reg_raw_mode (int regno)
   return reg_raw_mode[regno];
 }
 
+/* Return true if a leaf function should stay leaf even with profiling
+   enabled.  */
+
+bool
+default_keep_leaf_when_profiled ()
+{
+  return false;
+}
+
 /* Return true if the state of option OPTION should be stored in PCH files
    and checked by default_pch_valid_p.  Store the option's current state
    in STATE if so.  */
@@ -1702,7 +1711,7 @@ std_gimplify_va_arg_expr (tree valist, tree type, gimple_seq *pre_p,
    not support nested low-overhead loops.  */
 
 bool
-can_use_doloop_if_innermost (double_int, double_int,
+can_use_doloop_if_innermost (const widest_int &, const widest_int &,
 			     unsigned int loop_depth, bool)
 {
   return loop_depth == 1;

@@ -54,12 +54,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "expr.h"
 #include "optabs.h"
 #include "tree-scalar-evolution.h"
+#include "tree-inline.h"
 
 #ifndef HAVE_conditional_move
 #define HAVE_conditional_move (0)
 #endif
 
-static unsigned int tree_ssa_phiopt (void);
 static unsigned int tree_ssa_phiopt_worker (bool, bool);
 static bool conditional_replacement (basic_block, basic_block,
 				     edge, edge, gimple, tree, tree);
@@ -79,162 +79,6 @@ static void replace_phi_edge_with_variable (basic_block, edge, gimple, tree);
 static void hoist_adjacent_loads (basic_block, basic_block,
 				  basic_block, basic_block);
 static bool gate_hoist_loads (void);
-
-/* This pass tries to replaces an if-then-else block with an
-   assignment.  We have four kinds of transformations.  Some of these
-   transformations are also performed by the ifcvt RTL optimizer.
-
-   Conditional Replacement
-   -----------------------
-
-   This transformation, implemented in conditional_replacement,
-   replaces
-
-     bb0:
-      if (cond) goto bb2; else goto bb1;
-     bb1:
-     bb2:
-      x = PHI <0 (bb1), 1 (bb0), ...>;
-
-   with
-
-     bb0:
-      x' = cond;
-      goto bb2;
-     bb2:
-      x = PHI <x' (bb0), ...>;
-
-   We remove bb1 as it becomes unreachable.  This occurs often due to
-   gimplification of conditionals.
-
-   Value Replacement
-   -----------------
-
-   This transformation, implemented in value_replacement, replaces
-
-     bb0:
-       if (a != b) goto bb2; else goto bb1;
-     bb1:
-     bb2:
-       x = PHI <a (bb1), b (bb0), ...>;
-
-   with
-
-     bb0:
-     bb2:
-       x = PHI <b (bb0), ...>;
-
-   This opportunity can sometimes occur as a result of other
-   optimizations.
-
-
-   Another case caught by value replacement looks like this:
-
-     bb0:
-       t1 = a == CONST;
-       t2 = b > c;
-       t3 = t1 & t2;
-       if (t3 != 0) goto bb1; else goto bb2;
-     bb1:
-     bb2:
-       x = PHI (CONST, a)
-
-   Gets replaced with:
-     bb0:
-     bb2:
-       t1 = a == CONST;
-       t2 = b > c;
-       t3 = t1 & t2;
-       x = a;
-
-   ABS Replacement
-   ---------------
-
-   This transformation, implemented in abs_replacement, replaces
-
-     bb0:
-       if (a >= 0) goto bb2; else goto bb1;
-     bb1:
-       x = -a;
-     bb2:
-       x = PHI <x (bb1), a (bb0), ...>;
-
-   with
-
-     bb0:
-       x' = ABS_EXPR< a >;
-     bb2:
-       x = PHI <x' (bb0), ...>;
-
-   MIN/MAX Replacement
-   -------------------
-
-   This transformation, minmax_replacement replaces
-
-     bb0:
-       if (a <= b) goto bb2; else goto bb1;
-     bb1:
-     bb2:
-       x = PHI <b (bb1), a (bb0), ...>;
-
-   with
-
-     bb0:
-       x' = MIN_EXPR (a, b)
-     bb2:
-       x = PHI <x' (bb0), ...>;
-
-   A similar transformation is done for MAX_EXPR.
-
-
-   This pass also performs a fifth transformation of a slightly different
-   flavor.
-
-   Adjacent Load Hoisting
-   ----------------------
-
-   This transformation replaces
-
-     bb0:
-       if (...) goto bb2; else goto bb1;
-     bb1:
-       x1 = (<expr>).field1;
-       goto bb3;
-     bb2:
-       x2 = (<expr>).field2;
-     bb3:
-       # x = PHI <x1, x2>;
-
-   with
-
-     bb0:
-       x1 = (<expr>).field1;
-       x2 = (<expr>).field2;
-       if (...) goto bb2; else goto bb1;
-     bb1:
-       goto bb3;
-     bb2:
-     bb3:
-       # x = PHI <x1, x2>;
-
-   The purpose of this transformation is to enable generation of conditional
-   move instructions such as Intel CMOVE or PowerPC ISEL.  Because one of
-   the loads is speculative, the transformation is restricted to very
-   specific cases to avoid introducing a page fault.  We are looking for
-   the common idiom:
-
-     if (...)
-       x = y->left;
-     else
-       x = y->right;
-
-   where left and right are typically adjacent pointers in a tree structure.  */
-
-static unsigned int
-tree_ssa_phiopt (void)
-{
-  return tree_ssa_phiopt_worker (false, gate_hoist_loads ());
-}
 
 /* This pass tries to transform conditional stores into unconditional
    ones, enabling further simplifications with the simpler then and else
@@ -716,7 +560,7 @@ jump_function_from_stmt (tree *arg, gimple stmt)
 						&offset);
       if (tem
 	  && TREE_CODE (tem) == MEM_REF
-	  && (mem_ref_offset (tem) + double_int::from_shwi (offset)).is_zero ())
+	  && (mem_ref_offset (tem) + offset) == 0)
 	{
 	  *arg = TREE_OPERAND (tem, 0);
 	  return true;
@@ -816,6 +660,64 @@ operand_equal_for_value_replacement (const_tree arg0, const_tree arg1,
   return false;
 }
 
+/* Returns true if ARG is a neutral element for operation CODE
+   on the RIGHT side.  */
+
+static bool
+neutral_element_p (tree_code code, tree arg, bool right)
+{
+  switch (code)
+    {
+    case PLUS_EXPR:
+    case BIT_IOR_EXPR:
+    case BIT_XOR_EXPR:
+      return integer_zerop (arg);
+
+    case LROTATE_EXPR:
+    case RROTATE_EXPR:
+    case LSHIFT_EXPR:
+    case RSHIFT_EXPR:
+    case MINUS_EXPR:
+    case POINTER_PLUS_EXPR:
+      return right && integer_zerop (arg);
+
+    case MULT_EXPR:
+      return integer_onep (arg);
+
+    case TRUNC_DIV_EXPR:
+    case CEIL_DIV_EXPR:
+    case FLOOR_DIV_EXPR:
+    case ROUND_DIV_EXPR:
+    case EXACT_DIV_EXPR:
+      return right && integer_onep (arg);
+
+    case BIT_AND_EXPR:
+      return integer_all_onesp (arg);
+
+    default:
+      return false;
+    }
+}
+
+/* Returns true if ARG is an absorbing element for operation CODE.  */
+
+static bool
+absorbing_element_p (tree_code code, tree arg)
+{
+  switch (code)
+    {
+    case BIT_IOR_EXPR:
+      return integer_all_onesp (arg);
+
+    case MULT_EXPR:
+    case BIT_AND_EXPR:
+      return integer_zerop (arg);
+
+    default:
+      return false;
+    }
+}
+
 /*  The function value_replacement does the main work of doing the value
     replacement.  Return non-zero if the replacement is done.  Otherwise return
     0.  If we remove the middle basic block, return 2.
@@ -840,9 +742,7 @@ value_replacement (basic_block cond_bb, basic_block middle_bb,
 
   /* If there is a statement in MIDDLE_BB that defines one of the PHI
      arguments, then adjust arg0 or arg1.  */
-  gsi = gsi_after_labels (middle_bb);
-  if (!gsi_end_p (gsi) && is_gimple_debug (gsi_stmt (gsi)))
-    gsi_next_nondebug (&gsi);
+  gsi = gsi_start_nondebug_after_labels_bb (middle_bb);
   while (!gsi_end_p (gsi))
     {
       gimple stmt = gsi_stmt (gsi);
@@ -938,6 +838,59 @@ value_replacement (basic_block cond_bb, basic_block middle_bb,
 	}
 
     }
+
+  /* Now optimize (x != 0) ? x + y : y to just y.
+     The following condition is too restrictive, there can easily be another
+     stmt in middle_bb, for instance a CONVERT_EXPR for the second argument.  */
+  gimple assign = last_and_only_stmt (middle_bb);
+  if (!assign || gimple_code (assign) != GIMPLE_ASSIGN
+      || gimple_assign_rhs_class (assign) != GIMPLE_BINARY_RHS
+      || (!INTEGRAL_TYPE_P (TREE_TYPE (arg0))
+	  && !POINTER_TYPE_P (TREE_TYPE (arg0))))
+    return 0;
+
+  /* Only transform if it removes the condition.  */
+  if (!single_non_singleton_phi_for_edges (phi_nodes (gimple_bb (phi)), e0, e1))
+    return 0;
+
+  /* Size-wise, this is always profitable.  */
+  if (optimize_bb_for_speed_p (cond_bb)
+      /* The special case is useless if it has a low probability.  */
+      && profile_status_for_fn (cfun) != PROFILE_ABSENT
+      && EDGE_PRED (middle_bb, 0)->probability < PROB_EVEN
+      /* If assign is cheap, there is no point avoiding it.  */
+      && estimate_num_insns (assign, &eni_time_weights)
+	 >= 3 * estimate_num_insns (cond, &eni_time_weights))
+    return 0;
+
+  tree lhs = gimple_assign_lhs (assign);
+  tree rhs1 = gimple_assign_rhs1 (assign);
+  tree rhs2 = gimple_assign_rhs2 (assign);
+  enum tree_code code_def = gimple_assign_rhs_code (assign);
+  tree cond_lhs = gimple_cond_lhs (cond);
+  tree cond_rhs = gimple_cond_rhs (cond);
+
+  if (((code == NE_EXPR && e1 == false_edge)
+	|| (code == EQ_EXPR && e1 == true_edge))
+      && arg0 == lhs
+      && ((arg1 == rhs1
+	   && operand_equal_for_phi_arg_p (rhs2, cond_lhs)
+	   && neutral_element_p (code_def, cond_rhs, true))
+	  || (arg1 == rhs2
+	      && operand_equal_for_phi_arg_p (rhs1, cond_lhs)
+	      && neutral_element_p (code_def, cond_rhs, false))
+	  || (operand_equal_for_phi_arg_p (arg1, cond_rhs)
+	      && (operand_equal_for_phi_arg_p (rhs2, cond_lhs)
+		  || operand_equal_for_phi_arg_p (rhs1, cond_lhs))
+	      && absorbing_element_p (code_def, cond_rhs))))
+    {
+      gsi = gsi_for_stmt (cond);
+      gimple_stmt_iterator gsi_from = gsi_for_stmt (assign);
+      gsi_move_before (&gsi_from, &gsi);
+      replace_phi_edge_with_variable (cond_bb, e1, phi, lhs);
+      return 2;
+    }
+
   return 0;
 }
 
@@ -2200,13 +2153,155 @@ gate_hoist_loads (void)
 	  && HAVE_conditional_move);
 }
 
-/* Always do these optimizations if we have SSA
-   trees to work on.  */
-static bool
-gate_phiopt (void)
-{
-  return 1;
-}
+/* This pass tries to replaces an if-then-else block with an
+   assignment.  We have four kinds of transformations.  Some of these
+   transformations are also performed by the ifcvt RTL optimizer.
+
+   Conditional Replacement
+   -----------------------
+
+   This transformation, implemented in conditional_replacement,
+   replaces
+
+     bb0:
+      if (cond) goto bb2; else goto bb1;
+     bb1:
+     bb2:
+      x = PHI <0 (bb1), 1 (bb0), ...>;
+
+   with
+
+     bb0:
+      x' = cond;
+      goto bb2;
+     bb2:
+      x = PHI <x' (bb0), ...>;
+
+   We remove bb1 as it becomes unreachable.  This occurs often due to
+   gimplification of conditionals.
+
+   Value Replacement
+   -----------------
+
+   This transformation, implemented in value_replacement, replaces
+
+     bb0:
+       if (a != b) goto bb2; else goto bb1;
+     bb1:
+     bb2:
+       x = PHI <a (bb1), b (bb0), ...>;
+
+   with
+
+     bb0:
+     bb2:
+       x = PHI <b (bb0), ...>;
+
+   This opportunity can sometimes occur as a result of other
+   optimizations.
+
+
+   Another case caught by value replacement looks like this:
+
+     bb0:
+       t1 = a == CONST;
+       t2 = b > c;
+       t3 = t1 & t2;
+       if (t3 != 0) goto bb1; else goto bb2;
+     bb1:
+     bb2:
+       x = PHI (CONST, a)
+
+   Gets replaced with:
+     bb0:
+     bb2:
+       t1 = a == CONST;
+       t2 = b > c;
+       t3 = t1 & t2;
+       x = a;
+
+   ABS Replacement
+   ---------------
+
+   This transformation, implemented in abs_replacement, replaces
+
+     bb0:
+       if (a >= 0) goto bb2; else goto bb1;
+     bb1:
+       x = -a;
+     bb2:
+       x = PHI <x (bb1), a (bb0), ...>;
+
+   with
+
+     bb0:
+       x' = ABS_EXPR< a >;
+     bb2:
+       x = PHI <x' (bb0), ...>;
+
+   MIN/MAX Replacement
+   -------------------
+
+   This transformation, minmax_replacement replaces
+
+     bb0:
+       if (a <= b) goto bb2; else goto bb1;
+     bb1:
+     bb2:
+       x = PHI <b (bb1), a (bb0), ...>;
+
+   with
+
+     bb0:
+       x' = MIN_EXPR (a, b)
+     bb2:
+       x = PHI <x' (bb0), ...>;
+
+   A similar transformation is done for MAX_EXPR.
+
+
+   This pass also performs a fifth transformation of a slightly different
+   flavor.
+
+   Adjacent Load Hoisting
+   ----------------------
+
+   This transformation replaces
+
+     bb0:
+       if (...) goto bb2; else goto bb1;
+     bb1:
+       x1 = (<expr>).field1;
+       goto bb3;
+     bb2:
+       x2 = (<expr>).field2;
+     bb3:
+       # x = PHI <x1, x2>;
+
+   with
+
+     bb0:
+       x1 = (<expr>).field1;
+       x2 = (<expr>).field2;
+       if (...) goto bb2; else goto bb1;
+     bb1:
+       goto bb3;
+     bb2:
+     bb3:
+       # x = PHI <x1, x2>;
+
+   The purpose of this transformation is to enable generation of conditional
+   move instructions such as Intel CMOVE or PowerPC ISEL.  Because one of
+   the loads is speculative, the transformation is restricted to very
+   specific cases to avoid introducing a page fault.  We are looking for
+   the common idiom:
+
+     if (...)
+       x = y->left;
+     else
+       x = y->right;
+
+   where left and right are typically adjacent pointers in a tree structure.  */
 
 namespace {
 
@@ -2215,15 +2310,13 @@ const pass_data pass_data_phiopt =
   GIMPLE_PASS, /* type */
   "phiopt", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_TREE_PHIOPT, /* tv_id */
   ( PROP_cfg | PROP_ssa ), /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_verify_ssa | TODO_verify_flow
-    | TODO_verify_stmts ), /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_phiopt : public gimple_opt_pass
@@ -2235,8 +2328,10 @@ public:
 
   /* opt_pass methods: */
   opt_pass * clone () { return new pass_phiopt (m_ctxt); }
-  bool gate () { return gate_phiopt (); }
-  unsigned int execute () { return tree_ssa_phiopt (); }
+  virtual unsigned int execute (function *)
+    {
+      return tree_ssa_phiopt_worker (false, gate_hoist_loads ());
+    }
 
 }; // class pass_phiopt
 
@@ -2248,12 +2343,6 @@ make_pass_phiopt (gcc::context *ctxt)
   return new pass_phiopt (ctxt);
 }
 
-static bool
-gate_cselim (void)
-{
-  return flag_tree_cselim;
-}
-
 namespace {
 
 const pass_data pass_data_cselim =
@@ -2261,15 +2350,13 @@ const pass_data pass_data_cselim =
   GIMPLE_PASS, /* type */
   "cselim", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_TREE_PHIOPT, /* tv_id */
   ( PROP_cfg | PROP_ssa ), /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_verify_ssa | TODO_verify_flow
-    | TODO_verify_stmts ), /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_cselim : public gimple_opt_pass
@@ -2280,8 +2367,8 @@ public:
   {}
 
   /* opt_pass methods: */
-  bool gate () { return gate_cselim (); }
-  unsigned int execute () { return tree_ssa_cs_elim (); }
+  virtual bool gate (function *) { return flag_tree_cselim; }
+  virtual unsigned int execute (function *) { return tree_ssa_cs_elim (); }
 
 }; // class pass_cselim
 

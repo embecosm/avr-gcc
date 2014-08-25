@@ -431,8 +431,8 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_1_PLUS, OPT_fguess_branch_probability, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fcprop_registers, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fforward_propagate, NULL, 1 },
-    { OPT_LEVELS_1_PLUS, OPT_fif_conversion, NULL, 1 },
-    { OPT_LEVELS_1_PLUS, OPT_fif_conversion2, NULL, 1 },
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fif_conversion, NULL, 1 },
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fif_conversion2, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fipa_pure_const, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fipa_reference, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fipa_profile, NULL, 1 },
@@ -497,6 +497,7 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_2_PLUS_SPEED_ONLY, OPT_foptimize_strlen, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fhoist_adjacent_loads, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_fisolate_erroneous_paths_dereference, NULL, 1 },
+    { OPT_LEVELS_2_PLUS, OPT_fuse_caller_save, NULL, 1 },
 
     /* -O3 optimizations.  */
     { OPT_LEVELS_3_PLUS, OPT_ftree_loop_distribute_patterns, NULL, 1 },
@@ -857,9 +858,9 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
     maybe_set_param_value (PARAM_MAX_STORES_TO_SINK, 0,
                            opts->x_param_values, opts_set->x_param_values);
 
-  /* The -gsplit-dwarf option requires -gpubnames.  */
+  /* The -gsplit-dwarf option requires -ggnu-pubnames.  */
   if (opts->x_dwarf_split_debug_info)
-    opts->x_debug_generate_pub_sections = 1;
+    opts->x_debug_generate_pub_sections = 2;
 }
 
 #define LEFT_COLUMN	27
@@ -1461,6 +1462,10 @@ common_handle_option (struct gcc_options *opts,
 		sizeof "signed-integer-overflow" -1 },
 	      { "bool", SANITIZE_BOOL, sizeof "bool" - 1 },
 	      { "enum", SANITIZE_ENUM, sizeof "enum" - 1 },
+	      { "float-divide-by-zero", SANITIZE_FLOAT_DIVIDE,
+		sizeof "float-divide-by-zero" - 1 },
+	      { "float-cast-overflow", SANITIZE_FLOAT_CAST,
+		sizeof "float-cast-overflow" - 1 },
 	      { NULL, 0, 0 }
 	    };
 	    const char *comma;
@@ -1493,9 +1498,9 @@ common_handle_option (struct gcc_options *opts,
 		}
 
 	    if (! found)
-	      warning_at (loc, 0,
-			  "unrecognized argument to -fsanitize= option: %q.*s",
-			  (int) len, p);
+	      error_at (loc,
+			"unrecognized argument to -fsanitize= option: %q.*s",
+			(int) len, p);
 
 	    if (comma == NULL)
 	      break;
@@ -1732,7 +1737,7 @@ common_handle_option (struct gcc_options *opts,
       /* FIXME: Instrumentation we insert makes ipa-reference bitmaps
 	 quadratic.  Disable the pass until better memory representation
 	 is done.  */
-      if (!opts_set->x_flag_ipa_reference && opts->x_in_lto_p)
+      if (!opts_set->x_flag_ipa_reference)
         opts->x_flag_ipa_reference = false;
       break;
 
@@ -1812,13 +1817,8 @@ common_handle_option (struct gcc_options *opts,
       break;
 
     case OPT_g:
-      /* -g by itself should force -g2.  */
-      if (*arg == '\0')
-	set_debug_level (NO_DEBUG, DEFAULT_GDB_EXTENSIONS, "2", opts, opts_set,
-			 loc);
-      else
-	set_debug_level (NO_DEBUG, DEFAULT_GDB_EXTENSIONS, arg, opts, opts_set,
-			 loc);
+      set_debug_level (NO_DEBUG, DEFAULT_GDB_EXTENSIONS, arg, opts, opts_set,
+                       loc);
       break;
 
     case OPT_gcoff:
@@ -2068,10 +2068,12 @@ set_debug_level (enum debug_info_type type, int extended, const char *arg,
       opts_set->x_write_symbols = type;
     }
 
-  /* A debug flag without a level defaults to level 2.  */
+  /* A debug flag without a level defaults to level 2.
+     If off or at level 1, set it to level 2, but if already
+     at level 3, don't lower it.  */ 
   if (*arg == '\0')
     {
-      if (!opts->x_debug_info_level)
+      if (opts->x_debug_info_level < DINFO_LEVEL_NORMAL)
 	opts->x_debug_info_level = DINFO_LEVEL_NORMAL;
     }
   else

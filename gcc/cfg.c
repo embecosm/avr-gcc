@@ -68,13 +68,13 @@ void
 init_flow (struct function *the_fun)
 {
   if (!the_fun->cfg)
-    the_fun->cfg = ggc_alloc_cleared_control_flow_graph ();
+    the_fun->cfg = ggc_cleared_alloc<control_flow_graph> ();
   n_edges_for_fn (the_fun) = 0;
   ENTRY_BLOCK_PTR_FOR_FN (the_fun)
-    = ggc_alloc_cleared_basic_block_def ();
+    = ggc_cleared_alloc<basic_block_def> ();
   ENTRY_BLOCK_PTR_FOR_FN (the_fun)->index = ENTRY_BLOCK;
   EXIT_BLOCK_PTR_FOR_FN (the_fun)
-    = ggc_alloc_cleared_basic_block_def ();
+    = ggc_cleared_alloc<basic_block_def> ();
   EXIT_BLOCK_PTR_FOR_FN (the_fun)->index = EXIT_BLOCK;
   ENTRY_BLOCK_PTR_FOR_FN (the_fun)->next_bb
     = EXIT_BLOCK_PTR_FOR_FN (the_fun);
@@ -123,7 +123,7 @@ basic_block
 alloc_block (void)
 {
   basic_block bb;
-  bb = ggc_alloc_cleared_basic_block_def ();
+  bb = ggc_cleared_alloc<basic_block_def> ();
   return bb;
 }
 
@@ -261,7 +261,7 @@ edge
 unchecked_make_edge (basic_block src, basic_block dst, int flags)
 {
   edge e;
-  e = ggc_alloc_cleared_edge_def ();
+  e = ggc_cleared_alloc<edge_def> ();
   n_edges_for_fn (cfun)++;
 
   e->src = src;
@@ -486,7 +486,7 @@ dump_edge_info (FILE *file, edge e, int flags, int do_succ)
   if (e->count && do_details)
     {
       fputs (" count:", file);
-      fprintf (file, HOST_WIDEST_INT_PRINT_DEC, e->count);
+      fprintf (file, "%"PRId64, e->count);
     }
 
   if (e->flags && do_details)
@@ -734,8 +734,8 @@ dump_bb_info (FILE *outf, basic_block bb, int indent, int flags,
       if (flags & TDF_DETAILS)
 	{
 	  struct function *fun = DECL_STRUCT_FUNCTION (current_function_decl);
-	  fprintf (outf, ", count " HOST_WIDEST_INT_PRINT_DEC,
-		   (HOST_WIDEST_INT) bb->count);
+	  fprintf (outf, ", count " "%"PRId64,
+		   (int64_t) bb->count);
 	  fprintf (outf, ", freq %i", bb->frequency);
 	  if (maybe_hot_bb_p (fun, bb))
 	    fputs (", maybe hot", outf);
@@ -961,7 +961,7 @@ scale_bbs_frequencies_int (basic_block *bbs, int nbbs, int num, int den)
 
 /* numbers smaller than this value are safe to multiply without getting
    64bit overflow.  */
-#define MAX_SAFE_MULTIPLIER (1 << (sizeof (HOST_WIDEST_INT) * 4 - 1))
+#define MAX_SAFE_MULTIPLIER (1 << (sizeof (int64_t) * 4 - 1))
 
 /* Multiply all frequencies of basic blocks in array BBS of length NBBS
    by NUM/DEN, in gcov_type arithmetic.  More accurate than previous

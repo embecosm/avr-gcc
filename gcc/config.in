@@ -172,6 +172,12 @@
 #endif
 
 
+/* Define to get calls to the valgrind runtime enabled. */
+#ifndef USED_FOR_TARGET
+#undef ENABLE_VALGRIND_ANNOTATIONS
+#endif
+
+
 /* Define if you want to run subprograms and generated programs through
    valgrind (a memory checker). This is extremely expensive. */
 #ifndef USED_FOR_TARGET
@@ -1254,6 +1260,13 @@
 #endif
 
 
+/* Define if the linker supports clearing hardware capabilities via mapfile.
+   */
+#ifndef USED_FOR_TARGET
+#undef HAVE_LD_CLEARCAP
+#endif
+
+
 /* Define if your linker supports --demangle option. */
 #ifndef USED_FOR_TARGET
 #undef HAVE_LD_DEMANGLE
@@ -1649,12 +1662,6 @@
 #endif
 
 
-/* Define to 1 if the system has the type `__int64'. */
-#ifndef USED_FOR_TARGET
-#undef HAVE___INT64
-#endif
-
-
 /* Define if cloog is in use. */
 #ifndef USED_FOR_TARGET
 #undef HAVE_cloog
@@ -1697,12 +1704,6 @@
 #endif
 
 
-/* Define to the library containing __tls_get_addr/___tls_get_addr. */
-#ifndef USED_FOR_TARGET
-#undef LIB_TLS_SPEC
-#endif
-
-
 /* The linker hash style */
 #ifndef USED_FOR_TARGET
 #undef LINKER_HASH_STYLE
@@ -1726,12 +1727,6 @@
 /* Define if host mkdir takes a single argument. */
 #ifndef USED_FOR_TARGET
 #undef MKDIR_TAKES_ONE_ARG
-#endif
-
-
-/* Define to 1 if HOST_WIDE_INT must be 64 bits wide (see hwint.h). */
-#ifndef USED_FOR_TARGET
-#undef NEED_64BIT_HOST_WIDE_INT
 #endif
 
 
@@ -1813,12 +1808,6 @@
 #endif
 
 
-/* The size of `__int64', as computed by sizeof. */
-#ifndef USED_FOR_TARGET
-#undef SIZEOF___INT64
-#endif
-
-
 /* Define to 1 if you have the ANSI C header files. */
 #ifndef USED_FOR_TARGET
 #undef STDC_HEADERS
@@ -1872,8 +1861,8 @@
 #endif
 
 
-/* Define to 1 if the 'long long' (or '__int64') is wider than 'long' but
-   still efficiently supported by the host hardware. */
+/* Define to 1 if the 'long long' type is wider than 'long' but still
+   efficiently supported by the host hardware. */
 #ifndef USED_FOR_TARGET
 #undef USE_LONG_LONG_FOR_WIDEST_FAST_INT
 #endif

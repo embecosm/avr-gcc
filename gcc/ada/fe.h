@@ -29,17 +29,20 @@
  *                                                                          *
  ****************************************************************************/
 
-/* This file contains definitions to access front-end functions and
-   variables used by gigi.  */
+/* This file contains declarations to access front-end functions and variables
+   used by gigi.
+
+   WARNING: functions taking String_Pointer parameters must abide by the rule
+   documented alongside the definition of String_Pointer in types.h.  */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* comperr:  */
+/* comperr: */
 
 #define Compiler_Abort comperr__compiler_abort
-extern int Compiler_Abort (Fat_Pointer, int, Fat_Pointer) ATTRIBUTE_NORETURN;
+extern int Compiler_Abort (String_Pointer, String_Pointer, Boolean) ATTRIBUTE_NORETURN;
 
 /* csets: */
 
@@ -53,8 +56,7 @@ extern char Fold_Lower[], Fold_Upper[];
 extern Boolean Debug_Flag_NN;
 
 /* einfo: We will be setting Esize for types, Component_Bit_Offset for fields,
-   Alignment for types and objects, Component_Size for array types, and
-   Present_Expr for N_Variant nodes.  */
+   Alignment for types and objects, Component_Size for array types.  */
 
 #define Set_Alignment			einfo__set_alignment
 #define Set_Component_Bit_Offset	einfo__set_component_bit_offset
@@ -62,7 +64,6 @@ extern Boolean Debug_Flag_NN;
 #define Set_Esize			einfo__set_esize
 #define Set_Mechanism			einfo__set_mechanism
 #define Set_RM_Size			einfo__set_rm_size
-#define Set_Present_Expr		sinfo__set_present_expr
 
 extern void Set_Alignment		(Entity_Id, Uint);
 extern void Set_Component_Bit_Offset	(Entity_Id, Uint);
@@ -70,10 +71,7 @@ extern void Set_Component_Size		(Entity_Id, Uint);
 extern void Set_Esize			(Entity_Id, Uint);
 extern void Set_Mechanism		(Entity_Id, Mechanism_Type);
 extern void Set_RM_Size			(Entity_Id, Uint);
-extern void Set_Present_Expr		(Node_Id, Uint);
 
-/* Test if the node N is the name of an entity (i.e. is an identifier,
-   expanded name, or an attribute reference that returns an entity).  */
 #define Is_Entity_Name einfo__is_entity_name
 extern Boolean Is_Entity_Name		(Node_Id);
 
@@ -90,8 +88,8 @@ extern Node_Id Get_Attribute_Definition_Clause (Entity_Id, char);
 #define Error_Msg_NE              errout__error_msg_ne
 #define Set_Identifier_Casing     errout__set_identifier_casing
 
-extern void Error_Msg_N	          (Fat_Pointer, Node_Id);
-extern void Error_Msg_NE          (Fat_Pointer, Node_Id, Entity_Id);
+extern void Error_Msg_N	          (String_Pointer, Node_Id);
+extern void Error_Msg_NE          (String_Pointer, Node_Id, Entity_Id);
 extern void Set_Identifier_Casing (Char *, const Char *);
 
 /* err_vars: */
@@ -147,11 +145,9 @@ extern void Setup_Asm_Outputs		(Node_Id);
 
 #define Get_Encoded_Name exp_dbug__get_encoded_name
 #define Get_External_Name exp_dbug__get_external_name
-#define Get_External_Name_With_Suffix exp_dbug__get_external_name_with_suffix
 
-extern void Get_Encoded_Name			(Entity_Id);
-extern void Get_External_Name			(Entity_Id, Boolean);
-extern void Get_External_Name_With_Suffix	(Entity_Id, Fat_Pointer);
+extern void Get_Encoded_Name	(Entity_Id);
+extern void Get_External_Name	(Entity_Id, Boolean, String_Pointer);
 
 /* exp_util: */
 
@@ -254,11 +250,15 @@ extern Node_Id First_Actual		(Node_Id);
 extern Node_Id Next_Actual		(Node_Id);
 extern Boolean Requires_Transient_Scope (Entity_Id);
 
-/* sinfo: These functions aren't in sinfo.h since we don't make the
-   setting functions, just the retrieval functions.  */
+/* sinfo: */
 
-#define Set_Has_No_Elaboration_Code sinfo__set_has_no_elaboration_code
+#define End_Location			sinfo__end_location
+#define Set_Has_No_Elaboration_Code 	sinfo__set_has_no_elaboration_code
+#define Set_Present_Expr		sinfo__set_present_expr
+
+extern Source_Ptr End_Location 		(Node_Id);
 extern void Set_Has_No_Elaboration_Code	(Node_Id, Boolean);
+extern void Set_Present_Expr		(Node_Id, Uint);
 
 /* targparm: */
 

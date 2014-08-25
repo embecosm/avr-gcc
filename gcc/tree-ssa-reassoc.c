@@ -1111,7 +1111,7 @@ decrement_power (gimple stmt)
       arg1 = gimple_call_arg (stmt, 1);
       c = TREE_REAL_CST (arg1);
       power = real_to_integer (&c) - 1;
-      real_from_integer (&cint, VOIDmode, power, 0, 0);
+      real_from_integer (&cint, VOIDmode, power, SIGNED);
       gimple_call_set_arg (stmt, 1, build_real (TREE_TYPE (arg1), cint));
       return power;
 
@@ -3704,8 +3704,7 @@ acceptable_pow_call (gimple stmt, tree *base, HOST_WIDE_INT *exponent)
 	return false;
 
       *exponent = real_to_integer (&c);
-      real_from_integer (&cint, VOIDmode, *exponent,
-			 *exponent < 0 ? -1 : 0, 0);
+      real_from_integer (&cint, VOIDmode, *exponent, SIGNED);
       if (!real_identical (&c, &cint))
 	return false;
 
@@ -4694,12 +4693,6 @@ execute_reassoc (void)
   return 0;
 }
 
-static bool
-gate_tree_ssa_reassoc (void)
-{
-  return flag_tree_reassoc != 0;
-}
-
 namespace {
 
 const pass_data pass_data_reassoc =
@@ -4707,16 +4700,13 @@ const pass_data pass_data_reassoc =
   GIMPLE_PASS, /* type */
   "reassoc", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_TREE_REASSOC, /* tv_id */
   ( PROP_cfg | PROP_ssa ), /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_verify_ssa
-    | TODO_update_ssa_only_virtuals
-    | TODO_verify_flow ), /* todo_flags_finish */
+  TODO_update_ssa_only_virtuals, /* todo_flags_finish */
 };
 
 class pass_reassoc : public gimple_opt_pass
@@ -4728,8 +4718,8 @@ public:
 
   /* opt_pass methods: */
   opt_pass * clone () { return new pass_reassoc (m_ctxt); }
-  bool gate () { return gate_tree_ssa_reassoc (); }
-  unsigned int execute () { return execute_reassoc (); }
+  virtual bool gate (function *) { return flag_tree_reassoc != 0; }
+  virtual unsigned int execute (function *) { return execute_reassoc (); }
 
 }; // class pass_reassoc
 

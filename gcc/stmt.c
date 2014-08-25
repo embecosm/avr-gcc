@@ -774,24 +774,20 @@ static void
 dump_case_nodes (FILE *f, struct case_node *root,
 		 int indent_step, int indent_level)
 {
-  HOST_WIDE_INT low, high;
-
   if (root == 0)
     return;
   indent_level++;
 
   dump_case_nodes (f, root->left, indent_step, indent_level);
 
-  low = tree_to_shwi (root->low);
-  high = tree_to_shwi (root->high);
-
   fputs (";; ", f);
-  if (high == low)
-    fprintf (f, "%*s" HOST_WIDE_INT_PRINT_DEC,
-	     indent_step * indent_level, "", low);
-  else
-    fprintf (f, "%*s" HOST_WIDE_INT_PRINT_DEC " ... " HOST_WIDE_INT_PRINT_DEC,
-	     indent_step * indent_level, "", low, high);
+  fprintf (f, "%*s", indent_step * indent_level, "");
+  print_dec (root->low, f, TYPE_SIGN (TREE_TYPE (root->low)));
+  if (!tree_int_cst_equal (root->low, root->high))
+    {
+      fprintf (f, " ... ");
+      print_dec (root->high, f, TYPE_SIGN (TREE_TYPE (root->high)));
+    }
   fputs ("\n", f);
 
   dump_case_nodes (f, root->right, indent_step, indent_level);
@@ -1237,9 +1233,7 @@ expand_case (gimple stmt)
 	 original type.  Make sure to drop overflow flags.  */
       low = fold_convert (index_type, low);
       if (TREE_OVERFLOW (low))
-	low = build_int_cst_wide (index_type,
-				  TREE_INT_CST_LOW (low),
-				  TREE_INT_CST_HIGH (low));
+	low = wide_int_to_tree (index_type, low);
 
       /* The canonical from of a case label in GIMPLE is that a simple case
 	 has an empty CASE_HIGH.  For the casesi and tablejump expanders,
@@ -1248,9 +1242,7 @@ expand_case (gimple stmt)
 	high = low;
       high = fold_convert (index_type, high);
       if (TREE_OVERFLOW (high))
-	high = build_int_cst_wide (index_type,
-				   TREE_INT_CST_LOW (high),
-				   TREE_INT_CST_HIGH (high));
+	high = wide_int_to_tree (index_type, high);
 
       basic_block case_bb = label_to_block_fn (cfun, lab);
       edge case_edge = find_edge (bb, case_bb);

@@ -43,7 +43,7 @@ typedef struct allocation_object_def
 	 the allocated object may be even smaller than this structure.
 	 We do not care about alignment for floating-point types.  */
       char *align_p;
-      HOST_WIDEST_INT align_i;
+      int64_t align_i;
     } u;
 } allocation_object;
 
@@ -250,7 +250,7 @@ void *
 pool_alloc (alloc_pool pool)
 {
   alloc_pool_list header;
-#ifdef ENABLE_VALGRIND_CHECKING
+#ifdef ENABLE_VALGRIND_ANNOTATIONS
   int size;
 #endif
 
@@ -265,7 +265,7 @@ pool_alloc (alloc_pool pool)
     }
 
   gcc_checking_assert (pool);
-#ifdef ENABLE_VALGRIND_CHECKING
+#ifdef ENABLE_VALGRIND_ANNOTATIONS
   size = pool->elt_size - offsetof (allocation_object, u.data);
 #endif
 
@@ -334,7 +334,7 @@ void
 pool_free (alloc_pool pool, void *ptr)
 {
   alloc_pool_list header;
-#if defined(ENABLE_VALGRIND_CHECKING) || defined(ENABLE_CHECKING)
+#if defined(ENABLE_VALGRIND_ANNOTATIONS) || defined(ENABLE_CHECKING)
   int size;
   size = pool->elt_size - offsetof (allocation_object, u.data);
 #endif

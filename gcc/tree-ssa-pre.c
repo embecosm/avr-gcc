@@ -1308,7 +1308,8 @@ translate_vuse_through_block (vec<vn_reference_op_s> operands,
 	  unsigned int cnt;
 	  /* Try to find a vuse that dominates this phi node by skipping
 	     non-clobbering statements.  */
-	  vuse = get_continuation_for_phi (phi, &ref, &cnt, &visited, false);
+	  vuse = get_continuation_for_phi (phi, &ref, &cnt, &visited, false,
+					   NULL, NULL);
 	  if (visited)
 	    BITMAP_FREE (visited);
 	}
@@ -1599,11 +1600,11 @@ phi_translate_1 (pre_expr expr, bitmap_set_t set1, bitmap_set_t set2,
 		&& TREE_CODE (op[1]) == INTEGER_CST
 		&& TREE_CODE (op[2]) == INTEGER_CST)
 	      {
-		double_int off = tree_to_double_int (op[0]);
-		off += -tree_to_double_int (op[1]);
-		off *= tree_to_double_int (op[2]);
-		if (off.fits_shwi ())
-		  newop.off = off.low;
+		offset_int off = ((wi::to_offset (op[0])
+				   - wi::to_offset (op[1]))
+				  * wi::to_offset (op[2]));
+		if (wi::fits_shwi_p (off))
+		  newop.off = off.to_shwi ();
 	      }
 	    newoperands[j] = newop;
 	    /* If it transforms from an SSA_NAME to an address, fold with
@@ -3914,7 +3915,6 @@ compute_avail (void)
 
 /* Local state for the eliminate domwalk.  */
 static vec<gimple> el_to_remove;
-static vec<gimple> el_to_update;
 static unsigned int el_todo;
 static vec<tree> el_avail;
 static vec<tree> el_avail_stack;
@@ -4008,6 +4008,15 @@ eliminate_dom_walker::before_dom_children (basic_block b)
 
   /* Mark new bb.  */
   el_avail_stack.safe_push (NULL_TREE);
+
+  /* If this block is not reachable do nothing.  */
+  edge_iterator ei;
+  edge e;
+  FOR_EACH_EDGE (e, ei, b->preds)
+    if (e->flags & EDGE_EXECUTABLE)
+      break;
+  if (!e)
+    return;
 
   for (gsi = gsi_start_phis (b); !gsi_end_p (gsi);)
     {
@@ -4145,9 +4154,14 @@ eliminate_dom_walker::before_dom_children (basic_block b)
 		  print_gimple_stmt (dump_file, stmt, 0, 0);
 		}
 	      pre_stats.eliminations++;
+
+	      tree vdef = gimple_vdef (stmt);
+	      tree vuse = gimple_vuse (stmt);
 	      propagate_tree_value_into_stmt (&gsi, sprime);
 	      stmt = gsi_stmt (gsi);
 	      update_stmt (stmt);
+	      if (vdef != gimple_vdef (stmt))
+		VN_INFO (vdef)->valnum = vuse;
 
 	      /* If we removed EH side-effects from the statement, clean
 		 its EH information.  */
@@ -4245,9 +4259,14 @@ eliminate_dom_walker::before_dom_children (basic_block b)
 		sprime = fold_convert (gimple_expr_type (stmt), sprime);
 
 	      pre_stats.eliminations++;
+
+	      tree vdef = gimple_vdef (stmt);
+	      tree vuse = gimple_vuse (stmt);
 	      propagate_tree_value_into_stmt (&gsi, sprime);
 	      stmt = gsi_stmt (gsi);
 	      update_stmt (stmt);
+	      if (vdef != gimple_vdef (stmt))
+		VN_INFO (vdef)->valnum = vuse;
 
 	      /* If we removed EH side-effects from the statement, clean
 		 its EH information.  */
@@ -4346,22 +4365,27 @@ eliminate_dom_walker::before_dom_children (basic_block b)
 	    continue;
 	  if (gimple_call_addr_fndecl (fn) != NULL_TREE
 	      && useless_type_conversion_p (TREE_TYPE (orig_fn),
-					    TREE_TYPE (fn)))
+					    TREE_TYPE (fn))
+              && dbg_cnt (devirt))
 	    {
 	      bool can_make_abnormal_goto
 		  = stmt_can_make_abnormal_goto (stmt);
 	      bool was_noreturn = gimple_call_noreturn_p (stmt);
 
-	      if (dump_file && (dump_flags & TDF_DETAILS))
+	      if (dump_enabled_p ())
 		{
-		  fprintf (dump_file, "Replacing call target with ");
-		  print_generic_expr (dump_file, fn, 0);
-		  fprintf (dump_file, " in ");
-		  print_gimple_stmt (dump_file, stmt, 0, 0);
+                  location_t loc = gimple_location (stmt);
+                  dump_printf_loc (MSG_OPTIMIZED_LOCATIONS, loc,
+                                   "converting indirect call to function %s\n",
+                                   cgraph_get_node (gimple_call_addr_fndecl (fn))->name ());
 		}
 
 	      gimple_call_set_fn (stmt, fn);
-	      el_to_update.safe_push (stmt);
+	      tree vdef = gimple_vdef (stmt);
+	      tree vuse = gimple_vuse (stmt);
+	      update_stmt (stmt);
+	      if (vdef != gimple_vdef (stmt))
+		VN_INFO (vdef)->valnum = vuse;
 
 	      /* When changing a call into a noreturn call, cfg cleanup
 		 is needed to fix up the noreturn call.  */
@@ -4420,7 +4444,6 @@ eliminate (void)
   need_ab_cleanup = BITMAP_ALLOC (NULL);
 
   el_to_remove.create (0);
-  el_to_update.create (0);
   el_todo = 0;
   el_avail.create (0);
   el_avail_stack.create (0);
@@ -4471,13 +4494,6 @@ eliminate (void)
 	}
     }
   el_to_remove.release ();
-
-  /* We cannot update call statements with virtual operands during
-     SSA walk.  This might remove them which in turn makes our
-     VN lattice invalid.  */
-  FOR_EACH_VEC_ELT (el_to_update, i, stmt)
-    update_stmt (stmt);
-  el_to_update.release ();
 
   return el_todo;
 }
@@ -4690,15 +4706,44 @@ fini_pre ()
   free_dominance_info (CDI_POST_DOMINATORS);
 }
 
-/* Gate and execute functions for PRE.  */
+namespace {
 
-static unsigned int
-do_pre (void)
+const pass_data pass_data_pre =
+{
+  GIMPLE_PASS, /* type */
+  "pre", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_execute */
+  TV_TREE_PRE, /* tv_id */
+  /* PROP_no_crit_edges is ensured by placing pass_split_crit_edges before
+     pass_pre.  */
+  ( PROP_no_crit_edges | PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  PROP_no_crit_edges, /* properties_destroyed */
+  TODO_rebuild_alias, /* todo_flags_start */
+  0, /* todo_flags_finish */
+};
+
+class pass_pre : public gimple_opt_pass
+{
+public:
+  pass_pre (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_pre, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  virtual bool gate (function *) { return flag_tree_pre != 0; }
+  virtual unsigned int execute (function *);
+
+}; // class pass_pre
+
+unsigned int
+pass_pre::execute (function *fun)
 {
   unsigned int todo = 0;
 
   do_partial_partial =
-    flag_tree_partial_pre && optimize_function_for_speed_p (cfun);
+    flag_tree_partial_pre && optimize_function_for_speed_p (fun);
 
   /* This has to happen before SCCVN runs because
      loop_optimizer_init may create new phis, etc.  */
@@ -4721,7 +4766,7 @@ do_pre (void)
      fixed, don't run it when he have an incredibly large number of
      bb's.  If we aren't going to run insert, there is no point in
      computing ANTIC, either, even though it's plenty fast.  */
-  if (n_basic_blocks_for_fn (cfun) < 4000)
+  if (n_basic_blocks_for_fn (fun) < 4000)
     {
       compute_antic ();
       insert ();
@@ -4736,14 +4781,13 @@ do_pre (void)
   /* Remove all the redundant expressions.  */
   todo |= eliminate ();
 
-  statistics_counter_event (cfun, "Insertions", pre_stats.insertions);
-  statistics_counter_event (cfun, "PA inserted", pre_stats.pa_insert);
-  statistics_counter_event (cfun, "New PHIs", pre_stats.phis);
-  statistics_counter_event (cfun, "Eliminated", pre_stats.eliminations);
+  statistics_counter_event (fun, "Insertions", pre_stats.insertions);
+  statistics_counter_event (fun, "PA inserted", pre_stats.pa_insert);
+  statistics_counter_event (fun, "New PHIs", pre_stats.phis);
+  statistics_counter_event (fun, "Eliminated", pre_stats.eliminations);
 
   clear_expression_ids ();
   remove_dead_inserted_code ();
-  todo |= TODO_verify_flow;
 
   scev_finalize ();
   fini_pre ();
@@ -4771,44 +4815,6 @@ do_pre (void)
   return todo;
 }
 
-static bool
-gate_pre (void)
-{
-  return flag_tree_pre != 0;
-}
-
-namespace {
-
-const pass_data pass_data_pre =
-{
-  GIMPLE_PASS, /* type */
-  "pre", /* name */
-  OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
-  true, /* has_execute */
-  TV_TREE_PRE, /* tv_id */
-  /* PROP_no_crit_edges is ensured by placing pass_split_crit_edges before
-     pass_pre.  */
-  ( PROP_no_crit_edges | PROP_cfg | PROP_ssa ), /* properties_required */
-  0, /* properties_provided */
-  PROP_no_crit_edges, /* properties_destroyed */
-  TODO_rebuild_alias, /* todo_flags_start */
-  TODO_verify_ssa, /* todo_flags_finish */
-};
-
-class pass_pre : public gimple_opt_pass
-{
-public:
-  pass_pre (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_pre, ctxt)
-  {}
-
-  /* opt_pass methods: */
-  bool gate () { return gate_pre (); }
-  unsigned int execute () { return do_pre (); }
-
-}; // class pass_pre
-
 } // anon namespace
 
 gimple_opt_pass *
@@ -4817,11 +4823,38 @@ make_pass_pre (gcc::context *ctxt)
   return new pass_pre (ctxt);
 }
 
+namespace {
 
-/* Gate and execute functions for FRE.  */
+const pass_data pass_data_fre =
+{
+  GIMPLE_PASS, /* type */
+  "fre", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_execute */
+  TV_TREE_FRE, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
+};
 
-static unsigned int
-execute_fre (void)
+class pass_fre : public gimple_opt_pass
+{
+public:
+  pass_fre (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_fre, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  opt_pass * clone () { return new pass_fre (m_ctxt); }
+  virtual bool gate (function *) { return flag_tree_fre != 0; }
+  virtual unsigned int execute (function *);
+
+}; // class pass_fre
+
+unsigned int
+pass_fre::execute (function *fun)
 {
   unsigned int todo = 0;
 
@@ -4837,48 +4870,11 @@ execute_fre (void)
 
   free_scc_vn ();
 
-  statistics_counter_event (cfun, "Insertions", pre_stats.insertions);
-  statistics_counter_event (cfun, "Eliminated", pre_stats.eliminations);
+  statistics_counter_event (fun, "Insertions", pre_stats.insertions);
+  statistics_counter_event (fun, "Eliminated", pre_stats.eliminations);
 
   return todo;
 }
-
-static bool
-gate_fre (void)
-{
-  return flag_tree_fre != 0;
-}
-
-namespace {
-
-const pass_data pass_data_fre =
-{
-  GIMPLE_PASS, /* type */
-  "fre", /* name */
-  OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
-  true, /* has_execute */
-  TV_TREE_FRE, /* tv_id */
-  ( PROP_cfg | PROP_ssa ), /* properties_required */
-  0, /* properties_provided */
-  0, /* properties_destroyed */
-  0, /* todo_flags_start */
-  TODO_verify_ssa, /* todo_flags_finish */
-};
-
-class pass_fre : public gimple_opt_pass
-{
-public:
-  pass_fre (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_fre, ctxt)
-  {}
-
-  /* opt_pass methods: */
-  opt_pass * clone () { return new pass_fre (m_ctxt); }
-  bool gate () { return gate_fre (); }
-  unsigned int execute () { return execute_fre (); }
-
-}; // class pass_fre
 
 } // anon namespace
 

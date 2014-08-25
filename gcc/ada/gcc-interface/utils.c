@@ -245,10 +245,10 @@ void
 init_gnat_utils (void)
 {
   /* Initialize the association of GNAT nodes to GCC trees.  */
-  associate_gnat_to_gnu = ggc_alloc_cleared_vec_tree (max_gnat_nodes);
+  associate_gnat_to_gnu = ggc_cleared_vec_alloc<tree> (max_gnat_nodes);
 
   /* Initialize the association of GNAT nodes to GCC trees as dummies.  */
-  dummy_node_table = ggc_alloc_cleared_vec_tree (max_gnat_nodes);
+  dummy_node_table = ggc_cleared_vec_alloc<tree> (max_gnat_nodes);
 
   /* Initialize the hash table of padded types.  */
   pad_type_hash_table
@@ -428,7 +428,7 @@ gnat_pushlevel (void)
       free_binding_level = free_binding_level->chain;
     }
   else
-    newlevel = ggc_alloc_gnat_binding_level ();
+    newlevel = ggc_alloc<gnat_binding_level> ();
 
   /* Use a free BLOCK, if any; otherwise, allocate one.  */
   if (free_block_chain)
@@ -1182,7 +1182,7 @@ maybe_pad_type (tree type, tree size, unsigned int align,
 	      goto built;
 	    }
 
-	  h = ggc_alloc_pad_type_hash ();
+	  h = ggc_alloc<pad_type_hash> ();
 	  h->hash = hashcode;
 	  h->type = record;
 	  loc = htab_find_slot_with_hash (pad_type_hash_table, h, hashcode,
@@ -5756,9 +5756,10 @@ gnat_write_global_declarations (void)
       dummy_global
 	= build_decl (BUILTINS_LOCATION, VAR_DECL, get_identifier (label),
 		      void_type_node);
+      DECL_HARD_REGISTER (dummy_global) = 1;
       TREE_STATIC (dummy_global) = 1;
-      TREE_ASM_WRITTEN (dummy_global) = 1;
       node = varpool_node_for_decl (dummy_global);
+      node->definition = 1;
       node->force_output = 1;
 
       while (!types_used_by_cur_var_decl->is_empty ())
@@ -5913,15 +5914,18 @@ enum c_builtin_type
 #define DEF_FUNCTION_TYPE_3(NAME, RETURN, ARG1, ARG2, ARG3) NAME,
 #define DEF_FUNCTION_TYPE_4(NAME, RETURN, ARG1, ARG2, ARG3, ARG4) NAME,
 #define DEF_FUNCTION_TYPE_5(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5) NAME,
-#define DEF_FUNCTION_TYPE_6(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, ARG6) NAME,
-#define DEF_FUNCTION_TYPE_7(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7) NAME,
-#define DEF_FUNCTION_TYPE_8(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8) NAME,
+#define DEF_FUNCTION_TYPE_6(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, \
+			    ARG6) NAME,
+#define DEF_FUNCTION_TYPE_7(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, \
+			    ARG6, ARG7) NAME,
+#define DEF_FUNCTION_TYPE_8(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, \
+			    ARG6, ARG7, ARG8) NAME,
 #define DEF_FUNCTION_TYPE_VAR_0(NAME, RETURN) NAME,
 #define DEF_FUNCTION_TYPE_VAR_1(NAME, RETURN, ARG1) NAME,
 #define DEF_FUNCTION_TYPE_VAR_2(NAME, RETURN, ARG1, ARG2) NAME,
 #define DEF_FUNCTION_TYPE_VAR_3(NAME, RETURN, ARG1, ARG2, ARG3) NAME,
 #define DEF_FUNCTION_TYPE_VAR_4(NAME, RETURN, ARG1, ARG2, ARG3, ARG4) NAME,
-#define DEF_FUNCTION_TYPE_VAR_5(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG6) \
+#define DEF_FUNCTION_TYPE_VAR_5(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5) \
   NAME,
 #define DEF_POINTER_TYPE(NAME, TYPE) NAME,
 #include "builtin-types.def"
@@ -6052,12 +6056,15 @@ install_builtin_function_types (void)
 #include "builtin-types.def"
 
 #undef DEF_PRIMITIVE_TYPE
+#undef DEF_FUNCTION_TYPE_0
 #undef DEF_FUNCTION_TYPE_1
 #undef DEF_FUNCTION_TYPE_2
 #undef DEF_FUNCTION_TYPE_3
 #undef DEF_FUNCTION_TYPE_4
 #undef DEF_FUNCTION_TYPE_5
 #undef DEF_FUNCTION_TYPE_6
+#undef DEF_FUNCTION_TYPE_7
+#undef DEF_FUNCTION_TYPE_8
 #undef DEF_FUNCTION_TYPE_VAR_0
 #undef DEF_FUNCTION_TYPE_VAR_1
 #undef DEF_FUNCTION_TYPE_VAR_2
@@ -6187,8 +6194,7 @@ static bool
 get_nonnull_operand (tree arg_num_expr, unsigned HOST_WIDE_INT *valp)
 {
   /* Verify the arg number is a constant.  */
-  if (TREE_CODE (arg_num_expr) != INTEGER_CST
-      || TREE_INT_CST_HIGH (arg_num_expr) != 0)
+  if (!tree_fits_uhwi_p (arg_num_expr))
     return false;
 
   *valp = TREE_INT_CST_LOW (arg_num_expr);
@@ -6519,6 +6525,7 @@ def_builtin_1 (enum built_in_function fncode,
 
 static int flag_isoc94 = 0;
 static int flag_isoc99 = 0;
+static int flag_isoc11 = 0;
 
 /* Install what the common builtins.def offers.  */
 

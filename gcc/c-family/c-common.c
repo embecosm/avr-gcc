@@ -49,6 +49,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cgraph.h"
 #include "target-def.h"
 #include "gimplify.h"
+#include "wide-int-print.h"
 
 cpp_reader *parse_in;		/* Declared in c-pragma.h.  */
 
@@ -2192,6 +2193,20 @@ check_main_parameter_types (tree decl)
       if (type == void_type_node || type == error_mark_node )
 	break;
 
+      tree t = type;
+      if (TYPE_ATOMIC (t))
+	  pedwarn (input_location, OPT_Wmain,
+		   "%<_Atomic%>-qualified parameter type %qT of %q+D",
+		   type, decl);
+      while (POINTER_TYPE_P (t))
+	{
+	  t = TREE_TYPE (t);
+	  if (TYPE_ATOMIC (t))
+	    pedwarn (input_location, OPT_Wmain,
+		     "%<_Atomic%>-qualified parameter type %qT of %q+D",
+		     type, decl);
+	}
+
       ++argct;
       switch (argct)
 	{
@@ -2228,6 +2243,10 @@ check_main_parameter_types (tree decl)
   if (argct > 0 && (argct < 2 || argct > 3))
     pedwarn (input_location, OPT_Wmain,
 	     "%q+D takes only zero or two arguments", decl);
+
+  if (stdarg_p (TREE_TYPE (decl)))
+    pedwarn (input_location, OPT_Wmain,
+	     "%q+D declared as variadic function", decl);
 }
 
 /* vector_targets_convertible_p is used for vector pointer types.  The
@@ -3469,7 +3488,7 @@ c_common_fixed_point_type_for_size (unsigned int ibit, unsigned int fbit,
 
 /* Used for communication between c_common_type_for_mode and
    c_register_builtin_type.  */
-static GTY(()) tree registered_builtin_types;
+tree registered_builtin_types;
 
 /* Return a data type that has machine mode MODE.
    If the mode is an integer,
@@ -4118,9 +4137,12 @@ shorten_compare (location_t loc, tree *op0_ptr, tree *op1_ptr,
 	{
 	  /* Convert primop1 to target type, but do not introduce
 	     additional overflow.  We know primop1 is an int_cst.  */
-	  primop1 = force_fit_type_double (*restype_ptr,
-					   tree_to_double_int (primop1),
-					   0, TREE_OVERFLOW (primop1));
+	  primop1 = force_fit_type (*restype_ptr,
+				    wide_int::from
+				      (primop1,
+				       TYPE_PRECISION (*restype_ptr),
+				       TYPE_SIGN (TREE_TYPE (primop1))),
+				    0, TREE_OVERFLOW (primop1));
 	}
       if (type != *restype_ptr)
 	{
@@ -4128,20 +4150,10 @@ shorten_compare (location_t loc, tree *op0_ptr, tree *op1_ptr,
 	  maxval = convert (*restype_ptr, maxval);
 	}
 
-      if (unsignedp && unsignedp0)
-	{
-	  min_gt = INT_CST_LT_UNSIGNED (primop1, minval);
-	  max_gt = INT_CST_LT_UNSIGNED (primop1, maxval);
-	  min_lt = INT_CST_LT_UNSIGNED (minval, primop1);
-	  max_lt = INT_CST_LT_UNSIGNED (maxval, primop1);
-	}
-      else
-	{
-	  min_gt = INT_CST_LT (primop1, minval);
-	  max_gt = INT_CST_LT (primop1, maxval);
-	  min_lt = INT_CST_LT (minval, primop1);
-	  max_lt = INT_CST_LT (maxval, primop1);
-	}
+      min_gt = tree_int_cst_lt (primop1, minval);
+      max_gt = tree_int_cst_lt (primop1, maxval);
+      min_lt = tree_int_cst_lt (minval, primop1);
+      max_lt = tree_int_cst_lt (maxval, primop1);
 
       val = 0;
       /* This used to be a switch, but Genix compiler can't handle that.  */
@@ -4430,8 +4442,7 @@ pointer_int_sum (location_t loc, enum tree_code resultcode,
 			      convert (TREE_TYPE (intop), size_exp), 1);
     intop = convert (sizetype, t);
     if (TREE_OVERFLOW_P (intop) && !TREE_OVERFLOW (t))
-      intop = build_int_cst_wide (TREE_TYPE (intop), TREE_INT_CST_LOW (intop),
-				  TREE_INT_CST_HIGH (intop));
+      intop = wide_int_to_tree (TREE_TYPE (intop), intop);
   }
 
   /* Create the sum or difference.  */
@@ -4927,6 +4938,26 @@ c_common_get_alias_set (tree t)
   return -1;
 }
 
+/* Return the least alignment required for type TYPE.  */
+
+unsigned int
+min_align_of_type (tree type)
+{
+  unsigned int align = TYPE_ALIGN (type);
+  align = MIN (align, BIGGEST_ALIGNMENT);
+#ifdef BIGGEST_FIELD_ALIGNMENT
+  align = MIN (align, BIGGEST_FIELD_ALIGNMENT);
+#endif
+  unsigned int field_align = align;
+#ifdef ADJUST_FIELD_ALIGN
+  tree field = build_decl (UNKNOWN_LOCATION, FIELD_DECL, NULL_TREE,
+			   type);
+  field_align = ADJUST_FIELD_ALIGN (field, field_align);
+#endif
+  align = MIN (align, field_align);
+  return align / BITS_PER_UNIT;
+}
+
 /* Compute the value of 'sizeof (TYPE)' or '__alignof__ (TYPE)', where
    the IS_SIZEOF parameter indicates which operator is being applied.
    The COMPLAIN flag controls whether we should diagnose possibly
@@ -5005,21 +5036,7 @@ c_sizeof_or_alignof_type (location_t loc,
 				size_int (TYPE_PRECISION (char_type_node)
 					  / BITS_PER_UNIT));
       else if (min_alignof)
-	{
-	  unsigned int align = TYPE_ALIGN (type);
-	  align = MIN (align, BIGGEST_ALIGNMENT);
-#ifdef BIGGEST_FIELD_ALIGNMENT
-	  align = MIN (align, BIGGEST_FIELD_ALIGNMENT);
-#endif
-	  unsigned int field_align = align;
-#ifdef ADJUST_FIELD_ALIGN
-	  tree field = build_decl (UNKNOWN_LOCATION, FIELD_DECL, NULL_TREE,
-				   type);
-	  field_align = ADJUST_FIELD_ALIGN (field, field_align);
-#endif
-	  align = MIN (align, field_align);
-	  value = size_int (align / BITS_PER_UNIT);
-	}
+	value = size_int (min_align_of_type (type));
       else
 	value = size_int (TYPE_ALIGN_UNIT (type));
     }
@@ -5111,15 +5128,18 @@ enum c_builtin_type
 #define DEF_FUNCTION_TYPE_3(NAME, RETURN, ARG1, ARG2, ARG3) NAME,
 #define DEF_FUNCTION_TYPE_4(NAME, RETURN, ARG1, ARG2, ARG3, ARG4) NAME,
 #define DEF_FUNCTION_TYPE_5(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5) NAME,
-#define DEF_FUNCTION_TYPE_6(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, ARG6) NAME,
-#define DEF_FUNCTION_TYPE_7(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7) NAME,
-#define DEF_FUNCTION_TYPE_8(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, ARG6, ARG7, ARG8) NAME,
+#define DEF_FUNCTION_TYPE_6(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, \
+			    ARG6) NAME,
+#define DEF_FUNCTION_TYPE_7(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, \
+			    ARG6, ARG7) NAME,
+#define DEF_FUNCTION_TYPE_8(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5, \
+			    ARG6, ARG7, ARG8) NAME,
 #define DEF_FUNCTION_TYPE_VAR_0(NAME, RETURN) NAME,
 #define DEF_FUNCTION_TYPE_VAR_1(NAME, RETURN, ARG1) NAME,
 #define DEF_FUNCTION_TYPE_VAR_2(NAME, RETURN, ARG1, ARG2) NAME,
 #define DEF_FUNCTION_TYPE_VAR_3(NAME, RETURN, ARG1, ARG2, ARG3) NAME,
 #define DEF_FUNCTION_TYPE_VAR_4(NAME, RETURN, ARG1, ARG2, ARG3, ARG4) NAME,
-#define DEF_FUNCTION_TYPE_VAR_5(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG6) \
+#define DEF_FUNCTION_TYPE_VAR_5(NAME, RETURN, ARG1, ARG2, ARG3, ARG4, ARG5) \
   NAME,
 #define DEF_POINTER_TYPE(NAME, TYPE) NAME,
 #include "builtin-types.def"
@@ -5237,12 +5257,15 @@ c_define_builtins (tree va_list_ref_type_node, tree va_list_arg_type_node)
 #include "builtin-types.def"
 
 #undef DEF_PRIMITIVE_TYPE
+#undef DEF_FUNCTION_TYPE_0
 #undef DEF_FUNCTION_TYPE_1
 #undef DEF_FUNCTION_TYPE_2
 #undef DEF_FUNCTION_TYPE_3
 #undef DEF_FUNCTION_TYPE_4
 #undef DEF_FUNCTION_TYPE_5
 #undef DEF_FUNCTION_TYPE_6
+#undef DEF_FUNCTION_TYPE_7
+#undef DEF_FUNCTION_TYPE_8
 #undef DEF_FUNCTION_TYPE_VAR_0
 #undef DEF_FUNCTION_TYPE_VAR_1
 #undef DEF_FUNCTION_TYPE_VAR_2
@@ -5507,10 +5530,6 @@ c_common_nodes_and_builtins (void)
     TYPE_NAME (void_type_node) = void_name;
   }
 
-  /* This node must not be shared.  */
-  void_zero_node = make_node (INTEGER_CST);
-  TREE_TYPE (void_zero_node) = void_type_node;
-
   void_list_node = build_void_list_node ();
 
   /* Make a type to be the domain of a few array types
@@ -5715,7 +5734,7 @@ c_common_nodes_and_builtins (void)
 
   /* Create the built-in __null node.  It is important that this is
      not shared.  */
-  null_node = make_node (INTEGER_CST);
+  null_node = make_int_cst (1, 1);
   TREE_TYPE (null_node) = c_common_type_for_size (POINTER_SIZE, 0);
 
   /* Since builtin_types isn't gc'ed, don't export these nodes.  */
@@ -6093,22 +6112,14 @@ c_add_case_label (location_t loc, splay_tree cases, tree cond, tree orig_type,
 static void
 match_case_to_enum_1 (tree key, tree type, tree label)
 {
-  char buf[2 + 2*HOST_BITS_PER_WIDE_INT/4 + 1];
+  char buf[WIDE_INT_PRINT_BUFFER_SIZE];
 
-  /* ??? Not working too hard to print the double-word value.
-     Should perhaps be done with %lwd in the diagnostic routines?  */
-  if (TREE_INT_CST_HIGH (key) == 0)
-    snprintf (buf, sizeof (buf), HOST_WIDE_INT_PRINT_UNSIGNED,
-	      TREE_INT_CST_LOW (key));
-  else if (!TYPE_UNSIGNED (type)
-	   && TREE_INT_CST_HIGH (key) == -1
-	   && TREE_INT_CST_LOW (key) != 0)
-    snprintf (buf, sizeof (buf), "-" HOST_WIDE_INT_PRINT_UNSIGNED,
-	      -TREE_INT_CST_LOW (key));
+  if (tree_fits_uhwi_p (key))
+    print_dec (key, buf, UNSIGNED);
+  else if (tree_fits_shwi_p (key))
+    print_dec (key, buf, SIGNED);
   else
-    snprintf (buf, sizeof (buf), HOST_WIDE_INT_PRINT_DOUBLE_HEX,
-	      (unsigned HOST_WIDE_INT) TREE_INT_CST_HIGH (key),
-	      (unsigned HOST_WIDE_INT) TREE_INT_CST_LOW (key));
+    print_hex (key, buf);
 
   if (TYPE_NAME (type) == 0)
     warning_at (DECL_SOURCE_LOCATION (CASE_LABEL (label)),
@@ -6564,8 +6575,8 @@ handle_hot_attribute (tree *node, tree name, tree ARG_UNUSED (args),
     {
       if (lookup_attribute ("cold", DECL_ATTRIBUTES (*node)) != NULL)
 	{
-	  warning (OPT_Wattributes, "%qE attribute conflicts with attribute %s",
-		   name, "cold");
+	  warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
+		   "with attribute %qs", name, "cold");
 	  *no_add_attrs = true;
 	}
       /* Most of the rest of the hot processing is done later with
@@ -6592,8 +6603,8 @@ handle_cold_attribute (tree *node, tree name, tree ARG_UNUSED (args),
     {
       if (lookup_attribute ("hot", DECL_ATTRIBUTES (*node)) != NULL)
 	{
-	  warning (OPT_Wattributes, "%qE attribute conflicts with attribute %s",
-		   name, "hot");
+	  warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
+		   "with attribute %qs", name, "hot");
 	  *no_add_attrs = true;
 	}
       /* Most of the rest of the cold processing is done later with
@@ -6666,7 +6677,16 @@ handle_noinline_attribute (tree *node, tree name,
 			   int ARG_UNUSED (flags), bool *no_add_attrs)
 {
   if (TREE_CODE (*node) == FUNCTION_DECL)
-    DECL_UNINLINABLE (*node) = 1;
+    {
+      if (lookup_attribute ("always_inline", DECL_ATTRIBUTES (*node)))
+	{
+	  warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
+		   "with attribute %qs", name, "always_inline");
+	  *no_add_attrs = true;
+	}
+      else
+	DECL_UNINLINABLE (*node) = 1;
+    }
   else
     {
       warning (OPT_Wattributes, "%qE attribute ignored", name);
@@ -6704,9 +6724,16 @@ handle_always_inline_attribute (tree *node, tree name,
 {
   if (TREE_CODE (*node) == FUNCTION_DECL)
     {
-      /* Set the attribute and mark it for disregarding inline
-	 limits.  */
-      DECL_DISREGARD_INLINE_LIMITS (*node) = 1;
+      if (lookup_attribute ("noinline", DECL_ATTRIBUTES (*node)))
+	{
+	  warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
+		   "with %qs attribute", name, "noinline");
+	  *no_add_attrs = true;
+	}
+      else
+	/* Set the attribute and mark it for disregarding inline
+	   limits.  */
+	DECL_DISREGARD_INLINE_LIMITS (*node) = 1;
     }
   else
     {
@@ -7418,6 +7445,8 @@ check_user_alignment (const_tree align, bool allow_zero)
 {
   int i;
 
+  if (error_operand_p (align))
+    return -1;
   if (TREE_CODE (align) != INTEGER_CST
       || !INTEGRAL_TYPE_P (TREE_TYPE (align)))
     {
@@ -7539,7 +7568,8 @@ handle_aligned_attribute (tree *node, tree ARG_UNUSED (name), tree args,
   if (args)
     {
       align_expr = TREE_VALUE (args);
-      if (align_expr && TREE_CODE (align_expr) != IDENTIFIER_NODE)
+      if (align_expr && TREE_CODE (align_expr) != IDENTIFIER_NODE
+	  && TREE_CODE (align_expr) != FUNCTION_DECL)
 	align_expr = default_conversion (align_expr);
     }
   else
@@ -8404,9 +8434,11 @@ handle_tm_wrap_attribute (tree *node, tree name, tree args,
   else
     {
       tree wrap_decl = TREE_VALUE (args);
-      if (TREE_CODE (wrap_decl) != IDENTIFIER_NODE
-	  && TREE_CODE (wrap_decl) != VAR_DECL
-	  && TREE_CODE (wrap_decl) != FUNCTION_DECL)
+      if (error_operand_p (wrap_decl))
+        ;
+      else if (TREE_CODE (wrap_decl) != IDENTIFIER_NODE
+	       && TREE_CODE (wrap_decl) != VAR_DECL
+	       && TREE_CODE (wrap_decl) != FUNCTION_DECL)
 	error ("%qE argument not an identifier", name);
       else
 	{
@@ -8421,7 +8453,7 @@ handle_tm_wrap_attribute (tree *node, tree name, tree args,
 		error ("%qD is not compatible with %qD", wrap_decl, decl);
 	    }
 	  else
-	    error ("transaction_wrap argument is not a function");
+	    error ("%qE argument is not a function", name);
 	}
     }
 
@@ -8533,7 +8565,8 @@ handle_vector_size_attribute (tree *node, tree name, tree args,
   *no_add_attrs = true;
 
   size = TREE_VALUE (args);
-  if (size && TREE_CODE (size) != IDENTIFIER_NODE)
+  if (size && TREE_CODE (size) != IDENTIFIER_NODE
+      && TREE_CODE (size) != FUNCTION_DECL)
     size = default_conversion (size);
 
   if (!tree_fits_uhwi_p (size))
@@ -8829,13 +8862,14 @@ check_nonnull_arg (void * ARG_UNUSED (ctx), tree param,
 static bool
 get_nonnull_operand (tree arg_num_expr, unsigned HOST_WIDE_INT *valp)
 {
-  /* Verify the arg number is a constant.  */
-  if (TREE_CODE (arg_num_expr) != INTEGER_CST
-      || TREE_INT_CST_HIGH (arg_num_expr) != 0)
+  /* Verify the arg number is a small constant.  */
+  if (tree_fits_uhwi_p (arg_num_expr))
+    {
+      *valp = TREE_INT_CST_LOW (arg_num_expr);
+      return true;
+    }
+  else
     return false;
-
-  *valp = TREE_INT_CST_LOW (arg_num_expr);
-  return true;
 }
 
 /* Handle a "nothrow" attribute; arguments as in
@@ -8944,8 +8978,12 @@ handle_sentinel_attribute (tree *node, tree name, tree args,
   if (args)
     {
       tree position = TREE_VALUE (args);
+      if (position && TREE_CODE (position) != IDENTIFIER_NODE
+	  && TREE_CODE (position) != FUNCTION_DECL)
+	position = default_conversion (position);
 
-      if (TREE_CODE (position) != INTEGER_CST)
+      if (TREE_CODE (position) != INTEGER_CST
+          || !INTEGRAL_TYPE_P (TREE_TYPE (position)))
 	{
 	  warning (OPT_Wattributes,
 		   "requested position is not an integer constant");

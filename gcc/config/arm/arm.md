@@ -200,17 +200,9 @@
 	  (const_string "yes")]
 	 (const_string "no")))
 
-; Allows an insn to disable certain alternatives for reasons other than
-; arch support.
-(define_attr "insn_enabled" "no,yes"
-  (const_string "yes"))
-
 ; Enable all alternatives that are both arch_enabled and insn_enabled.
  (define_attr "enabled" "no,yes"
-   (cond [(eq_attr "insn_enabled" "no")
-	  (const_string "no")
-
-	  (and (eq_attr "predicable_short_it" "no")
+   (cond [(and (eq_attr "predicable_short_it" "no")
 	       (and (eq_attr "predicated" "yes")
 	            (match_test "arm_restrict_it")))
 	  (const_string "no")
@@ -2863,6 +2855,28 @@
    (set_attr "type" "multiple")]
 )
 
+(define_insn_and_split "*anddi_notdi_zesidi"
+  [(set (match_operand:DI 0 "s_register_operand" "=r")
+        (and:DI (not:DI (match_operand:DI 2 "s_register_operand" "r"))
+                (zero_extend:DI
+                 (match_operand:SI 1 "s_register_operand" "r"))))]
+  "TARGET_32BIT"
+  "#"
+  "TARGET_32BIT && reload_completed"
+  [(set (match_dup 0) (and:SI (not:SI (match_dup 2)) (match_dup 1)))
+   (set (match_dup 3) (const_int 0))]
+  "
+  {
+    operands[3] = gen_highpart (SImode, operands[0]);
+    operands[0] = gen_lowpart (SImode, operands[0]);
+    operands[2] = gen_lowpart (SImode, operands[2]);
+  }"
+  [(set_attr "length" "8")
+   (set_attr "predicable" "yes")
+   (set_attr "predicable_short_it" "no")
+   (set_attr "type" "multiple")]
+)
+
 (define_insn_and_split "*anddi_notsesidi_di"
   [(set (match_operand:DI 0 "s_register_operand" "=&r,&r")
 	(and:DI (not:DI (sign_extend:DI
@@ -3147,7 +3161,7 @@
 
 (define_insn_and_split "*xordi3_insn"
   [(set (match_operand:DI         0 "s_register_operand" "=w,&r,&r,&r,&r,?w")
-	(xor:DI (match_operand:DI 1 "s_register_operand" "w ,%0,r ,0 ,r ,w")
+	(xor:DI (match_operand:DI 1 "s_register_operand" "%w ,0,r ,0 ,r ,w")
 		(match_operand:DI 2 "arm_xordi_operand"  "w ,r ,r ,Dg,Dg,w")))]
   "TARGET_32BIT && !TARGET_IWMMXT"
 {
@@ -8349,8 +8363,8 @@
 
 (define_insn_and_split "*arm_cmpdi_unsigned"
   [(set (reg:CC_CZ CC_REGNUM)
-        (compare:CC_CZ (match_operand:DI 0 "s_register_operand" "l,r,r")
-                       (match_operand:DI 1 "arm_di_operand"     "Py,r,rDi")))]
+        (compare:CC_CZ (match_operand:DI 0 "s_register_operand" "l,r,r,r")
+                       (match_operand:DI 1 "arm_di_operand"     "Py,r,Di,rDi")))]
 
   "TARGET_32BIT"
   "#"   ; "cmp\\t%R0, %R1\;it eq\;cmpeq\\t%Q0, %Q1"
@@ -8370,9 +8384,9 @@
     operands[1] = gen_lowpart (SImode, operands[1]);
   }
   [(set_attr "conds" "set")
-   (set_attr "enabled_for_depr_it" "yes,yes,no")
-   (set_attr "arch" "t2,t2,*")
-   (set_attr "length" "6,6,8")
+   (set_attr "enabled_for_depr_it" "yes,yes,no,*")
+   (set_attr "arch" "t2,t2,t2,a")
+   (set_attr "length" "6,6,10,8")
    (set_attr "type" "multiple")]
 )
 
@@ -9345,8 +9359,10 @@
   "TARGET_32BIT"
   "
   {
-    if (!REG_P (XEXP (operands[0], 0))
-       && (GET_CODE (XEXP (operands[0], 0)) != SYMBOL_REF))
+    if ((!REG_P (XEXP (operands[0], 0))
+	 && GET_CODE (XEXP (operands[0], 0)) != SYMBOL_REF)
+	|| (GET_CODE (XEXP (operands[0], 0)) == SYMBOL_REF
+	    && arm_is_long_call_p (SYMBOL_REF_DECL (XEXP (operands[0], 0)))))
      XEXP (operands[0], 0) = force_reg (SImode, XEXP (operands[0], 0));
 
     if (operands[2] == NULL_RTX)
@@ -9363,8 +9379,10 @@
   "TARGET_32BIT"
   "
   {
-    if (!REG_P (XEXP (operands[1], 0)) &&
-       (GET_CODE (XEXP (operands[1],0)) != SYMBOL_REF))
+    if ((!REG_P (XEXP (operands[1], 0))
+	 && GET_CODE (XEXP (operands[1], 0)) != SYMBOL_REF)
+	|| (GET_CODE (XEXP (operands[1], 0)) == SYMBOL_REF
+	    && arm_is_long_call_p (SYMBOL_REF_DECL (XEXP (operands[1], 0)))))
      XEXP (operands[1], 0) = force_reg (SImode, XEXP (operands[1], 0));
 
     if (operands[3] == NULL_RTX)
@@ -9850,37 +9868,34 @@
 
 ;; Patterns to allow combination of arithmetic, cond code and shifts
 
-(define_insn "*arith_shiftsi"
-  [(set (match_operand:SI 0 "s_register_operand" "=r,r,r,r")
-        (match_operator:SI 1 "shiftable_operator"
-          [(match_operator:SI 3 "shift_operator"
-             [(match_operand:SI 4 "s_register_operand" "r,r,r,r")
-              (match_operand:SI 5 "shift_amount_operand" "M,M,M,r")])
-           (match_operand:SI 2 "s_register_operand" "rk,rk,r,rk")]))]
+(define_insn "*<arith_shift_insn>_multsi"
+  [(set (match_operand:SI 0 "s_register_operand" "=r,r")
+	(shiftable_ops:SI
+	 (mult:SI (match_operand:SI 2 "s_register_operand" "r,r")
+		  (match_operand:SI 3 "power_of_two_operand" ""))
+	 (match_operand:SI 1 "s_register_operand" "rk,<t2_binop0>")))]
   "TARGET_32BIT"
-  "%i1%?\\t%0, %2, %4%S3"
+  "<arith_shift_insn>%?\\t%0, %1, %2, lsl %b3"
   [(set_attr "predicable" "yes")
+   (set_attr "predicable_short_it" "no")
    (set_attr "shift" "4")
-   (set_attr "arch" "a,t2,t2,a")
-   ;; Thumb2 doesn't allow the stack pointer to be used for 
-   ;; operand1 for all operations other than add and sub. In this case 
-   ;; the minus operation is a candidate for an rsub and hence needs
-   ;; to be disabled.
-   ;; We have to make sure to disable the fourth alternative if
-   ;; the shift_operator is MULT, since otherwise the insn will
-   ;; also match a multiply_accumulate pattern and validate_change
-   ;; will allow a replacement of the constant with a register
-   ;; despite the checks done in shift_operator.
-   (set_attr_alternative "insn_enabled"
-			 [(const_string "yes")
-			  (if_then_else
-			   (match_operand:SI 1 "add_operator" "")
-			   (const_string "yes") (const_string "no"))
-			  (const_string "yes")
-			  (if_then_else
-			   (match_operand:SI 3 "mult_operator" "")
-			   (const_string "no") (const_string "yes"))])
-   (set_attr "type" "alu_shift_imm,alu_shift_imm,alu_shift_imm,alu_shift_reg")])
+   (set_attr "arch" "a,t2")
+   (set_attr "type" "alu_shift_imm")])
+
+(define_insn "*<arith_shift_insn>_shiftsi"
+  [(set (match_operand:SI 0 "s_register_operand" "=r,r,r")
+	(shiftable_ops:SI
+	 (match_operator:SI 2 "shift_nomul_operator"
+	  [(match_operand:SI 3 "s_register_operand" "r,r,r")
+	   (match_operand:SI 4 "shift_amount_operand" "M,M,r")])
+	 (match_operand:SI 1 "s_register_operand" "rk,<t2_binop0>,rk")))]
+  "TARGET_32BIT && GET_CODE (operands[3]) != MULT"
+  "<arith_shift_insn>%?\\t%0, %1, %3%S2"
+  [(set_attr "predicable" "yes")
+   (set_attr "predicable_short_it" "no")
+   (set_attr "shift" "4")
+   (set_attr "arch" "a,t2,a")
+   (set_attr "type" "alu_shift_imm,alu_shift_imm,alu_shift_reg")])
 
 (define_split
   [(set (match_operand:SI 0 "s_register_operand" "")
@@ -12663,6 +12678,44 @@
    rev16\t%0, %1
    rev16%?\t%0, %1
    rev16%?\t%0, %1"
+  [(set_attr "arch" "t1,t2,32")
+   (set_attr "length" "2,2,4")
+   (set_attr "type" "rev")]
+)
+
+;; There are no canonicalisation rules for the position of the lshiftrt, ashift
+;; operations within an IOR/AND RTX, therefore we have two patterns matching
+;; each valid permutation.
+
+(define_insn "arm_rev16si2"
+  [(set (match_operand:SI 0 "register_operand" "=l,l,r")
+        (ior:SI (and:SI (ashift:SI (match_operand:SI 1 "register_operand" "l,l,r")
+                                   (const_int 8))
+                        (match_operand:SI 3 "const_int_operand" "n,n,n"))
+                (and:SI (lshiftrt:SI (match_dup 1)
+                                     (const_int 8))
+                        (match_operand:SI 2 "const_int_operand" "n,n,n"))))]
+  "arm_arch6
+   && aarch_rev16_shleft_mask_imm_p (operands[3], SImode)
+   && aarch_rev16_shright_mask_imm_p (operands[2], SImode)"
+  "rev16\\t%0, %1"
+  [(set_attr "arch" "t1,t2,32")
+   (set_attr "length" "2,2,4")
+   (set_attr "type" "rev")]
+)
+
+(define_insn "arm_rev16si2_alt"
+  [(set (match_operand:SI 0 "register_operand" "=l,l,r")
+        (ior:SI (and:SI (lshiftrt:SI (match_operand:SI 1 "register_operand" "l,l,r")
+                                     (const_int 8))
+                        (match_operand:SI 2 "const_int_operand" "n,n,n"))
+                (and:SI (ashift:SI (match_dup 1)
+                                   (const_int 8))
+                        (match_operand:SI 3 "const_int_operand" "n,n,n"))))]
+  "arm_arch6
+   && aarch_rev16_shleft_mask_imm_p (operands[3], SImode)
+   && aarch_rev16_shright_mask_imm_p (operands[2], SImode)"
+  "rev16\\t%0, %1"
   [(set_attr "arch" "t1,t2,32")
    (set_attr "length" "2,2,4")
    (set_attr "type" "rev")]

@@ -43,6 +43,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "lto.h"
 #include "lto-tree.h"
 #include "lto-streamer.h"
+#include "lto-section-names.h"
 #include "tree-streamer.h"
 #include "splay-tree.h"
 #include "lto-partition.h"
@@ -244,7 +245,7 @@ lto_read_in_decl_state (struct data_in *data_in, const uint32_t *data,
   for (i = 0; i < LTO_N_DECL_STREAMS; i++)
     {
       uint32_t size = *data++;
-      tree *decls = ggc_alloc_vec_tree (size);
+      tree *decls = ggc_vec_alloc<tree> (size);
 
       for (j = 0; j < size; j++)
 	decls[j] = streamer_tree_cache_get_tree (data_in->reader_cache, data[j]);
@@ -1212,8 +1213,8 @@ compare_tree_sccs_1 (tree t1, tree t2, tree **map)
 
   if (CODE_CONTAINS_STRUCT (code, TS_INT_CST))
     {
-      compare_values (TREE_INT_CST_LOW);
-      compare_values (TREE_INT_CST_HIGH);
+      if (!wi::eq_p (t1, t2))
+	return false;
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_REAL_CST))
@@ -1529,7 +1530,6 @@ compare_tree_sccs_1 (tree t1, tree t2, tree **map)
 	compare_tree_edges (DECL_ASSEMBLER_NAME (t1),
 			    DECL_ASSEMBLER_NAME (t2));
       compare_tree_edges (DECL_SECTION_NAME (t1), DECL_SECTION_NAME (t2));
-      compare_tree_edges (DECL_COMDAT_GROUP (t1), DECL_COMDAT_GROUP (t2));
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_FIELD_DECL))
@@ -2002,10 +2002,10 @@ lto_read_decls (struct lto_file_decl_data *decl_data, const void *data,
 
 /* Custom version of strtoll, which is not portable.  */
 
-static HOST_WIDEST_INT
+static int64_t
 lto_parse_hex (const char *p)
 {
-  HOST_WIDEST_INT ret = 0;
+  int64_t ret = 0;
 
   for (; *p != '\0'; ++p)
     {
@@ -2057,7 +2057,7 @@ lto_resolution_read (splay_tree file_ids, FILE *resolution, lto_file *file)
     {
       int t;
       char offset_p[17];
-      HOST_WIDEST_INT offset;
+      int64_t offset;
       t = fscanf (resolution, "@0x%16s", offset_p);
       if (t != 1)
         internal_error ("could not parse file offset");
@@ -2159,7 +2159,7 @@ create_subid_section_table (struct lto_section_slot *ls, splay_tree file_ids,
     }
   else
     {
-      file_data = ggc_alloc_lto_file_decl_data ();
+      file_data = ggc_alloc<lto_file_decl_data> ();
       memset(file_data, 0, sizeof (struct lto_file_decl_data));
       file_data->id = id;
       file_data->section_hash_table = lto_obj_create_section_hash_table ();;
@@ -2625,13 +2625,13 @@ lto_wpa_write_files (void)
 	      if (!lto_symtab_encoder_in_partition_p (part->encoder, node))
 		{
 	          fprintf (cgraph_dump_file, "%s ", node->asm_name ());
-		  cgraph_node *cnode = dyn_cast <cgraph_node> (node);
+		  cgraph_node *cnode = dyn_cast <cgraph_node *> (node);
 		  if (cnode
 		      && lto_symtab_encoder_encode_body_p (part->encoder, cnode))
 		    fprintf (cgraph_dump_file, "(body included)");
 		  else
 		    {
-		      varpool_node *vnode = dyn_cast <varpool_node> (node);
+		      varpool_node *vnode = dyn_cast <varpool_node *> (node);
 		      if (vnode
 			  && lto_symtab_encoder_encode_initializer_p (part->encoder, vnode))
 			fprintf (cgraph_dump_file, "(initializer included)");
@@ -2860,7 +2860,7 @@ lto_flatten_files (struct lto_file_decl_data **orig, int count, int last_file_ix
 
   lto_stats.num_input_files = count;
   all_file_decl_data
-    = ggc_alloc_cleared_vec_lto_file_decl_data_ptr (count + 1);
+    = ggc_cleared_vec_alloc<lto_file_decl_data_ptr> (count + 1);
   /* Set the hooks so that all of the ipa passes can read in their data.  */
   lto_set_in_hooks (all_file_decl_data, get_section_data, free_section_data);
   for (i = 0, k = 0; i < last_file_ix; i++) 
@@ -2903,7 +2903,7 @@ read_cgraph_and_symbols (unsigned nfiles, const char **fnames)
   timevar_push (TV_IPA_LTO_DECL_IN);
 
   real_file_decl_data
-    = decl_data = ggc_alloc_cleared_vec_lto_file_decl_data_ptr (nfiles + 1);
+    = decl_data = ggc_cleared_vec_alloc<lto_file_decl_data_ptr> (nfiles + 1);
   real_file_count = nfiles;
 
   /* Read the resolution file.  */
@@ -3001,6 +3001,10 @@ read_cgraph_and_symbols (unsigned nfiles, const char **fnames)
   gimple_canonical_types = NULL;
   delete canonical_type_hash_cache;
   canonical_type_hash_cache = NULL;
+
+  /* At this stage we know that majority of GGC memory is reachable.  
+     Growing the limits prevents unnecesary invocation of GGC.  */
+  ggc_grow ();
   ggc_collect ();
 
   /* Set the hooks so that all of the ipa passes can read in their data.  */

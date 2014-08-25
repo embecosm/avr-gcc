@@ -1013,10 +1013,19 @@ expand_stack_vars (bool (*pred) (size_t), struct stack_vars_data *data)
 	      if (data->asan_base == NULL)
 		data->asan_base = gen_reg_rtx (Pmode);
 	      base = data->asan_base;
+
+	      if (!STRICT_ALIGNMENT)
+		base_align = crtl->max_used_stack_slot_alignment;
+	      else
+		base_align = MAX (crtl->max_used_stack_slot_alignment,
+				  GET_MODE_ALIGNMENT (SImode)
+				  << ASAN_SHADOW_SHIFT);
 	    }
 	  else
-	    offset = alloc_stack_frame_space (stack_vars[i].size, alignb);
-	  base_align = crtl->max_used_stack_slot_alignment;
+	    {
+	      offset = alloc_stack_frame_space (stack_vars[i].size, alignb);
+	      base_align = crtl->max_used_stack_slot_alignment;
+	    }
 	}
       else
 	{
@@ -1602,6 +1611,52 @@ record_or_union_type_has_array_p (const_tree tree_type)
   return 0;
 }
 
+/* Check if the current function has local referenced variables that
+   have their addresses taken, contain an array, or are arrays.  */
+
+static bool
+stack_protect_decl_p ()
+{
+  unsigned i;
+  tree var;
+
+  FOR_EACH_LOCAL_DECL (cfun, i, var)
+    if (!is_global_var (var))
+      {
+	tree var_type = TREE_TYPE (var);
+	if (TREE_CODE (var) == VAR_DECL
+	    && (TREE_CODE (var_type) == ARRAY_TYPE
+		|| TREE_ADDRESSABLE (var)
+		|| (RECORD_OR_UNION_TYPE_P (var_type)
+		    && record_or_union_type_has_array_p (var_type))))
+	  return true;
+      }
+  return false;
+}
+
+/* Check if the current function has calls that use a return slot.  */
+
+static bool
+stack_protect_return_slot_p ()
+{
+  basic_block bb;
+  
+  FOR_ALL_BB_FN (bb, cfun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb);
+	 !gsi_end_p (gsi); gsi_next (&gsi))
+      {
+	gimple stmt = gsi_stmt (gsi);
+	/* This assumes that calls to internal-only functions never
+	   use a return slot.  */
+	if (is_gimple_call (stmt)
+	    && !gimple_call_internal_p (stmt)
+	    && aggregate_value_p (TREE_TYPE (gimple_call_fntype (stmt)),
+				  gimple_call_fndecl (stmt)))
+	  return true;
+      }
+  return false;
+}
+
 /* Expand all variables used in the function.  */
 
 static rtx
@@ -1674,22 +1729,8 @@ expand_used_vars (void)
   pointer_map_destroy (ssa_name_decls);
 
   if (flag_stack_protect == SPCT_FLAG_STRONG)
-    FOR_EACH_LOCAL_DECL (cfun, i, var)
-      if (!is_global_var (var))
-	{
-	  tree var_type = TREE_TYPE (var);
-	  /* Examine local referenced variables that have their addresses taken,
-	     contain an array, or are arrays.  */
-	  if (TREE_CODE (var) == VAR_DECL
-	      && (TREE_CODE (var_type) == ARRAY_TYPE
-		  || TREE_ADDRESSABLE (var)
-		  || (RECORD_OR_UNION_TYPE_P (var_type)
-		      && record_or_union_type_has_array_p (var_type))))
-	    {
-	      gen_stack_protect_signal = true;
-	      break;
-	    }
-	}
+      gen_stack_protect_signal
+	= stack_protect_decl_p () || stack_protect_return_slot_p ();
 
   /* At this point all variables on the local_decls with TREE_USED
      set are not associated with any block scope.  Lay them out.  */
@@ -1845,6 +1886,11 @@ expand_used_vars (void)
 	    = alloc_stack_frame_space (redzonesz, ASAN_RED_ZONE_SIZE);
 	  data.asan_vec.safe_push (prev_offset);
 	  data.asan_vec.safe_push (offset);
+	  /* Leave space for alignment if STRICT_ALIGNMENT.  */
+	  if (STRICT_ALIGNMENT)
+	    alloc_stack_frame_space ((GET_MODE_ALIGNMENT (SImode)
+				      << ASAN_SHADOW_SHIFT)
+				     / BITS_PER_UNIT, 1);
 
 	  var_end_seq
 	    = asan_emit_stack_protection (virtual_stack_vars_rtx,
@@ -5530,8 +5576,38 @@ stack_protect_prologue (void)
    confuse the CFG hooks, so be careful to not manipulate CFG during
    the expansion.  */
 
-static unsigned int
-gimple_expand_cfg (void)
+namespace {
+
+const pass_data pass_data_expand =
+{
+  RTL_PASS, /* type */
+  "expand", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_execute */
+  TV_EXPAND, /* tv_id */
+  ( PROP_ssa | PROP_gimple_leh | PROP_cfg
+    | PROP_gimple_lcx
+    | PROP_gimple_lvec ), /* properties_required */
+  PROP_rtl, /* properties_provided */
+  ( PROP_ssa | PROP_trees ), /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
+};
+
+class pass_expand : public rtl_opt_pass
+{
+public:
+  pass_expand (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_expand, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  virtual unsigned int execute (function *);
+
+}; // class pass_expand
+
+unsigned int
+pass_expand::execute (function *fun)
 {
   basic_block bb, init_block;
   sbitmap blocks;
@@ -5554,17 +5630,17 @@ gimple_expand_cfg (void)
   /* Dominators are not kept up-to-date as we may create new basic-blocks.  */
   free_dominance_info (CDI_DOMINATORS);
 
-  rtl_profile_for_bb (ENTRY_BLOCK_PTR_FOR_FN (cfun));
+  rtl_profile_for_bb (ENTRY_BLOCK_PTR_FOR_FN (fun));
 
   insn_locations_init ();
   if (!DECL_IS_BUILTIN (current_function_decl))
     {
       /* Eventually, all FEs should explicitly set function_start_locus.  */
-      if (LOCATION_LOCUS (cfun->function_start_locus) == UNKNOWN_LOCATION)
-       set_curr_insn_location
-         (DECL_SOURCE_LOCATION (current_function_decl));
+      if (LOCATION_LOCUS (fun->function_start_locus) == UNKNOWN_LOCATION)
+	set_curr_insn_location
+	  (DECL_SOURCE_LOCATION (current_function_decl));
       else
-       set_curr_insn_location (cfun->function_start_locus);
+	set_curr_insn_location (fun->function_start_locus);
     }
   else
     set_curr_insn_location (UNKNOWN_LOCATION);
@@ -5587,7 +5663,7 @@ gimple_expand_cfg (void)
   crtl->max_used_stack_slot_alignment = STACK_BOUNDARY;
   crtl->stack_alignment_estimated = 0;
   crtl->preferred_stack_boundary = STACK_BOUNDARY;
-  cfun->cfg->max_jumptable_ents = 0;
+  fun->cfg->max_jumptable_ents = 0;
 
   /* Resovle the function section.  Some targets, like ARM EABI rely on knowledge
      of the function section at exapnsion time to predict distance of calls.  */
@@ -5606,14 +5682,14 @@ gimple_expand_cfg (void)
   /* Honor stack protection warnings.  */
   if (warn_stack_protect)
     {
-      if (cfun->calls_alloca)
+      if (fun->calls_alloca)
 	warning (OPT_Wstack_protector,
 		 "stack protector not protecting local variables: "
-                 "variable length buffer");
+		 "variable length buffer");
       if (has_short_buffer && !crtl->stack_protect_guard)
 	warning (OPT_Wstack_protector,
 		 "stack protector not protecting function: "
-                 "all local arrays are less than %d bytes long",
+		 "all local arrays are less than %d bytes long",
 		 (int) PARAM_VALUE (PARAM_SSP_BUFFER_SIZE));
     }
 
@@ -5644,12 +5720,12 @@ gimple_expand_cfg (void)
       gcc_assert (SA.partition_to_pseudo[i]);
 
       /* If this decl was marked as living in multiple places, reset
-         this now to NULL.  */
+	 this now to NULL.  */
       if (DECL_RTL_IF_SET (var) == pc_rtx)
 	SET_DECL_RTL (var, NULL);
 
       /* Some RTL parts really want to look at DECL_RTL(x) when x
-         was a decl marked in REG_ATTR or MEM_ATTR.  We could use
+	 was a decl marked in REG_ATTR or MEM_ATTR.  We could use
 	 SET_DECL_RTL here making this available, but that would mean
 	 to select one of the potentially many RTLs for one DECL.  Instead
 	 of doing that we simply reset the MEM_EXPR of the RTL in question,
@@ -5718,11 +5794,11 @@ gimple_expand_cfg (void)
 
   /* Clear EDGE_EXECUTABLE on the entry edge(s).  It is cleaned from the
      remaining edges later.  */
-  FOR_EACH_EDGE (e, ei, ENTRY_BLOCK_PTR_FOR_FN (cfun)->succs)
+  FOR_EACH_EDGE (e, ei, ENTRY_BLOCK_PTR_FOR_FN (fun)->succs)
     e->flags &= ~EDGE_EXECUTABLE;
 
   lab_rtx_for_bb = pointer_map_create ();
-  FOR_BB_BETWEEN (bb, init_block->next_bb, EXIT_BLOCK_PTR_FOR_FN (cfun),
+  FOR_BB_BETWEEN (bb, init_block->next_bb, EXIT_BLOCK_PTR_FOR_FN (fun),
 		  next_bb)
     bb = expand_gimple_basic_block (bb, var_ret_seq != NULL_RTX);
 
@@ -5740,7 +5816,7 @@ gimple_expand_cfg (void)
 
   timevar_push (TV_POST_EXPAND);
   /* We are no longer in SSA form.  */
-  cfun->gimple_df->in_ssa_p = false;
+  fun->gimple_df->in_ssa_p = false;
   if (current_loops)
     loops_state_clear (LOOP_CLOSED_SSA);
 
@@ -5762,14 +5838,14 @@ gimple_expand_cfg (void)
     }
 
   /* Zap the tree EH table.  */
-  set_eh_throw_stmt_table (cfun, NULL);
+  set_eh_throw_stmt_table (fun, NULL);
 
   /* We need JUMP_LABEL be set in order to redirect jumps, and hence
      split edges which edge insertions might do.  */
   rebuild_jump_labels (get_insns ());
 
-  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun),
-		  EXIT_BLOCK_PTR_FOR_FN (cfun), next_bb)
+  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (fun),
+		  EXIT_BLOCK_PTR_FOR_FN (fun), next_bb)
     {
       edge e;
       edge_iterator ei;
@@ -5780,8 +5856,8 @@ gimple_expand_cfg (void)
 	      rebuild_jump_labels_chain (e->insns.r);
 	      /* Put insns after parm birth, but before
 		 NOTE_INSNS_FUNCTION_BEG.  */
-	      if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun)
-		  && single_succ_p (ENTRY_BLOCK_PTR_FOR_FN (cfun)))
+	      if (e->src == ENTRY_BLOCK_PTR_FOR_FN (fun)
+		  && single_succ_p (ENTRY_BLOCK_PTR_FOR_FN (fun)))
 		{
 		  rtx insns = e->insns.r;
 		  e->insns.r = NULL_RTX;
@@ -5802,8 +5878,8 @@ gimple_expand_cfg (void)
   /* We're done expanding trees to RTL.  */
   currently_expanding_to_rtl = 0;
 
-  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb,
-		  EXIT_BLOCK_PTR_FOR_FN (cfun), next_bb)
+  FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (fun)->next_bb,
+		  EXIT_BLOCK_PTR_FOR_FN (fun), next_bb)
     {
       edge e;
       edge_iterator ei;
@@ -5824,7 +5900,7 @@ gimple_expand_cfg (void)
 	}
     }
 
-  blocks = sbitmap_alloc (last_basic_block_for_fn (cfun));
+  blocks = sbitmap_alloc (last_basic_block_for_fn (fun));
   bitmap_ones (blocks);
   find_many_sub_basic_blocks (blocks);
   sbitmap_free (blocks);
@@ -5840,7 +5916,7 @@ gimple_expand_cfg (void)
   /* After initial rtl generation, call back to finish generating
      exception support code.  We need to do this before cleaning up
      the CFG as the code does not expect dead landing pads.  */
-  if (cfun->eh->region_tree != NULL)
+  if (fun->eh->region_tree != NULL)
     finish_eh_generation ();
 
   /* Remove unreachable blocks, otherwise we cannot compute dominators
@@ -5878,14 +5954,14 @@ gimple_expand_cfg (void)
 
   /* If we're emitting a nested function, make sure its parent gets
      emitted as well.  Doing otherwise confuses debug info.  */
-  {
-    tree parent;
-    for (parent = DECL_CONTEXT (current_function_decl);
-	 parent != NULL_TREE;
-	 parent = get_containing_scope (parent))
-      if (TREE_CODE (parent) == FUNCTION_DECL)
-	TREE_SYMBOL_REFERENCED (DECL_ASSEMBLER_NAME (parent)) = 1;
-  }
+    {
+      tree parent;
+      for (parent = DECL_CONTEXT (current_function_decl);
+	   parent != NULL_TREE;
+	   parent = get_containing_scope (parent))
+	if (TREE_CODE (parent) == FUNCTION_DECL)
+	  TREE_SYMBOL_REFERENCED (DECL_ASSEMBLER_NAME (parent)) = 1;
+    }
 
   /* We are now committed to emitting code for this function.  Do any
      preparation, such as emitting abstract debug info for the inline
@@ -5900,53 +5976,21 @@ gimple_expand_cfg (void)
   naked_return_label = NULL;
 
   /* After expanding, the tm_restart map is no longer needed.  */
-  if (cfun->gimple_df->tm_restart)
+  if (fun->gimple_df->tm_restart)
     {
-      htab_delete (cfun->gimple_df->tm_restart);
-      cfun->gimple_df->tm_restart = NULL;
+      htab_delete (fun->gimple_df->tm_restart);
+      fun->gimple_df->tm_restart = NULL;
     }
 
   /* Tag the blocks with a depth number so that change_scope can find
      the common parent easily.  */
-  set_block_levels (DECL_INITIAL (cfun->decl), 0);
+  set_block_levels (DECL_INITIAL (fun->decl), 0);
   default_rtl_profile ();
 
   timevar_pop (TV_POST_EXPAND);
 
   return 0;
 }
-
-namespace {
-
-const pass_data pass_data_expand =
-{
-  RTL_PASS, /* type */
-  "expand", /* name */
-  OPTGROUP_NONE, /* optinfo_flags */
-  false, /* has_gate */
-  true, /* has_execute */
-  TV_EXPAND, /* tv_id */
-  ( PROP_ssa | PROP_gimple_leh | PROP_cfg
-    | PROP_gimple_lcx
-    | PROP_gimple_lvec ), /* properties_required */
-  PROP_rtl, /* properties_provided */
-  ( PROP_ssa | PROP_trees ), /* properties_destroyed */
-  ( TODO_verify_ssa | TODO_verify_flow
-    | TODO_verify_stmts ), /* todo_flags_start */
-  0, /* todo_flags_finish */
-};
-
-class pass_expand : public rtl_opt_pass
-{
-public:
-  pass_expand (gcc::context *ctxt)
-    : rtl_opt_pass (pass_data_expand, ctxt)
-  {}
-
-  /* opt_pass methods: */
-  unsigned int execute () { return gimple_expand_cfg (); }
-
-}; // class pass_expand
 
 } // anon namespace
 

@@ -174,6 +174,7 @@ libgomp			Richard Henderson	rth@redhat.com
 libgomp			Jakub Jelinek		jakub@redhat.com
 libiberty		DJ Delorie		dj@redhat.com
 libiberty		Ian Lance Taylor	ian@airs.com
+libitm			Torvald Riegel		triegel@redhat.com
 libffi testsuite	Andreas Tobler		andreast@gcc.gnu.org
 libobjc			Nicola Pero		nicola.pero@meta-innovation.com
 libobjc			Andrew Pinski		pinskia@gmail.com
@@ -280,7 +281,6 @@ Fortran			Mikael Morin		mikael.morin@sfr.fr
 Fortran			Tobias Schlüter		tobias.schlueter@physik.uni-muenchen.de
 Fortran			Paul Thomas		pault@gcc.gnu.org
 Fortran			Janus Weil		janus@gcc.gnu.org
-gengtype/GTY		Laurynas Biveinis       laurynas.biveinis@gmail.com
 Graphite		Daniel Berlin		dberlin@dberlin.org
 Graphite 		Tobias Grosser		grosser@fim.uni-passau.de
 Graphite		Sebastian Pop		sebastian.pop@amd.com
@@ -301,6 +301,9 @@ register allocation	Kenneth Zadeck		zadeck@naturalbridge.com
 register allocation	Seongbae Park		seongbae.park@gmail.com
 RTL optimizers		Steven Bosscher		steven@gcc.gnu.org
 selective scheduling	Andrey Belevantsev	abel@ispras.ru
+wide-int 		Kenneth Zadeck		zadeck@naturalbridge.com
+wide-int		Mike Stump		mikestump@comcast.net
+wide-int		Richard Sandiford	rdsandiford@googlemail.com
 
 Note that while reviewers can approve changes to parts of the compiler
 that they maintain, they still need approval for their own patches
@@ -309,6 +312,7 @@ from other maintainers or reviewers.
 			Write After Approval	(last name alphabetical order)
 
 Mark G. Adams					mark.g.adams@sympatico.ca
+Pedro Alves					palves@redhat.com
 Raksit Ashok					raksit@google.com
 Matt Austern					austern@google.com
 David Ayers					ayers@fsfe.org
@@ -316,6 +320,7 @@ Giovanni Bajo					giovannibajo@gcc.gnu.org
 Simon Baldwin					simonb@google.com
 Scott Bambrough					scottb@netwinder.org
 Wolfgang Bangerth				bangerth@dealii.org
+Charles Baylis					charles.baylis@linaro.org
 Tejas Belagod					tejas.belagod@arm.com
 Andrey Belevantsev				abel@ispras.ru
 Jon Beniston					jon@beniston.com
@@ -323,6 +328,7 @@ Peter Bergner					bergner@vnet.ibm.com
 Jan Beulich					jbeulich@novell.com
 David Billinghurst				David.Billinghurst@riotinto.com
 Tomas Bily					tbily@suse.cz
+Laurynas Biveinis                               laurynas.biveinis@gmail.com
 Eric Blake					ericb@gcc.gnu.org
 Phil Blundell					pb@futuretv.com
 Hans Boehm					hboehm@gcc.gnu.org
@@ -366,7 +372,6 @@ Phil Edwards					pme@gcc.gnu.org
 Mohan Embar					gnustuff@thisiscool.com
 Revital Eres					eres@il.ibm.com
 Marc Espie					espie@cvs.openbsd.org
-Rafael Ávila de Espíndola			espindola@google.com
 Ansgar Esztermann				ansgar@thphy.uni-duesseldorf.de
 Doug Evans					dje@google.com
 Chris Fairles					cfairles@gcc.gnu.org
@@ -432,7 +437,7 @@ Michael Koch					konqueror@gmx.de
 Matt Kraai					kraai@ftbfs.org
 Jan Kratochvil					jan.kratochvil@redhat.com
 Venkataramanan Kumar				venkataramanan.kumar@amd.com
-Maxim Kuvyrkov					maxim@kugelworks.com
+Maxim Kuvyrkov					maxim.kuvyrkov@linaro.org
 Doug Kwan					dougkwan@google.com
 Scott Robert Ladd				scott.ladd@coyotegulch.com
 Razya Ladelsky					razya@gcc.gnu.org
@@ -442,6 +447,7 @@ Rask Ingemann Lambertsen			ccc94453@vip.cybercity.dk
 Asher Langton					langton2@llnl.gov
 Chris Lattner					sabre@nondot.org
 Terry Laurenzo					tlaurenzo@gmail.com
+Alan Lawrence					alan.lawrence@arm.com
 Georg-Johann Lay				avr@gjlay.de
 Marc Lehmann					pcg@goof.com
 James Lemke					jwlemke@codesourcery.com
@@ -541,7 +547,7 @@ Gabriele Svelto					gabriele.svelto@st.com
 Sriraman Tallam					tmsriram@google.com
 Chung-Lin Tang					cltang@codesourcery.com
 Samuel Tardieu					sam@rfc1149.net
-Dinar Temirbulatov				dinar@kugelworks.com
+Dinar Temirbulatov				dtemirbulatov@gmail.com
 Kresten Krab Thorup				krab@gcc.gnu.org
 Caroline Tice					cmtice@google.com
 Kyrylo Tkachov					kyrylo.tkachov@arm.com

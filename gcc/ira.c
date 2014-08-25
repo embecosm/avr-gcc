@@ -1744,7 +1744,7 @@ setup_prohibited_mode_move_regs (void)
   test_reg1 = gen_rtx_REG (VOIDmode, 0);
   test_reg2 = gen_rtx_REG (VOIDmode, 0);
   move_pat = gen_rtx_SET (VOIDmode, test_reg1, test_reg2);
-  move_insn = gen_rtx_INSN (VOIDmode, 0, 0, 0, 0, move_pat, 0, -1, 0);
+  move_insn = gen_rtx_INSN (VOIDmode, 0, 0, 0, move_pat, 0, -1, 0);
   for (i = 0; i < NUM_MACHINE_MODES; i++)
     {
       SET_HARD_REG_SET (ira_prohibited_mode_move_regs[i]);
@@ -1769,37 +1769,6 @@ setup_prohibited_mode_move_regs (void)
 }
 
 
-
-/* Return TRUE if the operand constraint STR is commutative.  */
-static bool
-commutative_constraint_p (const char *str)
-{
-  int curr_alt, c;
-  bool ignore_p;
-
-  for (ignore_p = false, curr_alt = 0;;)
-    {
-      c = *str;
-      if (c == '\0')
-	break;
-      str += CONSTRAINT_LEN (c, str);
-      if (c == '#' || !recog_data.alternative_enabled_p[curr_alt])
-	ignore_p = true;
-      else if (c == ',')
-	{
-	  curr_alt++;
-	  ignore_p = false;
-	}
-      else if (! ignore_p)
-	{
-	  /* Usually `%' is the first constraint character but the
-	     documentation does not require this.  */
-	  if (c == '%')
-	    return true;
-	}
-    }
-  return false;
-}
 
 /* Setup possible alternatives in ALTS for INSN.  */
 void
@@ -1844,7 +1813,8 @@ ira_setup_alts (rtx insn, HARD_REG_SET &alts)
 	}
       for (nalt = 0; nalt < recog_data.n_alternatives; nalt++)
 	{
-	  if (! recog_data.alternative_enabled_p[nalt] || TEST_HARD_REG_BIT (alts, nalt))
+	  if (!TEST_BIT (recog_data.enabled_alternatives, nalt)
+	      || TEST_HARD_REG_BIT (alts, nalt))
 	    continue;
 
 	  for (nop = 0; nop < recog_data.n_operands; nop++)
@@ -2009,33 +1979,33 @@ ira_get_dup_out_num (int op_num, HARD_REG_SET &alts)
 
   if (op_num < 0 || recog_data.n_alternatives == 0)
     return -1;
-  use_commut_op_p = false;
+  /* We should find duplications only for input operands.  */
+  if (recog_data.operand_type[op_num] != OP_IN)
+    return -1;
   str = recog_data.constraints[op_num];
+  use_commut_op_p = false;
   for (;;)
     {
 #ifdef EXTRA_CONSTRAINT_STR
       op = recog_data.operand[op_num];
 #endif
       
-      for (ignore_p = false, original = -1, curr_alt = 0;;)
+      for (curr_alt = 0, ignore_p = !TEST_HARD_REG_BIT (alts, curr_alt),
+	   original = -1;;)
 	{
 	  c = *str;
 	  if (c == '\0')
 	    break;
-	  if (c == '#' || !TEST_HARD_REG_BIT (alts, curr_alt))
+	  if (c == '#')
 	    ignore_p = true;
 	  else if (c == ',')
 	    {
 	      curr_alt++;
-	      ignore_p = false;
+	      ignore_p = !TEST_HARD_REG_BIT (alts, curr_alt);
 	    }
 	  else if (! ignore_p)
 	    switch (c)
 	      {
-		/* We should find duplications only for input operands.  */
-	      case '=':
-	      case '+':
-		goto fail;
 	      case 'X':
 	      case 'p':
 	      case 'g':
@@ -2101,10 +2071,9 @@ ira_get_dup_out_num (int op_num, HARD_REG_SET &alts)
       if (use_commut_op_p)
 	break;
       use_commut_op_p = true;
-      if (commutative_constraint_p (recog_data.constraints[op_num]))
+      if (recog_data.constraints[op_num][0] == '%')
 	str = recog_data.constraints[op_num + 1];
-      else if (op_num > 0 && commutative_constraint_p (recog_data.constraints
-						       [op_num - 1]))
+      else if (op_num > 0 && recog_data.constraints[op_num - 1][0] == '%')
 	str = recog_data.constraints[op_num - 1];
       else
 	break;
@@ -4979,17 +4948,6 @@ split_live_ranges_for_shrink_wrap (void)
 	   use;
 	   use = DF_REF_NEXT_REG (use))
 	{
-	  if (NONDEBUG_INSN_P (DF_REF_INSN (use))
-	      && GET_CODE (DF_REF_REG (use)) == SUBREG)
-	    {
-	      /* This is necessary to avoid hitting an assert at
-		 postreload.c:2294 in libstc++ testcases on x86_64-linux.  I'm
-		 not really sure what the probblem actually is there.  */
-	      bitmap_clear (&need_new);
-	      bitmap_clear (&reachable);
-	      return false;
-	    }
-
 	  int ubbi = DF_REF_BB (use)->index;
 	  if (bitmap_bit_p (&reachable, ubbi))
 	    bitmap_set_bit (&need_new, ubbi);
@@ -5548,12 +5506,6 @@ do_reload (void)
 }
 
 /* Run the integrated register allocator.  */
-static unsigned int
-rest_of_handle_ira (void)
-{
-  ira (dump_file);
-  return 0;
-}
 
 namespace {
 
@@ -5562,7 +5514,6 @@ const pass_data pass_data_ira =
   RTL_PASS, /* type */
   "ira", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  false, /* has_gate */
   true, /* has_execute */
   TV_IRA, /* tv_id */
   0, /* properties_required */
@@ -5580,7 +5531,11 @@ public:
   {}
 
   /* opt_pass methods: */
-  unsigned int execute () { return rest_of_handle_ira (); }
+  virtual unsigned int execute (function *)
+    {
+      ira (dump_file);
+      return 0;
+    }
 
 }; // class pass_ira
 
@@ -5592,13 +5547,6 @@ make_pass_ira (gcc::context *ctxt)
   return new pass_ira (ctxt);
 }
 
-static unsigned int
-rest_of_handle_reload (void)
-{
-  do_reload ();
-  return 0;
-}
-
 namespace {
 
 const pass_data pass_data_reload =
@@ -5606,7 +5554,6 @@ const pass_data pass_data_reload =
   RTL_PASS, /* type */
   "reload", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  false, /* has_gate */
   true, /* has_execute */
   TV_RELOAD, /* tv_id */
   0, /* properties_required */
@@ -5624,7 +5571,11 @@ public:
   {}
 
   /* opt_pass methods: */
-  unsigned int execute () { return rest_of_handle_reload (); }
+  virtual unsigned int execute (function *)
+    {
+      do_reload ();
+      return 0;
+    }
 
 }; // class pass_reload
 

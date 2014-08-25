@@ -733,6 +733,7 @@ debug_headers = \
 	${debug_srcdir}/multimap.h \
 	${debug_srcdir}/multiset.h \
 	${debug_srcdir}/safe_base.h \
+	${debug_srcdir}/safe_container.h \
 	${debug_srcdir}/safe_iterator.h \
 	${debug_srcdir}/safe_iterator.tcc \
 	${debug_srcdir}/safe_local_iterator.h \
@@ -815,6 +816,7 @@ profile_headers = \
 	${profile_srcdir}/map.h \
 	${profile_srcdir}/multimap.h \
 	${profile_srcdir}/multiset.h \
+	${profile_srcdir}/ordered_base.h \
 	${profile_srcdir}/set \
 	${profile_srcdir}/set.h \
 	${profile_srcdir}/iterator_tracker.h

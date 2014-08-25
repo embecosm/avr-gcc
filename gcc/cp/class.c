@@ -40,6 +40,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "dumpfile.h"
 #include "splay-tree.h"
 #include "gimplify.h"
+#include "wide-int.h"
 
 /* The number of nested classes being processed.  If we are not in the
    scope of any class, this is zero.  */
@@ -767,11 +768,8 @@ build_vtable (tree class_type, tree name, tree vtable_type)
   TREE_READONLY (decl) = 1;
   DECL_VIRTUAL_P (decl) = 1;
   DECL_ALIGN (decl) = TARGET_VTABLE_ENTRY_ALIGN;
+  DECL_USER_ALIGN (decl) = true;
   DECL_VTABLE_OR_VTT_P (decl) = 1;
-  /* At one time the vtable info was grabbed 2 words at a time.  This
-     fails on sparc unless you have 8-byte alignment.  (tiemann) */
-  DECL_ALIGN (decl) = MAX (TYPE_ALIGN (double_type_node),
-			   DECL_ALIGN (decl));
   set_linkage_according_to_type (class_type, decl);
   /* The vtable has not been defined -- yet.  */
   DECL_EXTERNAL (decl) = 1;
@@ -3811,7 +3809,7 @@ walk_subobject_offsets (tree type,
 
   /* If this OFFSET is bigger than the MAX_OFFSET, then we should
      stop.  */
-  if (max_offset && INT_CST_LT (max_offset, offset))
+  if (max_offset && tree_int_cst_lt (max_offset, offset))
     return 0;
 
   if (type == error_mark_node)
@@ -3968,8 +3966,8 @@ walk_subobject_offsets (tree type,
       for (index = size_zero_node;
 	   /* G++ 3.2 had an off-by-one error here.  */
 	   (abi_version_at_least (2)
-	    ? !INT_CST_LT (TYPE_MAX_VALUE (domain), index)
-	    : INT_CST_LT (index, TYPE_MAX_VALUE (domain)));
+	    ? !tree_int_cst_lt (TYPE_MAX_VALUE (domain), index)
+	    : tree_int_cst_lt (index, TYPE_MAX_VALUE (domain)));
 	   index = size_binop (PLUS_EXPR, index, size_one_node))
 	{
 	  r = walk_subobject_offsets (TREE_TYPE (type),
@@ -3985,7 +3983,7 @@ walk_subobject_offsets (tree type,
 	  /* If this new OFFSET is bigger than the MAX_OFFSET, then
 	     there's no point in iterating through the remaining
 	     elements of the array.  */
-	  if (max_offset && INT_CST_LT (max_offset, offset))
+	  if (max_offset && tree_int_cst_lt (max_offset, offset))
 	    break;
 	}
     }
@@ -4725,11 +4723,7 @@ deduce_noexcept_on_destructor (tree dtor)
 {
   if (!TYPE_RAISES_EXCEPTIONS (TREE_TYPE (dtor)))
     {
-      tree ctx = DECL_CONTEXT (dtor);
-      tree implicit_fn = implicitly_declare_fn (sfk_destructor, ctx,
-						/*const_p=*/false,
-						NULL, NULL);
-      tree eh_spec = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (implicit_fn));
+      tree eh_spec = unevaluated_noexcept_spec ();
       TREE_TYPE (dtor) = build_exception_variant (TREE_TYPE (dtor), eh_spec);
     }
 }
@@ -5926,7 +5920,7 @@ end_of_class (tree t, int include_virtuals_p)
 	continue;
 
       offset = end_of_base (base_binfo);
-      if (INT_CST_LT_UNSIGNED (result, offset))
+      if (tree_int_cst_lt (result, offset))
 	result = offset;
     }
 
@@ -5936,7 +5930,7 @@ end_of_class (tree t, int include_virtuals_p)
 	 vec_safe_iterate (vbases, i, &base_binfo); i++)
       {
 	offset = end_of_base (base_binfo);
-	if (INT_CST_LT_UNSIGNED (result, offset))
+	if (tree_int_cst_lt (result, offset))
 	  result = offset;
       }
 
@@ -6016,7 +6010,7 @@ include_empty_classes (record_layout_info rli)
 		      CLASSTYPE_AS_BASE (rli->t) != NULL_TREE);
   rli_size = rli_size_unit_so_far (rli);
   if (TREE_CODE (rli_size) == INTEGER_CST
-      && INT_CST_LT_UNSIGNED (rli_size, eoc))
+      && tree_int_cst_lt (rli_size, eoc))
     {
       if (!abi_version_at_least (2))
 	/* In version 1 of the ABI, the size of a class that ends with
@@ -6132,7 +6126,7 @@ layout_class_type (tree t, tree *virtuals_p)
 	 type, then there are some special rules for allocating
 	 it.  */
       if (DECL_C_BIT_FIELD (field)
-	  && INT_CST_LT (TYPE_SIZE (type), DECL_SIZE (field)))
+	  && tree_int_cst_lt (TYPE_SIZE (type), DECL_SIZE (field)))
 	{
 	  unsigned int itk;
 	  tree integer_type;
@@ -6143,10 +6137,10 @@ layout_class_type (tree t, tree *virtuals_p)
 	     bits as additional padding.  */
 	  for (itk = itk_char; itk != itk_none; ++itk)
 	    if (integer_types[itk] != NULL_TREE
-		&& (INT_CST_LT (size_int (MAX_FIXED_MODE_SIZE),
-				TYPE_SIZE (integer_types[itk]))
-		    || INT_CST_LT (DECL_SIZE (field),
-				   TYPE_SIZE (integer_types[itk]))))
+		&& (tree_int_cst_lt (size_int (MAX_FIXED_MODE_SIZE),
+				     TYPE_SIZE (integer_types[itk]))
+		    || tree_int_cst_lt (DECL_SIZE (field),
+					TYPE_SIZE (integer_types[itk]))))
 	      break;
 
 	  /* ITK now indicates a type that is too large for the
@@ -6162,7 +6156,7 @@ layout_class_type (tree t, tree *virtuals_p)
 	     3.2 always created a padding field, even if it had zero
 	     width.  */
 	  if (!abi_version_at_least (2)
-	      || INT_CST_LT (TYPE_SIZE (integer_type), DECL_SIZE (field)))
+	      || tree_int_cst_lt (TYPE_SIZE (integer_type), DECL_SIZE (field)))
 	    {
 	      if (abi_version_at_least (2) && TREE_CODE (t) == UNION_TYPE)
 		/* In a union, the padding field must have the full width
@@ -6490,7 +6484,7 @@ static struct sorted_fields_type *
 sorted_fields_type_new (int n)
 {
   struct sorted_fields_type *sft;
-  sft = ggc_alloc_sorted_fields_type (sizeof (struct sorted_fields_type)
+  sft = (sorted_fields_type *) ggc_internal_alloc (sizeof (sorted_fields_type)
 				      + n * sizeof (tree));
   sft->len = n;
 

@@ -1646,17 +1646,6 @@ execute_split_functions (void)
   return todo;
 }
 
-/* Gate function splitting pass.  When doing profile feedback, we want
-   to execute the pass after profiling is read.  So disable one in 
-   early optimization.  */
-
-static bool
-gate_split_functions (void)
-{
-  return (flag_partial_inlining
-	  && !profile_arc_flag && !flag_branch_probabilities);
-}
-
 namespace {
 
 const pass_data pass_data_split_functions =
@@ -1664,14 +1653,13 @@ const pass_data pass_data_split_functions =
   GIMPLE_PASS, /* type */
   "fnsplit", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_IPA_FNSPLIT, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  TODO_verify_all, /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_split_functions : public gimple_opt_pass
@@ -1682,10 +1670,22 @@ public:
   {}
 
   /* opt_pass methods: */
-  bool gate () { return gate_split_functions (); }
-  unsigned int execute () { return execute_split_functions (); }
+  virtual bool gate (function *);
+  virtual unsigned int execute (function *)
+    {
+      return execute_split_functions ();
+    }
 
 }; // class pass_split_functions
+
+bool
+pass_split_functions::gate (function *)
+{
+  /* When doing profile feedback, we want to execute the pass after profiling
+     is read.  So disable one in early optimization.  */
+  return (flag_partial_inlining
+	  && !profile_arc_flag && !flag_branch_probabilities);
+}
 
 } // anon namespace
 
@@ -1693,17 +1693,6 @@ gimple_opt_pass *
 make_pass_split_functions (gcc::context *ctxt)
 {
   return new pass_split_functions (ctxt);
-}
-
-/* Gate feedback driven function splitting pass.
-   We don't need to split when profiling at all, we are producing
-   lousy code anyway.  */
-
-static bool
-gate_feedback_split_functions (void)
-{
-  return (flag_partial_inlining
-	  && flag_branch_probabilities);
 }
 
 /* Execute function splitting pass.  */
@@ -1724,14 +1713,13 @@ const pass_data pass_data_feedback_split_functions =
   GIMPLE_PASS, /* type */
   "feedback_fnsplit", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_IPA_FNSPLIT, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  TODO_verify_all, /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_feedback_split_functions : public gimple_opt_pass
@@ -1742,10 +1730,22 @@ public:
   {}
 
   /* opt_pass methods: */
-  bool gate () { return gate_feedback_split_functions (); }
-  unsigned int execute () { return execute_feedback_split_functions (); }
+  virtual bool gate (function *);
+  virtual unsigned int execute (function *)
+    {
+      return execute_feedback_split_functions ();
+    }
 
 }; // class pass_feedback_split_functions
+
+bool
+pass_feedback_split_functions::gate (function *)
+{
+  /* We don't need to split when profiling at all, we are producing
+     lousy code anyway.  */
+  return (flag_partial_inlining
+	  && flag_branch_probabilities);
+}
 
 } // anon namespace
 

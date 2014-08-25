@@ -40,7 +40,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "trans-stmt.h"
 #include "dependency.h"
 #include "gimplify.h"
-
+#include "wide-int.h"
 
 /* Convert a scalar to an array descriptor. To be used for assumed-rank
    arrays.  */
@@ -1387,25 +1387,42 @@ gfc_get_expr_charlen (gfc_expr *e)
 static tree
 get_tree_for_caf_expr (gfc_expr *expr)
 {
-   tree caf_decl = NULL_TREE;
-   gfc_ref *ref;
+  tree caf_decl;
+  bool found;
+  gfc_ref *ref;
 
-   gcc_assert (expr && expr->expr_type == EXPR_VARIABLE);
-   if (expr->symtree->n.sym->attr.codimension)
-     caf_decl = expr->symtree->n.sym->backend_decl;
+  gcc_assert (expr && expr->expr_type == EXPR_VARIABLE);
 
-   for (ref = expr->ref; ref; ref = ref->next)
-     if (ref->type == REF_COMPONENT)
-       {
+  caf_decl = expr->symtree->n.sym->backend_decl;
+  gcc_assert (caf_decl);
+  if (expr->symtree->n.sym->ts.type == BT_CLASS)
+    caf_decl = gfc_class_data_get (caf_decl);
+  if (expr->symtree->n.sym->attr.codimension)
+    return caf_decl;
+
+  /* The following code assumes that the coarray is a component reachable via
+     only scalar components/variables; the Fortran standard guarantees this.  */
+
+  for (ref = expr->ref; ref; ref = ref->next)
+    if (ref->type == REF_COMPONENT)
+      {
 	gfc_component *comp = ref->u.c.component;
-        if (comp->attr.pointer || comp->attr.allocatable)
-	  caf_decl = NULL_TREE;
-	if (comp->attr.codimension)
-	  caf_decl = comp->backend_decl;
-       }
 
-   gcc_assert (caf_decl != NULL_TREE);
-   return caf_decl;
+	if (POINTER_TYPE_P (TREE_TYPE (caf_decl)))
+	  caf_decl = build_fold_indirect_ref_loc (input_location, caf_decl);
+	caf_decl = fold_build3_loc (input_location, COMPONENT_REF,
+				    TREE_TYPE (comp->backend_decl), caf_decl,
+				    comp->backend_decl, NULL_TREE);
+	if (comp->ts.type == BT_CLASS)
+	  caf_decl = gfc_class_data_get (caf_decl);
+	if (comp->attr.codimension)
+	  {
+	    found = true;
+	    break;
+	  }
+      }
+  gcc_assert (found && caf_decl);
+  return caf_decl;
 }
 
 
@@ -2095,13 +2112,14 @@ gfc_conv_cst_int_power (gfc_se * se, tree lhs, tree rhs)
   HOST_WIDE_INT m;
   unsigned HOST_WIDE_INT n;
   int sgn;
+  wide_int wrhs = rhs;
 
   /* If exponent is too large, we won't expand it anyway, so don't bother
      with large integer values.  */
-  if (!TREE_INT_CST (rhs).fits_shwi ())
+  if (!wi::fits_shwi_p (wrhs))
     return 0;
 
-  m = TREE_INT_CST (rhs).to_shwi ();
+  m = wrhs.to_shwi ();
   /* There's no ABS for HOST_WIDE_INT, so here we go. It also takes care
      of the asymmetric range of the integer type.  */
   n = (unsigned HOST_WIDE_INT) (m < 0 ? -m : m);
@@ -2640,7 +2658,7 @@ gfc_string_to_single_character (tree len, tree str, int kind)
 {
 
   if (len == NULL
-      || !INTEGER_CST_P (len) || TREE_INT_CST_HIGH (len) != 0
+      || !tree_fits_uhwi_p (len)
       || !POINTER_TYPE_P (TREE_TYPE (str)))
     return NULL_TREE;
 
@@ -2754,8 +2772,9 @@ gfc_optimize_len_trim (tree len, tree str, int kind)
       && TREE_CODE (TREE_OPERAND (TREE_OPERAND (str, 0), 0)) == STRING_CST
       && array_ref_low_bound (TREE_OPERAND (str, 0))
 	 == TREE_OPERAND (TREE_OPERAND (str, 0), 1)
-      && TREE_INT_CST_LOW (len) >= 1
-      && TREE_INT_CST_LOW (len)
+      && tree_fits_uhwi_p (len)
+      && tree_to_uhwi (len) >= 1
+      && tree_to_uhwi (len)
 	 == (unsigned HOST_WIDE_INT)
 	    TREE_STRING_LENGTH (TREE_OPERAND (TREE_OPERAND (str, 0), 0)))
     {
@@ -4766,19 +4785,24 @@ gfc_conv_procedure_call (gfc_se * se, gfc_symbol * sym,
 
       /* For descriptorless coarrays and assumed-shape coarray dummies, we
 	 pass the token and the offset as additional arguments.  */
-      if (fsym && fsym->attr.codimension
-	  && gfc_option.coarray == GFC_FCOARRAY_LIB
-	  && !fsym->attr.allocatable
-	  && e == NULL)
+      if (fsym && e == NULL && gfc_option.coarray == GFC_FCOARRAY_LIB
+	  && ((fsym->ts.type != BT_CLASS && fsym->attr.codimension
+	       && !fsym->attr.allocatable)
+	      || (fsym->ts.type == BT_CLASS
+		  && CLASS_DATA (fsym)->attr.codimension
+		  && !CLASS_DATA (fsym)->attr.allocatable)))
 	{
 	  /* Token and offset. */
 	  vec_safe_push (stringargs, null_pointer_node);
 	  vec_safe_push (stringargs, build_int_cst (gfc_array_index_type, 0));
 	  gcc_assert (fsym->attr.optional);
 	}
-      else if (fsym && fsym->attr.codimension
-	       && !fsym->attr.allocatable
-	       && gfc_option.coarray == GFC_FCOARRAY_LIB)
+      else if (fsym && gfc_option.coarray == GFC_FCOARRAY_LIB
+	       && ((fsym->ts.type != BT_CLASS && fsym->attr.codimension
+		    && !fsym->attr.allocatable)
+		   || (fsym->ts.type == BT_CLASS
+		       && CLASS_DATA (fsym)->attr.codimension
+		       && !CLASS_DATA (fsym)->attr.allocatable)))
 	{
 	  tree caf_decl, caf_type;
 	  tree offset, tmp2;
@@ -4820,22 +4844,30 @@ gfc_conv_procedure_call (gfc_se * se, gfc_symbol * sym,
 	      tmp = caf_decl;
 	    }
 
-          if (fsym->as->type == AS_ASSUMED_SHAPE
-	      || (fsym->as->type == AS_ASSUMED_RANK && !fsym->attr.pointer
-		  && !fsym->attr.allocatable))
+          tmp2 = fsym->ts.type == BT_CLASS
+		 ? gfc_class_data_get (parmse.expr) : parmse.expr;
+          if ((fsym->ts.type != BT_CLASS
+	       && (fsym->as->type == AS_ASSUMED_SHAPE
+		   || fsym->as->type == AS_ASSUMED_RANK))
+	      || (fsym->ts.type == BT_CLASS
+		  && (CLASS_DATA (fsym)->as->type == AS_ASSUMED_SHAPE
+		      || CLASS_DATA (fsym)->as->type == AS_ASSUMED_RANK)))
 	    {
-	      gcc_assert (POINTER_TYPE_P (TREE_TYPE (parmse.expr)));
-	      gcc_assert (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE
-						   (TREE_TYPE (parmse.expr))));
-	      tmp2 = build_fold_indirect_ref_loc (input_location, parmse.expr);
+	      if (fsym->ts.type == BT_CLASS)
+		gcc_assert (!POINTER_TYPE_P (TREE_TYPE (tmp2)));
+	      else
+		{
+		  gcc_assert (POINTER_TYPE_P (TREE_TYPE (tmp2)));
+		  tmp2 = build_fold_indirect_ref_loc (input_location, tmp2);
+		}
+	      gcc_assert (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (tmp2)));
 	      tmp2 = gfc_conv_descriptor_data_get (tmp2);
 	    }
-	  else if (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (parmse.expr)))
-	    tmp2 = gfc_conv_descriptor_data_get (parmse.expr);
+	  else if (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (tmp2)))
+	    tmp2 = gfc_conv_descriptor_data_get (tmp2);
 	  else
 	    {
-	      gcc_assert (POINTER_TYPE_P (TREE_TYPE (parmse.expr)));
-	      tmp2 = parmse.expr;
+	      gcc_assert (POINTER_TYPE_P (TREE_TYPE (tmp2)));
 	    }
 
 	  tmp = fold_build2_loc (input_location, MINUS_EXPR,
@@ -5989,7 +6021,8 @@ gfc_trans_subcomponent_assign (tree dest, gfc_component * cm, gfc_expr * expr)
     {
       gfc_init_se (&se, NULL);
       /* Pointer component.  */
-      if (cm->attr.dimension && !cm->attr.proc_pointer)
+      if ((cm->attr.dimension || cm->attr.codimension)
+	  && !cm->attr.proc_pointer)
 	{
 	  /* Array pointer.  */
 	  if (expr->expr_type == EXPR_NULL)
@@ -6026,7 +6059,8 @@ gfc_trans_subcomponent_assign (tree dest, gfc_component * cm, gfc_expr * expr)
 					gfc_class_initializer (&cm->ts, expr));
       gfc_add_expr_to_block (&block, tmp);
     }
-  else if (cm->attr.dimension && !cm->attr.proc_pointer)
+  else if ((cm->attr.dimension || cm->attr.codimension)
+	   && !cm->attr.proc_pointer)
     {
       if (cm->attr.allocatable && expr->expr_type == EXPR_NULL)
  	gfc_conv_descriptor_data_set (&block, dest, null_pointer_node);

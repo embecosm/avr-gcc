@@ -1290,6 +1290,91 @@ gfc_check_cmplx (gfc_expr *x, gfc_expr *y, gfc_expr *kind)
 }
 
 
+static bool
+check_co_minmaxsum (gfc_expr *a, gfc_expr *result_image, gfc_expr *stat,
+		    gfc_expr *errmsg)
+{
+  if (!variable_check (a, 0, false))
+    return false;
+
+  if (result_image != NULL)
+    {
+      if (!type_check (result_image, 1, BT_INTEGER))
+	return false;
+      if (!scalar_check (result_image, 1))
+	return false;
+    }
+
+  if (stat != NULL)
+    {
+      if (!type_check (stat, 2, BT_INTEGER))
+	return false;
+      if (!scalar_check (stat, 2))
+	return false;
+      if (!variable_check (stat, 2, false))
+	return false;
+      if (stat->ts.kind != 4)
+	{
+	  gfc_error ("The stat= argument at %L must be a kind=4 integer "
+		     "variable", &stat->where);
+	  return false;
+	}
+    }
+
+  if (errmsg != NULL)
+    {
+      if (!type_check (errmsg, 3, BT_CHARACTER))
+	return false;
+      if (!scalar_check (errmsg, 3))
+	return false;
+      if (!variable_check (errmsg, 3, false))
+	return false;
+      if (errmsg->ts.kind != 1)
+	{
+	  gfc_error ("The errmsg= argument at %L must be a default-kind "
+		     "character variable", &errmsg->where);
+	  return false;
+	}
+    }
+
+  if (gfc_option.coarray == GFC_FCOARRAY_NONE)
+    {
+      gfc_fatal_error ("Coarrays disabled at %L, use -fcoarray= to enable",
+		       &a->where);
+      return false;
+    }
+
+  return true;
+}
+
+
+bool
+gfc_check_co_minmax (gfc_expr *a, gfc_expr *result_image, gfc_expr *stat,
+		     gfc_expr *errmsg)
+{
+  if (a->ts.type != BT_INTEGER && a->ts.type != BT_REAL
+      && a->ts.type != BT_CHARACTER)
+    {
+       gfc_error ("'%s' argument of '%s' intrinsic at %L shall be of type "
+		  "integer, real or character",
+		  gfc_current_intrinsic_arg[0]->name, gfc_current_intrinsic,
+		  &a->where);
+       return false;
+    }
+  return check_co_minmaxsum (a, result_image, stat, errmsg);
+}
+
+
+bool
+gfc_check_co_sum (gfc_expr *a, gfc_expr *result_image, gfc_expr *stat,
+		  gfc_expr *errmsg)
+{
+  if (!numeric_check (a, 0))
+    return false;
+  return check_co_minmaxsum (a, result_image, stat, errmsg);
+}
+
+
 bool
 gfc_check_complex (gfc_expr *x, gfc_expr *y)
 {
@@ -1737,7 +1822,7 @@ gfc_check_fn_rc2008 (gfc_expr *a)
 
   if (a->ts.type == BT_COMPLEX
       && !gfc_notify_std (GFC_STD_F2008, "COMPLEX argument '%s' "
-			  "argument of '%s' intrinsic at %L", 
+			  "of '%s' intrinsic at %L", 
 			  gfc_current_intrinsic_arg[0]->name, 
 			  gfc_current_intrinsic, &a->where))
     return false;
@@ -4467,7 +4552,7 @@ gfc_check_image_index (gfc_expr *coarray, gfc_expr *sub)
 
 
 bool
-gfc_check_this_image (gfc_expr *coarray, gfc_expr *dim)
+gfc_check_num_images (gfc_expr *distance, gfc_expr *failed)
 {
   if (gfc_option.coarray == GFC_FCOARRAY_NONE)
     {
@@ -4475,15 +4560,95 @@ gfc_check_this_image (gfc_expr *coarray, gfc_expr *dim)
       return false;
     }
 
-  if (dim != NULL &&  coarray == NULL)
+  if (distance)
     {
-      gfc_error ("DIM argument without ARRAY argument not allowed for THIS_IMAGE "
-                "intrinsic at %L", &dim->where);
+      if (!type_check (distance, 0, BT_INTEGER))
+	return false;
+
+      if (!nonnegative_check ("DISTANCE", distance))
+	return false;
+
+      if (!scalar_check (distance, 0))
+	return false;
+
+      if (!gfc_notify_std (GFC_STD_F2008_TS, "DISTANCE= argument to "
+			   "NUM_IMAGES at %L", &distance->where))
+	return false;
+    }
+
+   if (failed)
+    {
+      if (!type_check (failed, 1, BT_LOGICAL))
+	return false;
+
+      if (!scalar_check (failed, 1))
+	return false;
+
+      if (!gfc_notify_std (GFC_STD_F2008_TS, "FAILED= argument to "
+			   "NUM_IMAGES at %L", &distance->where))
+	return false;
+    }
+
+  return true;
+}
+
+
+bool
+gfc_check_this_image (gfc_expr *coarray, gfc_expr *dim, gfc_expr *distance)
+{
+  if (gfc_option.coarray == GFC_FCOARRAY_NONE)
+    {
+      gfc_fatal_error ("Coarrays disabled at %C, use -fcoarray= to enable");
       return false;
     }
 
-  if (coarray == NULL)
+  if (coarray == NULL && dim == NULL && distance == NULL)
     return true;
+
+  if (dim != NULL && coarray == NULL)
+    {
+      gfc_error ("DIM argument without COARRAY argument not allowed for "
+		 "THIS_IMAGE intrinsic at %L", &dim->where);
+      return false;
+    }
+
+  if (distance && (coarray || dim))
+    {
+      gfc_error ("The DISTANCE argument may not be specified together with the "
+		 "COARRAY or DIM argument in intrinsic at %L",
+		 &distance->where);
+      return false;
+    }
+
+  /* Assume that we have "this_image (distance)".  */
+  if (coarray && !gfc_is_coarray (coarray) && coarray->ts.type == BT_INTEGER)
+    {
+      if (dim)
+	{
+	  gfc_error ("Unexpected DIM argument with noncoarray argument at %L",
+		     &coarray->where);
+	  return false;
+	}
+      distance = coarray;
+    }
+
+  if (distance)
+    {
+      if (!type_check (distance, 2, BT_INTEGER))
+	return false;
+
+      if (!nonnegative_check ("DISTANCE", distance))
+	return false;
+
+      if (!scalar_check (distance, 2))
+	return false;
+
+      if (!gfc_notify_std (GFC_STD_F2008_TS, "DISTANCE= argument to "
+			   "THIS_IMAGE at %L", &distance->where))
+	return false;
+
+      return true;
+    }
 
   if (!coarray_check (coarray, 0))
     return false;

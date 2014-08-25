@@ -1117,7 +1117,8 @@ runtime_needm(void)
 	if(runtime_needextram) {
 		// Can happen if C/C++ code calls Go from a global ctor.
 		// Can not throw, because scheduler is not initialized yet.
-		runtime_write(2, "fatal error: cgo callback before cgo call\n",
+		int rv __attribute__((unused));
+		rv = runtime_write(2, "fatal error: cgo callback before cgo call\n",
 			sizeof("fatal error: cgo callback before cgo call\n")-1);
 		runtime_exit(1);
 	}
@@ -1212,9 +1213,6 @@ runtime_newextram(void)
 	// here we need to set up the context for g0.
 	getcontext(&mp->g0->context);
 	mp->g0->context.uc_stack.ss_sp = g0_sp;
-#ifdef MAKECONTEXT_STACK_TOP
-	mp->g0->context.uc_stack.ss_sp += g0_spsize;
-#endif
 	mp->g0->context.uc_stack.ss_size = g0_spsize;
 	makecontext(&mp->g0->context, kickoff, 0);
 

@@ -68,7 +68,9 @@ enum inline_hints_vals {
   INLINE_HINT_cross_module = 64,
   /* If array indexes of loads/stores become known there may be room for
      further optimization.  */
-  INLINE_HINT_array_index = 128
+  INLINE_HINT_array_index = 128,
+  /* We know that the callee is hot by profile.  */
+  INLINE_HINT_known_hot = 256
 };
 typedef int inline_hints;
 
@@ -234,7 +236,8 @@ void compute_inline_parameters (struct cgraph_node *, bool);
 bool speculation_useful_p (struct cgraph_edge *e, bool anticipate_inlining);
 
 /* In ipa-inline-transform.c  */
-bool inline_call (struct cgraph_edge *, bool, vec<cgraph_edge_p> *, int *, bool);
+bool inline_call (struct cgraph_edge *, bool, vec<cgraph_edge_p> *, int *, bool,
+		  bool *callee_removed = NULL);
 unsigned int inline_transform (struct cgraph_node *);
 void clone_inlined_nodes (struct cgraph_edge *e, bool, bool, int *,
 			  int freq_scale);

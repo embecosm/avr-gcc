@@ -210,6 +210,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "pass_manager.h"
 #include "tree-nested.h"
 #include "gimplify.h"
+#include "dbgcnt.h"
 
 /* Queue of cgraph nodes scheduled to be added into cgraph.  This is a
    secondary queue used during optimization to accommodate passes that
@@ -406,7 +407,7 @@ referred_to_p (symtab_node *node)
   if (ipa_ref_list_referring_iterate (&node->ref_list, 0, ref))
     return true;
   /* For functions check also calls.  */
-  cgraph_node *cn = dyn_cast <cgraph_node> (node);
+  cgraph_node *cn = dyn_cast <cgraph_node *> (node);
   if (cn && cn->callers)
     return true;
   return false;
@@ -498,7 +499,7 @@ cgraph_add_new_function (tree fndecl, bool lowered)
 	break;
       case CGRAPH_STATE_CONSTRUCTION:
 	/* Just enqueue function to be processed at nearest occurrence.  */
-	node = cgraph_create_node (fndecl);
+	node = cgraph_get_create_node (fndecl);
 	if (lowered)
 	  node->lowered = true;
 	if (!cgraph_new_nodes)
@@ -520,7 +521,7 @@ cgraph_add_new_function (tree fndecl, bool lowered)
 	    push_cfun (DECL_STRUCT_FUNCTION (fndecl));
 	    gimple_register_cfg_hooks ();
 	    bitmap_obstack_initialize (NULL);
-	    execute_pass_list (passes->all_lowering_passes);
+	    execute_pass_list (cfun, passes->all_lowering_passes);
 	    passes->execute_early_local_passes ();
 	    bitmap_obstack_release (NULL);
 	    pop_cfun ();
@@ -570,7 +571,7 @@ add_asm_node (tree asm_str)
 {
   struct asm_node *node;
 
-  node = ggc_alloc_cleared_asm_node ();
+  node = ggc_cleared_alloc<asm_node> ();
   node->asm_str = asm_str;
   node->order = symtab_order++;
   node->next = NULL;
@@ -658,7 +659,7 @@ analyze_function (struct cgraph_node *node)
 
 	  gimple_register_cfg_hooks ();
 	  bitmap_obstack_initialize (NULL);
-	  execute_pass_list (g->get_passes ()->all_lowering_passes);
+	  execute_pass_list (cfun, g->get_passes ()->all_lowering_passes);
 	  free_dominance_info (CDI_POST_DOMINATORS);
 	  free_dominance_info (CDI_DOMINATORS);
 	  compact_blocks ();
@@ -886,7 +887,7 @@ walk_polymorphic_call_targets (pointer_set_t *reachable_call_targets,
      make the edge direct.  */
   if (final)
     {
-      if (targets.length () <= 1)
+      if (targets.length () <= 1 && dbg_cnt (devirt))
 	{
 	  cgraph_node *target;
 	  if (targets.length () == 1)
@@ -903,6 +904,14 @@ walk_polymorphic_call_targets (pointer_set_t *reachable_call_targets,
 				 edge->call_stmt, 0,
 				 TDF_SLIM);
 	    }
+          if (dump_enabled_p ())
+            {
+	      location_t locus = gimple_location (edge->call_stmt);
+	      dump_printf_loc (MSG_OPTIMIZED_LOCATIONS, locus,
+			       "devirtualizing call in %s to %s\n",
+			       edge->caller->name (), target->name ());
+	    }
+
 	  cgraph_make_edge_direct (edge, target);
 	  cgraph_redirect_edge_call_stmt_to_callee (edge);
 	  if (cgraph_dump_file)
@@ -965,6 +974,8 @@ analyze_functions (void)
 	   node != first_analyzed
 	   && node != first_analyzed_var; node = node->next)
 	{
+	  /* Convert COMDAT group designators to IDENTIFIER_NODEs.  */
+	  node->get_comdat_group_id ();
 	  if (decide_is_symbol_needed (node))
 	    {
 	      enqueue_node (node);
@@ -984,7 +995,7 @@ analyze_functions (void)
       first_analyzed_var = varpool_first_variable ();
       first_analyzed = cgraph_first_function ();
 
-      if (changed && dump_file)
+      if (changed && cgraph_dump_file)
 	fprintf (cgraph_dump_file, "\n");
 
       /* Lower representation, build callgraph edges and references for all trivially
@@ -994,7 +1005,7 @@ analyze_functions (void)
 	  changed = true;
 	  node = queued_nodes;
 	  queued_nodes = (symtab_node *)queued_nodes->aux;
-	  cgraph_node *cnode = dyn_cast <cgraph_node> (node);
+	  cgraph_node *cnode = dyn_cast <cgraph_node *> (node);
 	  if (cnode && cnode->definition)
 	    {
 	      struct cgraph_edge *edge;
@@ -1045,7 +1056,7 @@ analyze_functions (void)
 	    }
 	  else
 	    {
-	      varpool_node *vnode = dyn_cast <varpool_node> (node);
+	      varpool_node *vnode = dyn_cast <varpool_node *> (node);
 	      if (vnode && vnode->definition && !vnode->analyzed)
 		varpool_analyze_node (vnode);
 	    }
@@ -1089,7 +1100,7 @@ analyze_functions (void)
 	  symtab_remove_node (node);
 	  continue;
 	}
-      if (cgraph_node *cnode = dyn_cast <cgraph_node> (node))
+      if (cgraph_node *cnode = dyn_cast <cgraph_node *> (node))
 	{
 	  tree decl = node->decl;
 
@@ -1179,7 +1190,7 @@ handle_alias_pairs (void)
 	}
 
       if (TREE_CODE (p->decl) == FUNCTION_DECL
-          && target_node && is_a <cgraph_node> (target_node))
+          && target_node && is_a <cgraph_node *> (target_node))
 	{
 	  struct cgraph_node *src_node = cgraph_get_node (p->decl);
 	  if (src_node && src_node->definition)
@@ -1188,7 +1199,7 @@ handle_alias_pairs (void)
 	  alias_pairs->unordered_remove (i);
 	}
       else if (TREE_CODE (p->decl) == VAR_DECL
-	       && target_node && is_a <varpool_node> (target_node))
+	       && target_node && is_a <varpool_node *> (target_node))
 	{
 	  varpool_create_variable_alias (p->decl, target_node->decl);
 	  alias_pairs->unordered_remove (i);
@@ -1337,7 +1348,7 @@ init_lowered_empty_function (tree decl, bool in_ssa)
   cfun->curr_properties |= (PROP_gimple_lcf | PROP_gimple_leh | PROP_gimple_any
 			    | PROP_cfg | PROP_loops);
 
-  set_loops_for_fn (cfun, ggc_alloc_cleared_loops ());
+  set_loops_for_fn (cfun, ggc_cleared_alloc<loops> ());
   init_loops_structure (cfun, loops_for_fn (cfun), 1);
   loops_for_fn (cfun)->state |= LOOPS_MAY_HAVE_MULTIPLE_LATCHES;
 
@@ -1771,7 +1782,7 @@ expand_function (struct cgraph_node *node)
   /* Signal the start of passes.  */
   invoke_plugin_callbacks (PLUGIN_ALL_PASSES_START, NULL);
 
-  execute_pass_list (g->get_passes ()->all_passes);
+  execute_pass_list (cfun, g->get_passes ()->all_passes);
 
   /* Signal the end of passes.  */
   invoke_plugin_callbacks (PLUGIN_ALL_PASSES_END, NULL);

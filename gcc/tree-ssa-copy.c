@@ -644,12 +644,6 @@ execute_copy_prop (void)
   return 0;
 }
 
-static bool
-gate_copy_prop (void)
-{
-  return flag_tree_copy_prop != 0;
-}
-
 namespace {
 
 const pass_data pass_data_copy_prop =
@@ -657,15 +651,13 @@ const pass_data pass_data_copy_prop =
   GIMPLE_PASS, /* type */
   "copyprop", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_TREE_COPY_PROP, /* tv_id */
   ( PROP_ssa | PROP_cfg ), /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_cleanup_cfg | TODO_verify_ssa
-    | TODO_update_ssa ), /* todo_flags_finish */
+  ( TODO_cleanup_cfg | TODO_update_ssa ), /* todo_flags_finish */
 };
 
 class pass_copy_prop : public gimple_opt_pass
@@ -677,8 +669,8 @@ public:
 
   /* opt_pass methods: */
   opt_pass * clone () { return new pass_copy_prop (m_ctxt); }
-  bool gate () { return gate_copy_prop (); }
-  unsigned int execute () { return execute_copy_prop (); }
+  virtual bool gate (function *) { return flag_tree_copy_prop != 0; }
+  virtual unsigned int execute (function *) { return execute_copy_prop (); }
 
 }; // class pass_copy_prop
 

@@ -1,3 +1,59 @@
+2014-05-27  Uros Bizjak  <ubizjak@gmail.com>
+
+	* testsuite/libgomp.fortran/declare-simd-1.f90: Require
+	vect_simd_clones effective target.
+	* testsuite/libgomp.fortran/declare-simd-2.f90: Ditto.
+
+2014-05-21  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/61252
+	* testsuite/libgomp.c++/simd-9.C: New test.
+
+2014-05-18  Uros Bizjak  <ubizjak@gmail.com>
+
+	* libgomp.texi (Runitme Library Routines): Remove multiple @menu.
+	(Environment Variables) Move OMP_PROC_BIND and OMP_STACKSIZE node
+	texts according to their @menu entry positions.
+
+2014-05-11  Jakub Jelinek  <jakub@redhat.com>
+
+	* testsuite/libgomp.fortran/cancel-do-1.f90: New test.
+	* testsuite/libgomp.fortran/cancel-do-2.f90: New test.
+	* testsuite/libgomp.fortran/cancel-parallel-1.f90: New test.
+	* testsuite/libgomp.fortran/cancel-parallel-3.f90: New test.
+	* testsuite/libgomp.fortran/cancel-sections-1.f90: New test.
+	* testsuite/libgomp.fortran/cancel-taskgroup-2.f90: New test.
+	* testsuite/libgomp.fortran/declare-simd-1.f90: New test.
+	* testsuite/libgomp.fortran/declare-simd-2.f90: New test.
+	* testsuite/libgomp.fortran/declare-simd-3.f90: New test.
+	* testsuite/libgomp.fortran/depend-1.f90: New test.
+	* testsuite/libgomp.fortran/depend-2.f90: New test.
+	* testsuite/libgomp.fortran/omp_atomic5.f90: New test.
+	* testsuite/libgomp.fortran/simd1.f90: New test.
+	* testsuite/libgomp.fortran/simd2.f90: New test.
+	* testsuite/libgomp.fortran/simd3.f90: New test.
+	* testsuite/libgomp.fortran/simd4.f90: New test.
+	* testsuite/libgomp.fortran/taskgroup1.f90: New test.
+
+2014-05-02  Jakub Jelinek  <jakub@redhat.com>
+
+	* testsuite/libgomp.c/simd-10.c: New test.
+	* testsuite/libgomp.c/simd-11.c: New test.
+	* testsuite/libgomp.c/simd-12.c: New test.
+	* testsuite/libgomp.c/simd-13.c: New test.
+
+2014-04-24  Jakub Jelinek  <jakub@redhat.com>
+
+	* testsuite/libgomp.c++/atomic-14.C: Allow seq_cst and
+	atomic type clauses in any order and optional comma in between.
+	* testsuite/libgomp.c++/atomic-15.C: Likewise.
+	* testsuite/libgomp.c/atomic-17.c: Likewise.
+
+	* testsuite/libgomp.c/simd-7.c: New test.
+	* testsuite/libgomp.c/simd-8.c: New test.
+	* testsuite/libgomp.c/simd-9.c: New test.
+	* testsuite/libgomp.c/loop-16.c: New test.
+
 2014-04-02  Richard Henderson  <rth@redhat.com>
 
 	* config/linux/futex.h (futex_wait): Get error value from errno.

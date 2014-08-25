@@ -151,8 +151,10 @@ convert_mpz_to_unsigned (mpz_t x, int bitsize)
 
   if (mpz_sgn (x) < 0)
     {
-      /* Confirm that no bits above the signed range are unset.  */
-      gcc_assert (mpz_scan0 (x, bitsize-1) == ULONG_MAX);
+      /* Confirm that no bits above the signed range are unset if we
+	 are doing range checking.  */
+      if (gfc_option.flag_range_check != 0)
+	gcc_assert (mpz_scan0 (x, bitsize-1) == ULONG_MAX);
 
       mpz_init_set_ui (mask, 1);
       mpz_mul_2exp (mask, mask, bitsize);
@@ -175,13 +177,15 @@ convert_mpz_to_unsigned (mpz_t x, int bitsize)
    If the bitsize-1 bit is set, this is taken as a sign bit and
    the number is converted to the corresponding negative number.  */
 
-static void
-convert_mpz_to_signed (mpz_t x, int bitsize)
+void
+gfc_convert_mpz_to_signed (mpz_t x, int bitsize)
 {
   mpz_t mask;
 
-  /* Confirm that no bits above the unsigned range are set.  */
-  gcc_assert (mpz_scan1 (x, bitsize) == ULONG_MAX);
+  /* Confirm that no bits above the unsigned range are set if we are
+     doing range checking.  */
+  if (gfc_option.flag_range_check != 0)
+    gcc_assert (mpz_scan1 (x, bitsize) == ULONG_MAX);
 
   if (mpz_tstbit (x, bitsize - 1) == 1)
     {
@@ -1943,7 +1947,7 @@ simplify_dshift (gfc_expr *arg1, gfc_expr *arg2, gfc_expr *shiftarg,
       mpz_setbit (result->value.integer, shift + i);
 
   /* Convert to a signed value.  */
-  convert_mpz_to_signed (result->value.integer, size);
+  gfc_convert_mpz_to_signed (result->value.integer, size);
 
   return result;
 }
@@ -2561,7 +2565,7 @@ gfc_simplify_ibclr (gfc_expr *x, gfc_expr *y)
 
   mpz_clrbit (result->value.integer, pos);
 
-  convert_mpz_to_signed (result->value.integer,
+  gfc_convert_mpz_to_signed (result->value.integer,
 			 gfc_integer_kinds[k].bit_size);
 
   return result;
@@ -2619,7 +2623,7 @@ gfc_simplify_ibits (gfc_expr *x, gfc_expr *y, gfc_expr *z)
 
   free (bits);
 
-  convert_mpz_to_signed (result->value.integer,
+  gfc_convert_mpz_to_signed (result->value.integer,
 			 gfc_integer_kinds[k].bit_size);
 
   return result;
@@ -2646,7 +2650,7 @@ gfc_simplify_ibset (gfc_expr *x, gfc_expr *y)
 
   mpz_setbit (result->value.integer, pos);
 
-  convert_mpz_to_signed (result->value.integer,
+  gfc_convert_mpz_to_signed (result->value.integer,
 			 gfc_integer_kinds[k].bit_size);
 
   return result;
@@ -3093,7 +3097,7 @@ simplify_shift (gfc_expr *e, gfc_expr *s, const char *name,
 	}
     }
 
-  convert_mpz_to_signed (result->value.integer, bitsize);
+  gfc_convert_mpz_to_signed (result->value.integer, bitsize);
   free (bits);
 
   return result;
@@ -3234,7 +3238,7 @@ gfc_simplify_ishftc (gfc_expr *e, gfc_expr *s, gfc_expr *sz)
 	}
     }
 
-  convert_mpz_to_signed (result->value.integer, isize);
+  gfc_convert_mpz_to_signed (result->value.integer, isize);
 
   free (bits);
   return result;
@@ -3954,7 +3958,7 @@ gfc_simplify_maskr (gfc_expr *i, gfc_expr *kind_arg)
   mpz_mul_2exp (result->value.integer, result->value.integer, arg);
   mpz_sub_ui (result->value.integer, result->value.integer, 1);
 
-  convert_mpz_to_signed (result->value.integer, gfc_integer_kinds[k].bit_size);
+  gfc_convert_mpz_to_signed (result->value.integer, gfc_integer_kinds[k].bit_size);
 
   return result;
 }
@@ -3990,7 +3994,7 @@ gfc_simplify_maskl (gfc_expr *i, gfc_expr *kind_arg)
   mpz_sub (result->value.integer, z, result->value.integer);
   mpz_clear (z);
 
-  convert_mpz_to_signed (result->value.integer, gfc_integer_kinds[k].bit_size);
+  gfc_convert_mpz_to_signed (result->value.integer, gfc_integer_kinds[k].bit_size);
 
   return result;
 }
@@ -4597,7 +4601,7 @@ gfc_simplify_null (gfc_expr *mold)
 
 
 gfc_expr *
-gfc_simplify_num_images (void)
+gfc_simplify_num_images (gfc_expr *distance ATTRIBUTE_UNUSED, gfc_expr *failed)
 {
   gfc_expr *result;
 
@@ -4610,10 +4614,18 @@ gfc_simplify_num_images (void)
   if (gfc_option.coarray != GFC_FCOARRAY_SINGLE)
     return NULL;
 
+  if (failed && failed->expr_type != EXPR_CONSTANT)
+    return NULL;
+
   /* FIXME: gfc_current_locus is wrong.  */
   result = gfc_get_constant_expr (BT_INTEGER, gfc_default_integer_kind,
 				  &gfc_current_locus);
-  mpz_set_si (result->value.integer, 1);
+
+  if (failed && failed->value.logical != 0)
+    mpz_set_si (result->value.integer, 0);
+  else
+    mpz_set_si (result->value.integer, 1);
+
   return result;
 }
 
@@ -6385,12 +6397,15 @@ gfc_simplify_image_index (gfc_expr *coarray, gfc_expr *sub)
 
 
 gfc_expr *
-gfc_simplify_this_image (gfc_expr *coarray, gfc_expr *dim)
+gfc_simplify_this_image (gfc_expr *coarray, gfc_expr *dim,
+			 gfc_expr *distance ATTRIBUTE_UNUSED)
 {
   if (gfc_option.coarray != GFC_FCOARRAY_SINGLE)
     return NULL;
 
-  if (coarray == NULL)
+  /* If no coarray argument has been passed or when the first argument
+     is actually a distance argment.  */
+  if (coarray == NULL || !gfc_is_coarray (coarray))
     {
       gfc_expr *result;
       /* FIXME: gfc_current_locus is wrong.  */

@@ -60,6 +60,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "plugin.h"
 #include "cgraph.h"
 #include "cilk.h"
+#include "wide-int.h"
 
 /* Possible cases of bad specifiers type used by bad_specifiers. */
 enum bad_spec_place {
@@ -1167,15 +1168,18 @@ static void
 check_redeclaration_exception_specification (tree new_decl,
 					     tree old_decl)
 {
-  tree new_type;
-  tree old_type;
-  tree new_exceptions;
-  tree old_exceptions;
+  tree new_exceptions = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (new_decl));
+  tree old_exceptions = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (old_decl));
 
-  new_type = TREE_TYPE (new_decl);
-  new_exceptions = TYPE_RAISES_EXCEPTIONS (new_type);
-  old_type = TREE_TYPE (old_decl);
-  old_exceptions = TYPE_RAISES_EXCEPTIONS (old_type);
+  /* Two default specs are equivalent, don't force evaluation.  */
+  if (UNEVALUATED_NOEXCEPT_SPEC_P (new_exceptions)
+      && UNEVALUATED_NOEXCEPT_SPEC_P (old_exceptions))
+    return;
+
+  maybe_instantiate_noexcept (new_decl);
+  maybe_instantiate_noexcept (old_decl);
+  new_exceptions = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (new_decl));
+  old_exceptions = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (old_decl));
 
   /* [except.spec]
 
@@ -1915,12 +1919,12 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
 
   if (types_match)
     {
+      if (TREE_CODE (newdecl) == FUNCTION_DECL)
+	check_redeclaration_exception_specification (newdecl, olddecl);
+
       /* Automatically handles default parameters.  */
       tree oldtype = TREE_TYPE (olddecl);
       tree newtype;
-
-      if (TREE_CODE (newdecl) == FUNCTION_DECL)
-	maybe_instantiate_noexcept (olddecl);
 
       /* For typedefs use the old type, as the new type's DECL_NAME points
 	 at newdecl, which will be ggc_freed.  */
@@ -1952,10 +1956,6 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
 	    }
 	}
 
-      /* Do this after calling `merge_types' so that default
-	 parameters don't confuse us.  */
-      else if (TREE_CODE (newdecl) == FUNCTION_DECL)
-	check_redeclaration_exception_specification (newdecl, olddecl);
       TREE_TYPE (newdecl) = TREE_TYPE (olddecl) = newtype;
 
       if (TREE_CODE (newdecl) == FUNCTION_DECL)
@@ -2065,8 +2065,17 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
   /* Merge the storage class information.  */
   merge_weak (newdecl, olddecl);
 
-  if (DECL_ONE_ONLY (olddecl))
-    DECL_COMDAT_GROUP (newdecl) = DECL_COMDAT_GROUP (olddecl);
+  if ((TREE_CODE (olddecl) == FUNCTION_DECL || TREE_CODE (olddecl) == VAR_DECL)
+      && (DECL_EXTERNAL (olddecl) || TREE_PUBLIC (olddecl) || TREE_STATIC (olddecl))
+      && DECL_ONE_ONLY (olddecl))
+    {
+      struct symtab_node *symbol;
+      if (TREE_CODE (olddecl) == FUNCTION_DECL)
+	symbol = cgraph_get_create_node (newdecl);
+      else
+	symbol = varpool_node_for_decl (newdecl);
+      symbol->set_comdat_group (symtab_get_node (olddecl)->get_comdat_group ());
+    }
 
   DECL_DEFER_OUTPUT (newdecl) |= DECL_DEFER_OUTPUT (olddecl);
   TREE_PUBLIC (newdecl) = TREE_PUBLIC (olddecl);
@@ -2306,10 +2315,11 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
       && DECL_VISIBILITY_SPECIFIED (newdecl)
       && DECL_VISIBILITY (newdecl) != DECL_VISIBILITY (olddecl))
     {
-      warning_at (input_location, OPT_Wattributes,
-		  "%q+D: visibility attribute ignored because it", newdecl);
-      warning_at (DECL_SOURCE_LOCATION (olddecl), OPT_Wattributes,
-		  "conflicts with previous declaration here");
+      if (warning_at (DECL_SOURCE_LOCATION (newdecl), OPT_Wattributes,
+		      "%qD: visibility attribute ignored because it "
+		      "conflicts with previous declaration", newdecl))
+	inform (DECL_SOURCE_LOCATION (olddecl),
+		"previous declaration of %qD", olddecl);
     }
   /* Choose the declaration which specified visibility.  */
   if (DECL_VISIBILITY_SPECIFIED (olddecl))
@@ -2375,6 +2385,7 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
   if (TREE_CODE (newdecl) == FUNCTION_DECL)
     {
       int function_size;
+      struct symtab_node *snode = symtab_get_node (olddecl);
 
       function_size = sizeof (struct tree_decl_common);
 
@@ -2385,6 +2396,10 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
       memcpy ((char *) olddecl + sizeof (struct tree_decl_common),
 	      (char *) newdecl + sizeof (struct tree_decl_common),
 	      sizeof (struct tree_function_decl) - sizeof (struct tree_decl_common));
+
+      /* Preserve symtab node mapping.  */
+      olddecl->decl_with_vis.symtab_node = snode;
+
       if (new_template_info)
 	/* If newdecl is a template instantiation, it is possible that
 	   the following sequence of events has occurred:
@@ -2414,6 +2429,7 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
   else
     {
       size_t size = tree_code_size (TREE_CODE (olddecl));
+
       memcpy ((char *) olddecl + sizeof (struct tree_common),
 	      (char *) newdecl + sizeof (struct tree_common),
 	      sizeof (struct tree_decl_common) - sizeof (struct tree_common));
@@ -2427,10 +2443,17 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
 	case TYPE_DECL:
 	case CONST_DECL:
 	  {
+            struct symtab_node *snode = NULL;
+
+            if (TREE_CODE (olddecl) == VAR_DECL
+		&& (TREE_STATIC (olddecl) || TREE_PUBLIC (olddecl) || DECL_EXTERNAL (olddecl)))
+	      snode = symtab_get_node (olddecl);
 	    memcpy ((char *) olddecl + sizeof (struct tree_decl_common),
 		    (char *) newdecl + sizeof (struct tree_decl_common),
 		    size - sizeof (struct tree_decl_common)
 		    + TREE_CODE_LENGTH (TREE_CODE (newdecl)) * sizeof (char *));
+            if (TREE_CODE (olddecl) == VAR_DECL)
+	      olddecl->decl_with_vis.symtab_node = snode;
 	  }
 	  break;
 	default:
@@ -2465,7 +2488,21 @@ duplicate_decls (tree newdecl, tree olddecl, bool newdecl_is_friend)
 
   /* The NEWDECL will no longer be needed.  Because every out-of-class
      declaration of a member results in a call to duplicate_decls,
-     freeing these nodes represents in a significant savings.  */
+     freeing these nodes represents in a significant savings.
+
+     Before releasing the node, be sore to remove function from symbol
+     table that might have been inserted there to record comdat group.
+     Be sure to however do not free DECL_STRUCT_FUNCTION becuase this
+     structure is shared in between newdecl and oldecl.  */
+  if (TREE_CODE (newdecl) == FUNCTION_DECL)
+    DECL_STRUCT_FUNCTION (newdecl) = NULL;
+  if (TREE_CODE (newdecl) == FUNCTION_DECL
+      || TREE_CODE (newdecl) == VAR_DECL)
+    {
+      struct symtab_node *snode = symtab_get_node (newdecl);
+      if (snode)
+	symtab_remove_node (snode);
+    }
   ggc_free (newdecl);
 
   return olddecl;
@@ -2700,7 +2737,7 @@ make_label_decl (tree id, int local_p)
   /* Record this label on the list of labels used in this function.
      We do this before calling make_label_decl so that we get the
      IDENTIFIER_LABEL_VALUE before the new label is declared.  */
-  ent = ggc_alloc_cleared_named_label_entry ();
+  ent = ggc_cleared_alloc<named_label_entry> ();
   ent->label_decl = decl;
 
   slot = htab_find_slot (named_labels, ent, INSERT);
@@ -2931,7 +2968,7 @@ check_goto (tree decl)
 	  && ent->uses->names_in_scope == current_binding_level->names)
 	return;
 
-      new_use = ggc_alloc_named_label_use_entry ();
+      new_use = ggc_alloc<named_label_use_entry> ();
       new_use->binding_level = current_binding_level;
       new_use->names_in_scope = current_binding_level->names;
       new_use->o_goto_locus = input_location;
@@ -3490,8 +3527,9 @@ make_unbound_class_template (tree context, tree name, tree parm_list,
 	{
 	  if (complain & tf_error)
 	    {
-	      error ("template parameters do not match template");
-	      error ("%q+D declared here", tmpl);
+	      error ("template parameters do not match template %qD", tmpl);
+	      inform (DECL_SOURCE_LOCATION (tmpl),
+		      "%qD declared here", tmpl);
 	    }
 	  return error_mark_node;
 	}
@@ -4845,7 +4883,7 @@ check_array_designated_initializer (constructor_elt *ce,
       if (TREE_CODE (ce->index) == INTEGER_CST)
 	{
 	  /* A C99 designator is OK if it matches the current index.  */
-	  if (TREE_INT_CST_LOW (ce->index) == index)
+	  if (wi::eq_p (ce->index, index))
 	    return true;
 	  else
 	    sorry ("non-trivial designated initializers not supported");
@@ -5025,13 +5063,12 @@ maybe_commonize_var (tree decl)
 		 be merged.  */
 	      TREE_PUBLIC (decl) = 0;
 	      DECL_COMMON (decl) = 0;
-	      warning_at (input_location, 0,
-			  "sorry: semantics of inline function static "
-			  "data %q+#D are wrong (you%'ll wind up "
-			  "with multiple copies)", decl);
-	      warning_at (DECL_SOURCE_LOCATION (decl), 0, 
-			  "  you can work around this by removing "
-			  "the initializer");
+	      if (warning_at (DECL_SOURCE_LOCATION (decl), 0,
+			      "sorry: semantics of inline function static "
+			      "data %q#D are wrong (you%'ll wind up "
+			      "with multiple copies)", decl))
+		inform (DECL_SOURCE_LOCATION (decl),
+			"you can work around this by removing the initializer");
 	    }
 	}
     }
@@ -5407,7 +5444,7 @@ reshape_init_r (tree type, reshape_iter *d, bool first_initializer_p,
   /* "If T is a class type and the initializer list has a single element of
      type cv U, where U is T or a class derived from T, the object is
      initialized from that element."  Even if T is an aggregate.  */
-  if (cxx_dialect >= cxx11 && CLASS_TYPE_P (type)
+  if (cxx_dialect >= cxx11 && (CLASS_TYPE_P (type) || VECTOR_TYPE_P (type))
       && first_initializer_p
       && d->end - d->cur == 1
       && reference_related_p (type, TREE_TYPE (init)))
@@ -6829,7 +6866,7 @@ register_dtor_fn (tree decl)
 
   type = TREE_TYPE (decl);
   if (TYPE_HAS_TRIVIAL_DESTRUCTOR (type))
-    return void_zero_node;
+    return void_node;
 
   /* If we're using "__cxa_atexit" (or "__cxa_thread_atexit" or
      "__aeabi_atexit"), and DECL is a class object, we can just pass the
@@ -7076,7 +7113,7 @@ expand_static_init (tree decl, tree init)
 
 	  TARGET_EXPR_CLEANUP (begin)
 	    = build3 (COND_EXPR, void_type_node, flag,
-		      void_zero_node,
+		      void_node,
 		      build_call_n (abort_fn, 1, guard_addr));
 	  CLEANUP_EH_ONLY (begin) = 1;
 
@@ -7823,6 +7860,8 @@ grokfndecl (tree ctype,
 		     decl, ctype);
 	      return NULL_TREE;
 	    }
+	  if (ok == error_mark_node)
+	    return NULL_TREE;
 	  return old_decl;
 	}
     }
@@ -8315,7 +8354,7 @@ compute_array_index_type (tree name, tree size, tsubst_flags_t complain)
       constant_expression_error (size);
 
       /* An array must have a positive number of elements.  */
-      if (INT_CST_LT (size, integer_zero_node))
+      if (tree_int_cst_lt (size, integer_zero_node))
 	{
 	  if (!(complain & tf_error))
 	    return error_mark_node;
@@ -8422,7 +8461,7 @@ compute_array_index_type (tree name, tree size, tsubst_flags_t complain)
 	      tree comp = build2 (LT_EXPR, boolean_type_node, itype,
 				  ssize_int (-1));
 	      comp = build3 (COND_EXPR, void_type_node, comp,
-			     throw_bad_array_length (), void_zero_node);
+			     throw_bad_array_length (), void_node);
 	      finish_expr_stmt (comp);
 	    }
 	  else if (flag_sanitize & SANITIZE_VLA)
@@ -10583,11 +10622,16 @@ grokdeclarator (const cp_declarator *declarator,
 	  }
 	else if (!staticp && !dependent_type_p (type)
 		 && !COMPLETE_TYPE_P (complete_type (type))
-		 && (TREE_CODE (type) != ARRAY_TYPE || initialized == 0))
+		 && (TREE_CODE (type) != ARRAY_TYPE
+		     || !COMPLETE_TYPE_P (TREE_TYPE (type))
+		     || initialized == 0))
 	  {
 	    if (unqualified_id)
-	      error ("field %qD has incomplete type %qT",
-		     unqualified_id, type);
+	      {
+		error ("field %qD has incomplete type %qT",
+		       unqualified_id, type);
+		cxx_incomplete_type_inform (strip_array_types (type));
+	      }
 	    else
 	      error ("name %qT has incomplete type", type);
 
@@ -12676,9 +12720,9 @@ finish_enum_value_list (tree enumtype)
 	 enumeration.  We must do this before the type of MINNODE and
 	 MAXNODE are transformed, since tree_int_cst_min_precision relies
 	 on the TREE_TYPE of the value it is passed.  */
-      bool unsignedp = tree_int_cst_sgn (minnode) >= 0;
-      int lowprec = tree_int_cst_min_precision (minnode, unsignedp);
-      int highprec = tree_int_cst_min_precision (maxnode, unsignedp);
+      signop sgn = tree_int_cst_sgn (minnode) >= 0 ? UNSIGNED : SIGNED;
+      int lowprec = tree_int_cst_min_precision (minnode, sgn);
+      int highprec = tree_int_cst_min_precision (maxnode, sgn);
       int precision = MAX (lowprec, highprec);
       unsigned int itk;
       bool use_short_enum;
@@ -12710,7 +12754,7 @@ finish_enum_value_list (tree enumtype)
           underlying_type = integer_types[itk];
           if (underlying_type != NULL_TREE
 	      && TYPE_PRECISION (underlying_type) >= precision
-              && TYPE_UNSIGNED (underlying_type) == unsignedp)
+              && TYPE_SIGN (underlying_type) == sgn)
             break;
         }
       if (itk == itk_none)
@@ -12757,12 +12801,11 @@ finish_enum_value_list (tree enumtype)
 	= build_distinct_type_copy (underlying_type);
       TYPE_PRECISION (ENUM_UNDERLYING_TYPE (enumtype)) = precision;
       set_min_and_max_values_for_integral_type
-        (ENUM_UNDERLYING_TYPE (enumtype), precision, unsignedp);
+        (ENUM_UNDERLYING_TYPE (enumtype), precision, sgn);
 
       /* If -fstrict-enums, still constrain TYPE_MIN/MAX_VALUE.  */
       if (flag_strict_enums)
-	set_min_and_max_values_for_integral_type (enumtype, precision,
-						  unsignedp);
+	set_min_and_max_values_for_integral_type (enumtype, precision, sgn);
     }
   else
     underlying_type = ENUM_UNDERLYING_TYPE (enumtype);
@@ -12886,14 +12929,14 @@ build_enumerator (tree name, tree value, tree enumtype, location_t loc)
 		value = error_mark_node;
 	      else
 		{
-		  double_int di = TREE_INT_CST (prev_value)
-				  .add_with_sign (double_int_one,
-						  false, &overflowed);
+		  tree type = TREE_TYPE (prev_value);
+		  signop sgn = TYPE_SIGN (type);
+		  widest_int wi = wi::add (wi::to_widest (prev_value), 1, sgn,
+					   &overflowed);
 		  if (!overflowed)
 		    {
-		      tree type = TREE_TYPE (prev_value);
-		      bool pos = TYPE_UNSIGNED (type) || !di.is_negative ();
-		      if (!double_int_fits_to_tree_p (type, di))
+		      bool pos = !wi::neg_p (wi, sgn);
+		      if (!wi::fits_to_tree_p (wi, type))
 			{
 			  unsigned int itk;
 			  for (itk = itk_int; itk != itk_none; itk++)
@@ -12901,7 +12944,7 @@ build_enumerator (tree name, tree value, tree enumtype, location_t loc)
 			      type = integer_types[itk];
 			      if (type != NULL_TREE
 				  && (pos || !TYPE_UNSIGNED (type))
-				  && double_int_fits_to_tree_p (type, di))
+				  && wi::fits_to_tree_p (wi, type))
 				break;
 			    }
 			  if (type && cxx_dialect < cxx11
@@ -12913,7 +12956,7 @@ incremented enumerator value is too large for %<long%>");
 		      if (type == NULL_TREE)
 			overflowed = true;
 		      else
-			value = double_int_to_tree (type, di);
+			value = wide_int_to_tree (type, wi);
 		    }
 
 		  if (overflowed)
@@ -13301,7 +13344,7 @@ start_preparsed_function (tree decl1, tree attrs, int flags)
 
   /* Initialize the language data structures.  Whenever we start
      a new function, we destroy temporaries in the usual way.  */
-  cfun->language = ggc_alloc_cleared_language_function ();
+  cfun->language = ggc_cleared_alloc<language_function> ();
   current_stmt_tree ()->stmts_are_full_exprs_p = 1;
   current_binding_level = bl;
 
@@ -13434,6 +13477,9 @@ start_preparsed_function (tree decl1, tree attrs, int flags)
      linkage is set.  */
   if (!DECL_CLONED_FUNCTION_P (decl1))
     determine_visibility (decl1);
+
+  if (!processing_template_decl)
+    maybe_instantiate_noexcept (decl1);
 
   begin_scope (sk_function_parms, decl1);
 
@@ -13603,7 +13649,7 @@ save_function_data (tree decl)
   gcc_assert (!DECL_PENDING_INLINE_P (decl));
 
   /* Make a copy.  */
-  f = ggc_alloc_language_function ();
+  f = ggc_alloc<language_function> ();
   memcpy (f, cp_function_chain, sizeof (struct language_function));
   DECL_SAVED_FUNCTION_DATA (decl) = f;
 
@@ -14438,18 +14484,17 @@ cp_missing_noreturn_ok_p (tree decl)
   return DECL_MAIN_P (decl);
 }
 
-/* Return the COMDAT group into which DECL should be placed.  */
+/* Return the decl used to identify the COMDAT group into which DECL should
+   be placed.  */
 
 tree
 cxx_comdat_group (tree decl)
 {
-  tree name;
-
   /* Virtual tables, construction virtual tables, and virtual table
      tables all go in a single COMDAT group, named after the primary
      virtual table.  */
   if (VAR_P (decl) && DECL_VTABLE_OR_VTT_P (decl))
-    name = DECL_ASSEMBLER_NAME (CLASSTYPE_VTABLES (DECL_CONTEXT (decl)));
+    decl = CLASSTYPE_VTABLES (DECL_CONTEXT (decl));
   /* For all other DECLs, the COMDAT group is the mangled name of the
      declaration itself.  */
   else
@@ -14467,10 +14512,9 @@ cxx_comdat_group (tree decl)
 	  else
 	    break;
 	}
-      name = DECL_ASSEMBLER_NAME (decl);
     }
 
-  return name;
+  return decl;
 }
 
 /* Returns the return type for FN as written by the user, which may include

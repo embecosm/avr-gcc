@@ -3555,6 +3555,23 @@ loc_cmp (rtx x, rtx y)
       default:
 	gcc_unreachable ();
       }
+  if (CONST_WIDE_INT_P (x))
+    {
+      /* Compare the vector length first.  */
+      if (CONST_WIDE_INT_NUNITS (x) >= CONST_WIDE_INT_NUNITS (y))
+	return 1;
+      else if (CONST_WIDE_INT_NUNITS (x) < CONST_WIDE_INT_NUNITS (y))
+	return -1;
+
+      /* Compare the vectors elements.  */;
+      for (j = CONST_WIDE_INT_NUNITS (x) - 1; j >= 0 ; j--)
+	{
+	  if (CONST_WIDE_INT_ELT (x, j) < CONST_WIDE_INT_ELT (y, j))
+	    return -1;
+	  if (CONST_WIDE_INT_ELT (x, j) > CONST_WIDE_INT_ELT (y, j))
+	    return 1;
+	}
+    }
 
   return 0;
 }
@@ -8731,8 +8748,7 @@ emit_note_insn_var_location (variable_def **varp, emit_note_data *data)
 
   note_vl = NULL_RTX;
   if (!complete)
-    note_vl = gen_rtx_VAR_LOCATION (VOIDmode, decl, NULL_RTX,
-				    (int) initialized);
+    note_vl = gen_rtx_VAR_LOCATION (VOIDmode, decl, NULL_RTX, initialized);
   else if (n_var_parts == 1)
     {
       rtx expr_list;
@@ -8742,8 +8758,7 @@ emit_note_insn_var_location (variable_def **varp, emit_note_data *data)
       else
 	expr_list = loc[0];
 
-      note_vl = gen_rtx_VAR_LOCATION (VOIDmode, decl, expr_list,
-				      (int) initialized);
+      note_vl = gen_rtx_VAR_LOCATION (VOIDmode, decl, expr_list, initialized);
     }
   else if (n_var_parts)
     {
@@ -8756,7 +8771,7 @@ emit_note_insn_var_location (variable_def **varp, emit_note_data *data)
       parallel = gen_rtx_PARALLEL (VOIDmode,
 				   gen_rtvec_v (n_var_parts, loc));
       note_vl = gen_rtx_VAR_LOCATION (VOIDmode, decl,
-				      parallel, (int) initialized);
+				      parallel, initialized);
     }
 
   if (where != EMIT_NOTE_BEFORE_INSN)
@@ -10344,14 +10359,6 @@ variable_tracking_main (void)
   return ret;
 }
 
-static bool
-gate_handle_var_tracking (void)
-{
-  return (flag_var_tracking && !targetm.delay_vartrack);
-}
-
-
-
 namespace {
 
 const pass_data pass_data_variable_tracking =
@@ -10359,14 +10366,13 @@ const pass_data pass_data_variable_tracking =
   RTL_PASS, /* type */
   "vartrack", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_VAR_TRACKING, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_verify_rtl_sharing | TODO_verify_flow ), /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_variable_tracking : public rtl_opt_pass
@@ -10377,8 +10383,15 @@ public:
   {}
 
   /* opt_pass methods: */
-  bool gate () { return gate_handle_var_tracking (); }
-  unsigned int execute () { return variable_tracking_main (); }
+  virtual bool gate (function *)
+    {
+      return (flag_var_tracking && !targetm.delay_vartrack);
+    }
+
+  virtual unsigned int execute (function *)
+    {
+      return variable_tracking_main ();
+    }
 
 }; // class pass_variable_tracking
 

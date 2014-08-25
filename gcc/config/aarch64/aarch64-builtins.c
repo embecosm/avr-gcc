@@ -147,11 +147,31 @@ aarch64_types_unopu_qualifiers[SIMD_MAX_BUILTIN_ARGS]
   = { qualifier_unsigned, qualifier_unsigned };
 #define TYPES_UNOPU (aarch64_types_unopu_qualifiers)
 #define TYPES_CREATE (aarch64_types_unop_qualifiers)
-#define TYPES_REINTERP (aarch64_types_unop_qualifiers)
+#define TYPES_REINTERP_SS (aarch64_types_unop_qualifiers)
+static enum aarch64_type_qualifiers
+aarch64_types_unop_su_qualifiers[SIMD_MAX_BUILTIN_ARGS]
+  = { qualifier_none, qualifier_unsigned };
+#define TYPES_REINTERP_SU (aarch64_types_unop_su_qualifiers)
+static enum aarch64_type_qualifiers
+aarch64_types_unop_sp_qualifiers[SIMD_MAX_BUILTIN_ARGS]
+  = { qualifier_none, qualifier_poly };
+#define TYPES_REINTERP_SP (aarch64_types_unop_sp_qualifiers)
+static enum aarch64_type_qualifiers
+aarch64_types_unop_us_qualifiers[SIMD_MAX_BUILTIN_ARGS]
+  = { qualifier_unsigned, qualifier_none };
+#define TYPES_REINTERP_US (aarch64_types_unop_us_qualifiers)
+static enum aarch64_type_qualifiers
+aarch64_types_unop_ps_qualifiers[SIMD_MAX_BUILTIN_ARGS]
+  = { qualifier_poly, qualifier_none };
+#define TYPES_REINTERP_PS (aarch64_types_unop_ps_qualifiers)
 static enum aarch64_type_qualifiers
 aarch64_types_binop_qualifiers[SIMD_MAX_BUILTIN_ARGS]
   = { qualifier_none, qualifier_none, qualifier_maybe_immediate };
 #define TYPES_BINOP (aarch64_types_binop_qualifiers)
+static enum aarch64_type_qualifiers
+aarch64_types_binopv_qualifiers[SIMD_MAX_BUILTIN_ARGS]
+  = { qualifier_void, qualifier_none, qualifier_none };
+#define TYPES_BINOPV (aarch64_types_binopv_qualifiers)
 static enum aarch64_type_qualifiers
 aarch64_types_binopu_qualifiers[SIMD_MAX_BUILTIN_ARGS]
   = { qualifier_unsigned, qualifier_unsigned, qualifier_unsigned };
@@ -230,6 +250,11 @@ aarch64_types_store1_qualifiers[SIMD_MAX_BUILTIN_ARGS]
   = { qualifier_void, qualifier_pointer_map_mode, qualifier_none };
 #define TYPES_STORE1 (aarch64_types_store1_qualifiers)
 #define TYPES_STORESTRUCT (aarch64_types_store1_qualifiers)
+static enum aarch64_type_qualifiers
+aarch64_types_storestruct_lane_qualifiers[SIMD_MAX_BUILTIN_ARGS]
+  = { qualifier_void, qualifier_pointer_map_mode,
+      qualifier_none, qualifier_none };
+#define TYPES_STORESTRUCT_LANE (aarch64_types_storestruct_lane_qualifiers)
 
 #define CF0(N, X) CODE_FOR_aarch64_##N##X
 #define CF1(N, X) CODE_FOR_##N##X##1
@@ -311,6 +336,8 @@ aarch64_types_store1_qualifiers[SIMD_MAX_BUILTIN_ARGS]
   VAR7 (T, N, MAP, v8qi, v16qi, v4hi, v8hi, v2si, v4si, v2di)
 #define BUILTIN_VDQF(T, N, MAP) \
   VAR3 (T, N, MAP, v2sf, v4sf, v2df)
+#define BUILTIN_VDQF_DF(T, N, MAP) \
+  VAR4 (T, N, MAP, v2sf, v4sf, v2df, df)
 #define BUILTIN_VDQH(T, N, MAP) \
   VAR2 (T, N, MAP, v4hi, v8hi)
 #define BUILTIN_VDQHS(T, N, MAP) \
@@ -371,6 +398,12 @@ static aarch64_simd_builtin_datum aarch64_simd_builtin_data[] = {
 enum aarch64_builtins
 {
   AARCH64_BUILTIN_MIN,
+
+  AARCH64_BUILTIN_GET_FPCR,
+  AARCH64_BUILTIN_SET_FPCR,
+  AARCH64_BUILTIN_GET_FPSR,
+  AARCH64_BUILTIN_SET_FPSR,
+
   AARCH64_SIMD_BUILTIN_BASE,
 #include "aarch64-simd-builtins.def"
   AARCH64_SIMD_BUILTIN_MAX = AARCH64_SIMD_BUILTIN_BASE
@@ -752,6 +785,24 @@ aarch64_init_simd_builtins (void)
 void
 aarch64_init_builtins (void)
 {
+  tree ftype_set_fpr
+    = build_function_type_list (void_type_node, unsigned_type_node, NULL);
+  tree ftype_get_fpr
+    = build_function_type_list (unsigned_type_node, NULL);
+
+  aarch64_builtin_decls[AARCH64_BUILTIN_GET_FPCR]
+    = add_builtin_function ("__builtin_aarch64_get_fpcr", ftype_get_fpr,
+			    AARCH64_BUILTIN_GET_FPCR, BUILT_IN_MD, NULL, NULL_TREE);
+  aarch64_builtin_decls[AARCH64_BUILTIN_SET_FPCR]
+    = add_builtin_function ("__builtin_aarch64_set_fpcr", ftype_set_fpr,
+			    AARCH64_BUILTIN_SET_FPCR, BUILT_IN_MD, NULL, NULL_TREE);
+  aarch64_builtin_decls[AARCH64_BUILTIN_GET_FPSR]
+    = add_builtin_function ("__builtin_aarch64_get_fpsr", ftype_get_fpr,
+			    AARCH64_BUILTIN_GET_FPSR, BUILT_IN_MD, NULL, NULL_TREE);
+  aarch64_builtin_decls[AARCH64_BUILTIN_SET_FPSR]
+    = add_builtin_function ("__builtin_aarch64_set_fpsr", ftype_set_fpr,
+			    AARCH64_BUILTIN_SET_FPSR, BUILT_IN_MD, NULL, NULL_TREE);
+
   if (TARGET_SIMD)
     aarch64_init_simd_builtins ();
 }
@@ -964,6 +1015,36 @@ aarch64_expand_builtin (tree exp,
 {
   tree fndecl = TREE_OPERAND (CALL_EXPR_FN (exp), 0);
   int fcode = DECL_FUNCTION_CODE (fndecl);
+  int icode;
+  rtx pat, op0;
+  tree arg0;
+
+  switch (fcode)
+    {
+    case AARCH64_BUILTIN_GET_FPCR:
+    case AARCH64_BUILTIN_SET_FPCR:
+    case AARCH64_BUILTIN_GET_FPSR:
+    case AARCH64_BUILTIN_SET_FPSR:
+      if ((fcode == AARCH64_BUILTIN_GET_FPCR)
+	  || (fcode == AARCH64_BUILTIN_GET_FPSR))
+	{
+	  icode = (fcode == AARCH64_BUILTIN_GET_FPSR) ?
+	    CODE_FOR_get_fpsr : CODE_FOR_get_fpcr;
+	  target = gen_reg_rtx (SImode);
+	  pat = GEN_FCN (icode) (target);
+	}
+      else
+	{
+	  target = NULL_RTX;
+	  icode = (fcode == AARCH64_BUILTIN_SET_FPSR) ?
+	    CODE_FOR_set_fpsr : CODE_FOR_set_fpcr;
+	  arg0 = CALL_EXPR_ARG (exp, 0);
+	  op0 = expand_normal (arg0);
+	  pat = GEN_FCN (icode) (op0);
+	}
+      emit_insn (pat);
+      return target;
+    }
 
   if (fcode >= AARCH64_SIMD_BUILTIN_BASE)
     return aarch64_simd_expand_builtin (fcode, exp, target);
@@ -1086,7 +1167,29 @@ aarch64_builtin_vectorized_function (tree fndecl, tree type_out, tree type_in)
 
 	    return aarch64_builtin_decls[builtin];
 	  }
-
+	case BUILT_IN_BSWAP16:
+#undef AARCH64_CHECK_BUILTIN_MODE
+#define AARCH64_CHECK_BUILTIN_MODE(C, N) \
+  (out_mode == N##Imode && out_n == C \
+   && in_mode == N##Imode && in_n == C)
+	  if (AARCH64_CHECK_BUILTIN_MODE (4, H))
+	    return aarch64_builtin_decls[AARCH64_SIMD_BUILTIN_UNOPU_bswapv4hi];
+	  else if (AARCH64_CHECK_BUILTIN_MODE (8, H))
+	    return aarch64_builtin_decls[AARCH64_SIMD_BUILTIN_UNOPU_bswapv8hi];
+	  else
+	    return NULL_TREE;
+	case BUILT_IN_BSWAP32:
+	  if (AARCH64_CHECK_BUILTIN_MODE (2, S))
+	    return aarch64_builtin_decls[AARCH64_SIMD_BUILTIN_UNOPU_bswapv2si];
+	  else if (AARCH64_CHECK_BUILTIN_MODE (4, S))
+	    return aarch64_builtin_decls[AARCH64_SIMD_BUILTIN_UNOPU_bswapv4si];
+	  else
+	    return NULL_TREE;
+	case BUILT_IN_BSWAP64:
+	  if (AARCH64_CHECK_BUILTIN_MODE (2, D))
+	    return aarch64_builtin_decls[AARCH64_SIMD_BUILTIN_UNOPU_bswapv2di];
+	  else
+	    return NULL_TREE;
 	default:
 	  return NULL_TREE;
       }
@@ -1127,6 +1230,25 @@ aarch64_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *args,
 	  return fold_build2 (NE_EXPR, type, and_node, vec_zero_node);
 	  break;
 	}
+      VAR1 (REINTERP_SS, reinterpretdi, 0, df)
+      VAR1 (REINTERP_SS, reinterpretv8qi, 0, df)
+      VAR1 (REINTERP_SS, reinterpretv4hi, 0, df)
+      VAR1 (REINTERP_SS, reinterpretv2si, 0, df)
+      VAR1 (REINTERP_SS, reinterpretv2sf, 0, df)
+      BUILTIN_VD (REINTERP_SS, reinterpretdf, 0)
+      BUILTIN_VD (REINTERP_SU, reinterpretdf, 0)
+      VAR1 (REINTERP_US, reinterpretdi, 0, df)
+      VAR1 (REINTERP_US, reinterpretv8qi, 0, df)
+      VAR1 (REINTERP_US, reinterpretv4hi, 0, df)
+      VAR1 (REINTERP_US, reinterpretv2si, 0, df)
+      VAR1 (REINTERP_US, reinterpretv2sf, 0, df)
+      BUILTIN_VD (REINTERP_SP, reinterpretdf, 0)
+      VAR1 (REINTERP_PS, reinterpretdi, 0, df)
+      VAR1 (REINTERP_PS, reinterpretv8qi, 0, df)
+      VAR1 (REINTERP_PS, reinterpretv4hi, 0, df)
+      VAR1 (REINTERP_PS, reinterpretv2si, 0, df)
+      VAR1 (REINTERP_PS, reinterpretv2sf, 0, df)
+	return fold_build1 (VIEW_CONVERT_EXPR, type, args[0]);
       VAR1 (UNOP, floatv2si, 2, v2sf)
       VAR1 (UNOP, floatv4si, 2, v4sf)
       VAR1 (UNOP, floatv2di, 2, v2df)
@@ -1195,6 +1317,106 @@ aarch64_gimple_fold_builtin (gimple_stmt_iterator *gsi)
 
   return changed;
 }
+
+void
+aarch64_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
+{
+  const unsigned AARCH64_FE_INVALID = 1;
+  const unsigned AARCH64_FE_DIVBYZERO = 2;
+  const unsigned AARCH64_FE_OVERFLOW = 4;
+  const unsigned AARCH64_FE_UNDERFLOW = 8;
+  const unsigned AARCH64_FE_INEXACT = 16;
+  const unsigned HOST_WIDE_INT AARCH64_FE_ALL_EXCEPT = (AARCH64_FE_INVALID
+							| AARCH64_FE_DIVBYZERO
+							| AARCH64_FE_OVERFLOW
+							| AARCH64_FE_UNDERFLOW
+							| AARCH64_FE_INEXACT);
+  const unsigned HOST_WIDE_INT AARCH64_FE_EXCEPT_SHIFT = 8;
+  tree fenv_cr, fenv_sr, get_fpcr, set_fpcr, mask_cr, mask_sr;
+  tree ld_fenv_cr, ld_fenv_sr, masked_fenv_cr, masked_fenv_sr, hold_fnclex_cr;
+  tree hold_fnclex_sr, new_fenv_var, reload_fenv, restore_fnenv, get_fpsr, set_fpsr;
+  tree update_call, atomic_feraiseexcept, hold_fnclex, masked_fenv, ld_fenv;
+
+  /* Generate the equivalence of :
+       unsigned int fenv_cr;
+       fenv_cr = __builtin_aarch64_get_fpcr ();
+
+       unsigned int fenv_sr;
+       fenv_sr = __builtin_aarch64_get_fpsr ();
+
+       Now set all exceptions to non-stop
+       unsigned int mask_cr
+		= ~(AARCH64_FE_ALL_EXCEPT << AARCH64_FE_EXCEPT_SHIFT);
+       unsigned int masked_cr;
+       masked_cr = fenv_cr & mask_cr;
+
+       And clear all exception flags
+       unsigned int maske_sr = ~AARCH64_FE_ALL_EXCEPT;
+       unsigned int masked_cr;
+       masked_sr = fenv_sr & mask_sr;
+
+       __builtin_aarch64_set_cr (masked_cr);
+       __builtin_aarch64_set_sr (masked_sr);  */
+
+  fenv_cr = create_tmp_var (unsigned_type_node, NULL);
+  fenv_sr = create_tmp_var (unsigned_type_node, NULL);
+
+  get_fpcr = aarch64_builtin_decls[AARCH64_BUILTIN_GET_FPCR];
+  set_fpcr = aarch64_builtin_decls[AARCH64_BUILTIN_SET_FPCR];
+  get_fpsr = aarch64_builtin_decls[AARCH64_BUILTIN_GET_FPSR];
+  set_fpsr = aarch64_builtin_decls[AARCH64_BUILTIN_SET_FPSR];
+
+  mask_cr = build_int_cst (unsigned_type_node,
+			   ~(AARCH64_FE_ALL_EXCEPT << AARCH64_FE_EXCEPT_SHIFT));
+  mask_sr = build_int_cst (unsigned_type_node,
+			   ~(AARCH64_FE_ALL_EXCEPT));
+
+  ld_fenv_cr = build2 (MODIFY_EXPR, unsigned_type_node,
+		    fenv_cr, build_call_expr (get_fpcr, 0));
+  ld_fenv_sr = build2 (MODIFY_EXPR, unsigned_type_node,
+		    fenv_sr, build_call_expr (get_fpsr, 0));
+
+  masked_fenv_cr = build2 (BIT_AND_EXPR, unsigned_type_node, fenv_cr, mask_cr);
+  masked_fenv_sr = build2 (BIT_AND_EXPR, unsigned_type_node, fenv_sr, mask_sr);
+
+  hold_fnclex_cr = build_call_expr (set_fpcr, 1, masked_fenv_cr);
+  hold_fnclex_sr = build_call_expr (set_fpsr, 1, masked_fenv_sr);
+
+  hold_fnclex = build2 (COMPOUND_EXPR, void_type_node, hold_fnclex_cr,
+			hold_fnclex_sr);
+  masked_fenv = build2 (COMPOUND_EXPR, void_type_node, masked_fenv_cr,
+			masked_fenv_sr);
+  ld_fenv = build2 (COMPOUND_EXPR, void_type_node, ld_fenv_cr, ld_fenv_sr);
+
+  *hold = build2 (COMPOUND_EXPR, void_type_node,
+		  build2 (COMPOUND_EXPR, void_type_node, masked_fenv, ld_fenv),
+		  hold_fnclex);
+
+  /* Store the value of masked_fenv to clear the exceptions:
+     __builtin_aarch64_set_fpsr (masked_fenv_sr);  */
+
+  *clear = build_call_expr (set_fpsr, 1, masked_fenv_sr);
+
+  /* Generate the equivalent of :
+       unsigned int new_fenv_var;
+       new_fenv_var = __builtin_aarch64_get_fpsr ();
+
+       __builtin_aarch64_set_fpsr (fenv_sr);
+
+       __atomic_feraiseexcept (new_fenv_var);  */
+
+  new_fenv_var = create_tmp_var (unsigned_type_node, NULL);
+  reload_fenv = build2 (MODIFY_EXPR, unsigned_type_node,
+			new_fenv_var, build_call_expr (get_fpsr, 0));
+  restore_fnenv = build_call_expr (set_fpsr, 1, fenv_sr);
+  atomic_feraiseexcept = builtin_decl_implicit (BUILT_IN_ATOMIC_FERAISEEXCEPT);
+  update_call = build_call_expr (atomic_feraiseexcept, 1,
+				 fold_convert (integer_type_node, new_fenv_var));
+  *update = build2 (COMPOUND_EXPR, void_type_node,
+		    build2 (COMPOUND_EXPR, void_type_node,
+			    reload_fenv, restore_fnenv), update_call);
+}
+
 
 #undef AARCH64_CHECK_BUILTIN_MODE
 #undef AARCH64_FIND_FRINT_VARIANT

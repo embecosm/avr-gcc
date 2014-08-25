@@ -172,8 +172,8 @@ typedef unsigned gcov_position_t;
 /* gcov_type is typedef'd elsewhere for the compiler */
 #if IN_GCOV
 #define GCOV_LINKAGE static
-typedef HOST_WIDEST_INT gcov_type;
-typedef unsigned HOST_WIDEST_INT gcov_type_unsigned;
+typedef int64_t gcov_type;
+typedef uint64_t gcov_type_unsigned;
 #if IN_GCOV > 0
 #include <sys/types.h>
 #endif
@@ -193,6 +193,13 @@ typedef unsigned HOST_WIDEST_INT gcov_type_unsigned;
 
 #ifndef GCOV_LINKAGE
 #define GCOV_LINKAGE extern
+#endif
+
+#if IN_LIBGCOV
+#define gcov_nonruntime_assert(EXPR) ((void)(0 && (EXPR)))
+#else
+#define gcov_nonruntime_assert(EXPR) gcc_assert (EXPR)
+#define gcov_error(...) fatal_error (__VA_ARGS__)
 #endif
 
 /* File suffixes.  */

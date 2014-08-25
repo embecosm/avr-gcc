@@ -146,7 +146,6 @@ const pass_data pass_data_cleanup_barriers =
   RTL_PASS, /* type */
   "barriers", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  false, /* has_gate */
   true, /* has_execute */
   TV_NONE, /* tv_id */
   0, /* properties_required */
@@ -164,7 +163,7 @@ public:
   {}
 
   /* opt_pass methods: */
-  unsigned int execute () { return cleanup_barriers (); }
+  virtual unsigned int execute (function *) { return cleanup_barriers (); }
 
 }; // class pass_cleanup_barriers
 
@@ -1591,11 +1590,7 @@ redirect_jump_2 (rtx jump, rtx olabel, rtx nlabel, int delete_unused,
      label and are now changing it into a direct conditional return.
      The jump is no longer crossing in that case.  */
   if (ANY_RETURN_P (nlabel))
-    {
-      note = find_reg_note (jump, REG_CROSSING_JUMP, NULL_RTX);
-      if (note)
-	remove_note (jump, note);
-    }
+    CROSSING_JUMP_P (jump) = 0;
 
   if (!ANY_RETURN_P (olabel)
       && --LABEL_NUSES (olabel) == 0 && delete_unused > 0

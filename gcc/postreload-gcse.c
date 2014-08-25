@@ -1308,13 +1308,6 @@ gcse_after_reload_main (rtx f ATTRIBUTE_UNUSED)
 }
 
 
-static bool
-gate_handle_gcse2 (void)
-{
-  return (optimize > 0 && flag_gcse_after_reload
-	  && optimize_function_for_speed_p (cfun));
-}
-
 
 static unsigned int
 rest_of_handle_gcse2 (void)
@@ -1331,14 +1324,13 @@ const pass_data pass_data_gcse2 =
   RTL_PASS, /* type */
   "gcse2", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_GCSE_AFTER_RELOAD, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_verify_rtl_sharing | TODO_verify_flow ), /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_gcse2 : public rtl_opt_pass
@@ -1349,8 +1341,13 @@ public:
   {}
 
   /* opt_pass methods: */
-  bool gate () { return gate_handle_gcse2 (); }
-  unsigned int execute () { return rest_of_handle_gcse2 (); }
+  virtual bool gate (function *fun)
+    {
+      return (optimize > 0 && flag_gcse_after_reload
+	      && optimize_function_for_speed_p (fun));
+    }
+
+  virtual unsigned int execute (function *) { return rest_of_handle_gcse2 (); }
 
 }; // class pass_gcse2
 

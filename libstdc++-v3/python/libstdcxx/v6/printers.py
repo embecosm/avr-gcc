@@ -51,7 +51,7 @@ def find_type(orig, name):
         # anything fancier here.
         field = typ.fields()[0]
         if not field.is_base_class:
-            raise ValueError, "Cannot find type %s::%s" % (str(orig), name)
+            raise ValueError("Cannot find type %s::%s" % (str(orig), name))
         typ = field.type
 
 class SharedPointerPrinter:
@@ -276,7 +276,7 @@ class StdTuplePrinter:
                 # Set the actual head to the first pair.
                 self.head  = self.head.cast (nodes[0].type)
             elif len (nodes) != 0:
-                raise ValueError, "Top of tuple tree does not consist of a single node."
+                raise ValueError("Top of tuple tree does not consist of a single node.")
             self.count = 0
 
         def __iter__ (self):
@@ -289,7 +289,7 @@ class StdTuplePrinter:
                 raise StopIteration
             # Check that this iteration has an expected structure.
             if len (nodes) != 2:
-                raise ValueError, "Cannot parse more than 2 nodes in a tuple tree."
+                raise ValueError("Cannot parse more than 2 nodes in a tuple tree.")
 
             # - Left node is the next recursion parent.
             # - Right node is the actual class contained in the tuple.
@@ -375,6 +375,22 @@ class RbtreeIterator:
             self.node = node
         return result
 
+def get_value_from_Rb_tree_node(node):
+    """Returns the value held in an _Rb_tree_node<_Val>"""
+    try:
+        member = node.type.fields()[1].name
+        if member == '_M_value_field':
+            # C++03 implementation, node contains the value as a member
+            return node['_M_value_field']
+        elif member == '_M_storage':
+            # C++11 implementation, node stores value in __aligned_buffer
+            p = node['_M_storage']['_M_storage'].address
+            p = p.cast(node.type.template_argument(0).pointer())
+            return p.dereference()
+    except:
+        pass
+    raise ValueError("Unsupported implementation for %s" % str(node.type))
+
 # This is a pretty printer for std::_Rb_tree_iterator (which is
 # std::map::iterator), and has nothing to do with the RbtreeIterator
 # class above.
@@ -387,7 +403,8 @@ class StdRbtreeIteratorPrinter:
     def to_string (self):
         typename = str(self.val.type.strip_typedefs()) + '::_Link_type'
         nodetype = gdb.lookup_type(typename).strip_typedefs()
-        return self.val.cast(nodetype).dereference()['_M_value_field']
+        node = self.val.cast(nodetype).dereference()
+        return get_value_from_Rb_tree_node(node)
 
 class StdDebugIteratorPrinter:
     "Print a debug enabled version of an iterator"
@@ -417,7 +434,8 @@ class StdMapPrinter:
         def next(self):
             if self.count % 2 == 0:
                 n = self.rbiter.next()
-                n = n.cast(self.type).dereference()['_M_value_field']
+                n = n.cast(self.type).dereference()
+                n = get_value_from_Rb_tree_node(n)
                 self.pair = n
                 item = n['first']
             else:
@@ -458,7 +476,8 @@ class StdSetPrinter:
 
         def next(self):
             item = self.rbiter.next()
-            item = item.cast(self.type).dereference()['_M_value_field']
+            item = item.cast(self.type).dereference()
+            item = get_value_from_Rb_tree_node(item)
             # FIXME: this is weird ... what to do?
             # Maybe a 'set' display hint?
             result = ('[%d]' % self.count, item)
@@ -808,7 +827,7 @@ class Printer(object):
         # A small sanity check.
         # FIXME
         if not self.compiled_rx.match(name + '<>'):
-            raise ValueError, 'libstdc++ programming error: "%s" does not match' % name
+            raise ValueError('libstdc++ programming error: "%s" does not match' % name)
         printer = RxPrinter(name, function)
         self.subprinters.append(printer)
         self.lookup[name] = printer

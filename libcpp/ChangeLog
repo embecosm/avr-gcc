@@ -1,3 +1,47 @@
+2014-05-26  Richard Biener  <rguenther@suse.de>
+
+	* configure.ac: Remove long long and __int64 type checks,
+	add check for uint64_t and fail if that wasn't found.
+	* include/cpplib.h (cpp_num_part): Use uint64_t.
+	* config.in: Regenerate.
+	* configure: Likewise.
+
+2014-05-21  Marek Polacek  <polacek@redhat.com>
+
+	PR c/61212
+	* files.c (find_file_in_dir): Add parens around &&.
+
+2014-05-20  Edward Smith-Rowland  <3dw4rd@verizon.net>
+
+	PR c++/61038
+	* macro.c (stringify_arg (cpp_reader *, macro_arg *)):
+	Check for user-defined literal strings and user-defined literal chars
+	to escape necessary characters.
+
+2014-05-20  Richard Biener  <rguenther@suse.de>
+
+	* configure.ac: Copy gcc logic of detecting a 64bit type.
+	Remove HOST_WIDE_INT define.
+	* include/cpplib.h: typedef cpp_num_part to a 64bit type,
+	similar to how hwint.h does it.
+	* config.in: Regenerate.
+	* configure: Likewise.
+
+2014-05-09  Joey Ye  <joey.ye@arm.com>
+
+	* files.c (find_file_in_dir): Always try to shorten for DOS
+	non-system headers.
+	* init.c (ENABLE_CANONICAL_SYSTEM_HEADERS): Default enabled for DOS.
+
+2014-05-07  Richard Biener  <rguenther@suse.de>
+
+	* configure.ac: Always set need_64bit_hwint to yes.
+	* configure: Regenerated.
+
+2014-04-22  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* lex.c: Remove Solaris 9 reference.
+
 2014-02-24  Walter Lee  <walt@tilera.com>
 
 	* configure.ac: Change "tilepro" triplet to "tilepro*".

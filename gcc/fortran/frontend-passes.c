@@ -88,6 +88,10 @@ static int doloop_size, doloop_level;
 
 struct my_struct *evec;
 
+/* Keep track of association lists.  */
+
+static bool in_assoc_list;
+
 /* Entry point - run all passes for a namespace. */
 
 void
@@ -820,6 +824,7 @@ optimize_namespace (gfc_namespace *ns)
   current_ns = ns;
   forall_level = 0;
   iterator_level = 0;
+  in_assoc_list = false;
   in_omp_workshare = false;
 
   gfc_code_walker (&ns->code, convert_do_while, dummy_expr_callback, NULL);
@@ -1052,6 +1057,11 @@ combine_array_constructor (gfc_expr *e)
 
   /* Array constructors have rank one.  */
   if (e->rank != 1)
+    return false;
+
+  /* Don't try to combine association lists, this makes no sense
+     and leads to an ICE.  */
+  if (in_assoc_list)
     return false;
 
   op1 = e->value.op.op1;
@@ -1940,8 +1950,17 @@ gfc_code_walker (gfc_code **c, walk_code_fn_t codefn, walk_expr_fn_t exprfn,
 
 	    case EXEC_BLOCK:
 	      WALK_SUBCODE (co->ext.block.ns->code);
-	      for (alist = co->ext.block.assoc; alist; alist = alist->next)
-		WALK_SUBEXPR (alist->target);
+	      if (co->ext.block.assoc)
+		{
+		  bool saved_in_assoc_list = in_assoc_list;
+
+		  in_assoc_list = true;
+		  for (alist = co->ext.block.assoc; alist; alist = alist->next)
+		    WALK_SUBEXPR (alist->target);
+
+		  in_assoc_list = saved_in_assoc_list;
+		}
+
 	      break;
 
 	    case EXEC_DO:
@@ -2112,6 +2131,7 @@ gfc_code_walker (gfc_code **c, walk_code_fn_t codefn, walk_expr_fn_t exprfn,
 
 	    case EXEC_OMP_PARALLEL:
 	    case EXEC_OMP_PARALLEL_DO:
+	    case EXEC_OMP_PARALLEL_DO_SIMD:
 	    case EXEC_OMP_PARALLEL_SECTIONS:
 
 	      in_omp_workshare = false;
@@ -2128,9 +2148,11 @@ gfc_code_walker (gfc_code **c, walk_code_fn_t codefn, walk_expr_fn_t exprfn,
 	      /* Fall through  */
 	      
 	    case EXEC_OMP_DO:
+	    case EXEC_OMP_DO_SIMD:
 	    case EXEC_OMP_SECTIONS:
 	    case EXEC_OMP_SINGLE:
 	    case EXEC_OMP_END_SINGLE:
+	    case EXEC_OMP_SIMD:
 	    case EXEC_OMP_TASK:
 
 	      /* Come to this label only from the
@@ -2144,7 +2166,24 @@ gfc_code_walker (gfc_code **c, walk_code_fn_t codefn, walk_expr_fn_t exprfn,
 		  WALK_SUBEXPR (co->ext.omp_clauses->final_expr);
 		  WALK_SUBEXPR (co->ext.omp_clauses->num_threads);
 		  WALK_SUBEXPR (co->ext.omp_clauses->chunk_size);
+		  WALK_SUBEXPR (co->ext.omp_clauses->safelen_expr);
+		  WALK_SUBEXPR (co->ext.omp_clauses->simdlen_expr);
 		}
+	      {
+		gfc_omp_namelist *n;
+		for (n = co->ext.omp_clauses->lists[OMP_LIST_ALIGNED];
+		     n; n = n->next)
+		  WALK_SUBEXPR (n->expr);
+		for (n = co->ext.omp_clauses->lists[OMP_LIST_LINEAR];
+		     n; n = n->next)
+		  WALK_SUBEXPR (n->expr);
+		for (n = co->ext.omp_clauses->lists[OMP_LIST_DEPEND_IN];
+		     n; n = n->next)
+		  WALK_SUBEXPR (n->expr);
+		for (n = co->ext.omp_clauses->lists[OMP_LIST_DEPEND_OUT];
+		     n; n = n->next)
+		  WALK_SUBEXPR (n->expr);
+	      }
 	      break;
 	    default:
 	      break;

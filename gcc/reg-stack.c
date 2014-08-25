@@ -3285,16 +3285,6 @@ reg_to_stack (void)
 }
 #endif /* STACK_REGS */
 
-static bool
-gate_handle_stack_regs (void)
-{
-#ifdef STACK_REGS
-  return 1;
-#else
-  return 0;
-#endif
-}
-
 namespace {
 
 const pass_data pass_data_stack_regs =
@@ -3302,7 +3292,6 @@ const pass_data pass_data_stack_regs =
   RTL_PASS, /* type */
   "*stack_regs", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
   false, /* has_execute */
   TV_REG_STACK, /* tv_id */
   0, /* properties_required */
@@ -3320,7 +3309,14 @@ public:
   {}
 
   /* opt_pass methods: */
-  bool gate () { return gate_handle_stack_regs (); }
+  virtual bool gate (function *)
+    {
+#ifdef STACK_REGS
+      return true;
+#else
+      return false;
+#endif
+    }
 
 }; // class pass_stack_regs
 
@@ -3351,14 +3347,13 @@ const pass_data pass_data_stack_regs_run =
   RTL_PASS, /* type */
   "stack", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  false, /* has_gate */
   true, /* has_execute */
   TV_REG_STACK, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_df_finish | TODO_verify_rtl_sharing ), /* todo_flags_finish */
+  TODO_df_finish, /* todo_flags_finish */
 };
 
 class pass_stack_regs_run : public rtl_opt_pass
@@ -3369,7 +3364,10 @@ public:
   {}
 
   /* opt_pass methods: */
-  unsigned int execute () { return rest_of_handle_stack_regs (); }
+  virtual unsigned int execute (function *)
+    {
+      return rest_of_handle_stack_regs ();
+    }
 
 }; // class pass_stack_regs_run
 

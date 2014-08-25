@@ -30,6 +30,7 @@ class Var_expression;
 class Temporary_reference_expression;
 class Set_and_use_temporary_expression;
 class String_expression;
+class Unary_expression;
 class Binary_expression;
 class Call_expression;
 class Func_expression;
@@ -327,6 +328,10 @@ class Expression
   static Expression*
   make_struct_composite_literal(Type*, Expression_list*, Location);
 
+  // Make an array composite literal.
+  static Expression*
+  make_array_composite_literal(Type*, Expression_list*, Location);
+
   // Make a slice composite literal.
   static Expression*
   make_slice_composite_literal(Type*, Expression_list*, Location);
@@ -533,6 +538,12 @@ class Expression
   Expression*
   deref();
 
+  // If this is a unary expression, return the Unary_expression
+  // structure.  Otherwise return NULL.
+  Unary_expression*
+  unary_expression()
+  { return this->convert<Unary_expression, EXPRESSION_UNARY>(); }
+
   // If this is a binary expression, return the Binary_expression
   // structure.  Otherwise return NULL.
   Binary_expression*
@@ -736,9 +747,9 @@ class Expression
     return this->do_must_eval_subexpressions_in_order(skip);
   }
 
-  // Return the tree for this expression.
-  tree
-  get_tree(Translate_context*);
+  // Return the backend representation for this expression.
+  Bexpression*
+  get_backend(Translate_context*);
 
   // Return an expression handling any conversions which must be done during
   // assignment.
@@ -872,9 +883,9 @@ class Expression
   do_must_eval_subexpressions_in_order(int* /* skip */) const
   { return false; }
 
-  // Child class implements conversion to tree.
-  virtual tree
-  do_get_tree(Translate_context*) = 0;
+  // Child class implements conversion to backend representation.
+  virtual Bexpression*
+  do_get_backend(Translate_context*) = 0;
 
   // Child class implements export.
   virtual void
@@ -1057,8 +1068,8 @@ class Parser_expression : public Expression
   do_check_types(Gogo*)
   { go_unreachable(); }
 
-  tree
-  do_get_tree(Translate_context*)
+  Bexpression*
+  do_get_backend(Translate_context*)
   { go_unreachable(); }
 };
 
@@ -1098,8 +1109,8 @@ class Var_expression : public Expression
   void
   do_address_taken(bool);
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -1150,8 +1161,8 @@ class Temporary_reference_expression : public Expression
   void
   do_address_taken(bool);
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -1210,8 +1221,8 @@ class Set_and_use_temporary_expression : public Expression
   void
   do_address_taken(bool);
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -1266,8 +1277,8 @@ class String_expression : public Expression
   do_copy()
   { return this; }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   // Write string literal to a string dump.
   static void
@@ -1284,6 +1295,157 @@ class String_expression : public Expression
   const std::string val_;
   // The type as determined by context.
   Type* type_;
+};
+
+// A Unary expression.
+
+class Unary_expression : public Expression
+{
+ public:
+  Unary_expression(Operator op, Expression* expr, Location location)
+    : Expression(EXPRESSION_UNARY, location),
+      op_(op), escapes_(true), create_temp_(false), is_gc_root_(false),
+      is_slice_init_(false), expr_(expr), issue_nil_check_(false)
+  { }
+
+  // Return the operator.
+  Operator
+  op() const
+  { return this->op_; }
+
+  // Return the operand.
+  Expression*
+  operand() const
+  { return this->expr_; }
+
+  // Record that an address expression does not escape.
+  void
+  set_does_not_escape()
+  {
+    go_assert(this->op_ == OPERATOR_AND);
+    this->escapes_ = false;
+  }
+
+  // Record that this is an address expression which should create a
+  // temporary variable if necessary.  This is used for method calls.
+  void
+  set_create_temp()
+  {
+    go_assert(this->op_ == OPERATOR_AND);
+    this->create_temp_ = true;
+  }
+
+  // Record that this is an address expression of a GC root, which is a
+  // mutable composite literal.  This used for registering GC variables.
+  void
+  set_is_gc_root()
+  {
+    go_assert(this->op_ == OPERATOR_AND);
+    this->is_gc_root_ = true;
+  }
+
+  // Record that this is an address expression of a slice value initializer,
+  // which is mutable if the values are not copied to the heap.
+  void
+  set_is_slice_init()
+  {
+    go_assert(this->op_ == OPERATOR_AND);
+    this->is_slice_init_ = true;
+  }
+
+  // Apply unary opcode OP to UNC, setting NC.  Return true if this
+  // could be done, false if not.  Issue errors for overflow.
+  static bool
+  eval_constant(Operator op, const Numeric_constant* unc,
+		Location, Numeric_constant* nc);
+
+  static Expression*
+  do_import(Import*);
+
+ protected:
+  int
+  do_traverse(Traverse* traverse)
+  { return Expression::traverse(&this->expr_, traverse); }
+
+  Expression*
+  do_lower(Gogo*, Named_object*, Statement_inserter*, int);
+
+  Expression*
+  do_flatten(Gogo*, Named_object*, Statement_inserter*);
+
+  bool
+  do_is_constant() const;
+
+  bool
+  do_is_immutable() const
+  {
+    return (this->expr_->is_immutable()
+	    || (this->op_ == OPERATOR_AND && this->expr_->is_variable()));
+  }
+
+  bool
+  do_numeric_constant_value(Numeric_constant*) const;
+
+  Type*
+  do_type();
+
+  void
+  do_determine_type(const Type_context*);
+
+  void
+  do_check_types(Gogo*);
+
+  Expression*
+  do_copy()
+  {
+    return Expression::make_unary(this->op_, this->expr_->copy(),
+				  this->location());
+  }
+
+  bool
+  do_must_eval_subexpressions_in_order(int*) const
+  { return this->op_ == OPERATOR_MULT; }
+
+  bool
+  do_is_addressable() const
+  { return this->op_ == OPERATOR_MULT; }
+
+  Bexpression*
+  do_get_backend(Translate_context*);
+
+  void
+  do_export(Export*) const;
+
+  void
+  do_dump_expression(Ast_dump_context*) const;
+
+  void
+  do_issue_nil_check()
+  { this->issue_nil_check_ = (this->op_ == OPERATOR_MULT); }
+
+ private:
+  // The unary operator to apply.
+  Operator op_;
+  // Normally true.  False if this is an address expression which does
+  // not escape the current function.
+  bool escapes_;
+  // True if this is an address expression which should create a
+  // temporary variable if necessary.
+  bool create_temp_;
+  // True if this is an address expression for a GC root.  A GC root is a
+  // special struct composite literal that is mutable when addressed, meaning
+  // it cannot be represented as an immutable_struct in the backend.
+  bool is_gc_root_;
+  // True if this is an address expression for a slice value with an immutable
+  // initializer.  The initializer for a slice's value pointer has an array
+  // type, meaning it cannot be represented as an immutable_struct in the
+  // backend.
+  bool is_slice_init_;
+  // The operand.
+  Expression* expr_;
+  // Whether or not to issue a nil check for this expression if its address
+  // is being taken.
+  bool issue_nil_check_;
 };
 
 // A binary expression.
@@ -1372,8 +1534,8 @@ class Binary_expression : public Expression
 				   this->right_->copy(), this->location());
   }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_export(Export*) const;
@@ -1553,8 +1715,8 @@ class Call_expression : public Expression
   bool
   do_must_eval_in_order() const;
 
-  virtual tree
-  do_get_tree(Translate_context*);
+  virtual Bexpression*
+  do_get_backend(Translate_context*);
 
   virtual bool
   do_is_recover_call() const;
@@ -1672,8 +1834,8 @@ class Func_expression : public Expression
 					   this->location());
   }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -1719,8 +1881,8 @@ class Func_descriptor_expression : public Expression
   do_is_addressable() const
   { return true; }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context* context) const;
@@ -1962,8 +2124,8 @@ class Map_index_expression : public Expression
 
   // A map index expression is an lvalue but it is not addressable.
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -2048,8 +2210,8 @@ class Bound_method_expression : public Expression
 				       this->function_, this->location());
   }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -2151,8 +2313,8 @@ class Field_reference_expression : public Expression
   do_issue_nil_check()
   { this->expr_->issue_nil_check(); }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -2230,8 +2392,8 @@ class Interface_field_reference_expression : public Expression
 						      this->location());
   }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -2296,8 +2458,8 @@ class Type_guard_expression : public Expression
 				     this->location());
   }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;
@@ -2356,8 +2518,8 @@ class Receive_expression : public Expression
   do_must_eval_in_order() const
   { return true; }
 
-  tree
-  do_get_tree(Translate_context*);
+  Bexpression*
+  do_get_backend(Translate_context*);
 
   void
   do_dump_expression(Ast_dump_context*) const;

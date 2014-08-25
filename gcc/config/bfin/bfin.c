@@ -2317,7 +2317,7 @@ bfin_class_likely_spilled_p (reg_class_t rclass)
 static struct machine_function *
 bfin_init_machine_status (void)
 {
-  return ggc_alloc_cleared_machine_function ();
+  return ggc_cleared_alloc<machine_function> ();
 }
 
 /* Implement the TARGET_OPTION_OVERRIDE hook.  */
@@ -2588,7 +2588,7 @@ split_load_immediate (rtx operands[])
       && (D_REGNO_P (regno)
 	  || (regno >= REG_P0 && regno <= REG_P7 && num_zero <= 2)))
     {
-      emit_insn (gen_movsi (operands[0], GEN_INT (shifted)));
+      emit_insn (gen_movsi (operands[0], gen_int_mode (shifted, SImode)));
       emit_insn (gen_ashlsi3 (operands[0], operands[0], GEN_INT (num_zero)));
       return 1;
     }
@@ -2602,13 +2602,15 @@ split_load_immediate (rtx operands[])
       if (log2constp (val & 0xFFFF0000))
 	{
 	  emit_insn (gen_movsi (operands[0], GEN_INT (val & 0xFFFF)));
-	  emit_insn (gen_iorsi3 (operands[0], operands[0], GEN_INT (val & 0xFFFF0000)));
+	  emit_insn (gen_iorsi3 (operands[0], operands[0],
+				 gen_int_mode (val & 0xFFFF0000, SImode)));
 	  return 1;
 	}
       else if (log2constp (val | 0xFFFF) && (val & 0x8000) != 0)
 	{
 	  emit_insn (gen_movsi (operands[0], GEN_INT (tmp)));
-	  emit_insn (gen_andsi3 (operands[0], operands[0], GEN_INT (val | 0xFFFF)));
+	  emit_insn (gen_andsi3 (operands[0], operands[0],
+				 gen_int_mode (val | 0xFFFF, SImode)));
 	}
     }
 
@@ -2617,7 +2619,9 @@ split_load_immediate (rtx operands[])
       if (tmp >= -64 && tmp <= 63)
 	{
 	  emit_insn (gen_movsi (operands[0], GEN_INT (tmp)));
-	  emit_insn (gen_movstricthi_high (operands[0], GEN_INT (val & -65536)));
+	  emit_insn (gen_movstricthi_high (operands[0],
+					   gen_int_mode (val & -65536,
+							 SImode)));
 	  return 1;
 	}
 
@@ -2645,7 +2649,7 @@ split_load_immediate (rtx operands[])
     {
       /* If optimizing for size, generate a sequence that has more instructions
 	 but is shorter.  */
-      emit_insn (gen_movsi (operands[0], GEN_INT (shifted_compl)));
+      emit_insn (gen_movsi (operands[0], gen_int_mode (shifted_compl, SImode)));
       emit_insn (gen_ashlsi3 (operands[0], operands[0],
 			      GEN_INT (num_compl_zero)));
       emit_insn (gen_one_cmplsi2 (operands[0], operands[0]));
@@ -3288,8 +3292,8 @@ bfin_local_alignment (tree type, unsigned align)
      memcpy can use 32 bit loads/stores.  */
   if (TYPE_SIZE (type)
       && TREE_CODE (TYPE_SIZE (type)) == INTEGER_CST
-      && (TREE_INT_CST_LOW (TYPE_SIZE (type)) > 8
-	  || TREE_INT_CST_HIGH (TYPE_SIZE (type))) && align < 32)
+      && wi::gtu_p (TYPE_SIZE (type), 8)
+      && align < 32)
     return 32;
   return align;
 }
@@ -3371,15 +3375,14 @@ find_prev_insn_start (rtx insn)
 /* Implement TARGET_CAN_USE_DOLOOP_P.  */
 
 static bool
-bfin_can_use_doloop_p (double_int, double_int iterations_max,
+bfin_can_use_doloop_p (const widest_int &, const widest_int &iterations_max,
 		       unsigned int, bool)
 {
   /* Due to limitations in the hardware (an initial loop count of 0
      does not loop 2^32 times) we must avoid to generate a hardware
      loops when we cannot rule out this case.  */
   if (!flag_unsafe_loop_optimizations
-      && (iterations_max.high != 0
-	  || iterations_max.low >= 0xFFFFFFFF))
+      && wi::geu_p (iterations_max, 0xFFFFFFFF))
     return false;
   return true;
 }

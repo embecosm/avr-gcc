@@ -723,8 +723,36 @@ tree_ssa_ifcombine_bb (basic_block inner_cond_bb)
 
 /* Main entry for the tree if-conversion pass.  */
 
-static unsigned int
-tree_ssa_ifcombine (void)
+namespace {
+
+const pass_data pass_data_tree_ifcombine =
+{
+  GIMPLE_PASS, /* type */
+  "ifcombine", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_execute */
+  TV_TREE_IFCOMBINE, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_update_ssa, /* todo_flags_finish */
+};
+
+class pass_tree_ifcombine : public gimple_opt_pass
+{
+public:
+  pass_tree_ifcombine (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_tree_ifcombine, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  virtual unsigned int execute (function *);
+
+}; // class pass_tree_ifcombine
+
+unsigned int
+pass_tree_ifcombine::execute (function *fun)
 {
   basic_block *bbs;
   bool cfg_changed = false;
@@ -741,7 +769,7 @@ tree_ssa_ifcombine (void)
      inner ones, and also that we do not try to visit a removed
      block.  This is opposite of PHI-OPT, because we cascade the
      combining rather than cascading PHIs. */
-  for (i = n_basic_blocks_for_fn (cfun) - NUM_FIXED_BLOCKS - 1; i >= 0; i--)
+  for (i = n_basic_blocks_for_fn (fun) - NUM_FIXED_BLOCKS - 1; i >= 0; i--)
     {
       basic_block bb = bbs[i];
       gimple stmt = last_stmt (bb);
@@ -755,42 +783,6 @@ tree_ssa_ifcombine (void)
 
   return cfg_changed ? TODO_cleanup_cfg : 0;
 }
-
-static bool
-gate_ifcombine (void)
-{
-  return 1;
-}
-
-namespace {
-
-const pass_data pass_data_tree_ifcombine =
-{
-  GIMPLE_PASS, /* type */
-  "ifcombine", /* name */
-  OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
-  true, /* has_execute */
-  TV_TREE_IFCOMBINE, /* tv_id */
-  ( PROP_cfg | PROP_ssa ), /* properties_required */
-  0, /* properties_provided */
-  0, /* properties_destroyed */
-  0, /* todo_flags_start */
-  ( TODO_update_ssa | TODO_verify_ssa ), /* todo_flags_finish */
-};
-
-class pass_tree_ifcombine : public gimple_opt_pass
-{
-public:
-  pass_tree_ifcombine (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_tree_ifcombine, ctxt)
-  {}
-
-  /* opt_pass methods: */
-  bool gate () { return gate_ifcombine (); }
-  unsigned int execute () { return tree_ssa_ifcombine (); }
-
-}; // class pass_tree_ifcombine
 
 } // anon namespace
 

@@ -1544,15 +1544,6 @@ analyze_memory_references (void)
   struct loop *loop, *outer;
   unsigned i, n;
 
-#if 0
-  /* Initialize bb_loop_postorder with a mapping from loop->num to
-     its postorder index.  */
-  i = 0;
-  bb_loop_postorder = XNEWVEC (unsigned, number_of_loops (cfun));
-  FOR_EACH_LOOP (loop, LI_FROM_INNERMOST)
-    bb_loop_postorder[loop->num] = i++;
-#endif
-
   /* Collect all basic-blocks in loops and sort them after their
      loops postorder.  */
   i = 0;
@@ -1610,7 +1601,7 @@ mem_refs_may_alias_p (mem_ref_p mem1, mem_ref_p mem2,
   /* Perform BASE + OFFSET analysis -- if MEM1 and MEM2 are based on the same
      object and their offset differ in such a way that the locations cannot
      overlap, then they cannot alias.  */
-  double_int size1, size2;
+  widest_int size1, size2;
   aff_tree off1, off2;
 
   /* Perform basic offset and type-based disambiguation.  */
@@ -1626,7 +1617,7 @@ mem_refs_may_alias_p (mem_ref_p mem1, mem_ref_p mem2,
   get_inner_reference_aff (mem2->mem.ref, &off2, &size2);
   aff_combination_expand (&off1, ttae_cache);
   aff_combination_expand (&off2, ttae_cache);
-  aff_combination_scale (&off1, double_int_minus_one);
+  aff_combination_scale (&off1, -1);
   aff_combination_add (&off2, &off1);
 
   if (aff_comb_cannot_overlap_p (&off2, size1, size2))
@@ -1807,6 +1798,7 @@ execute_sm_if_changed (edge ex, tree mem, tree tmp_var, tree flag)
   gimple_stmt_iterator gsi;
   gimple stmt;
   struct prev_flag_edges *prev_edges = (struct prev_flag_edges *) ex->aux;
+  bool irr = ex->flags & EDGE_IRREDUCIBLE_LOOP;
 
   /* ?? Insert store after previous store if applicable.  See note
      below.  */
@@ -1821,8 +1813,9 @@ execute_sm_if_changed (edge ex, tree mem, tree tmp_var, tree flag)
   old_dest = ex->dest;
   new_bb = split_edge (ex);
   then_bb = create_empty_bb (new_bb);
-  if (current_loops && new_bb->loop_father)
-    add_bb_to_loop (then_bb, new_bb->loop_father);
+  if (irr)
+    then_bb->flags = BB_IRREDUCIBLE_LOOP;
+  add_bb_to_loop (then_bb, new_bb->loop_father);
 
   gsi = gsi_start_bb (new_bb);
   stmt = gimple_build_cond (NE_EXPR, flag, boolean_false_node,
@@ -1834,9 +1827,12 @@ execute_sm_if_changed (edge ex, tree mem, tree tmp_var, tree flag)
   stmt = gimple_build_assign (unshare_expr (mem), tmp_var);
   gsi_insert_after (&gsi, stmt, GSI_CONTINUE_LINKING);
 
-  make_edge (new_bb, then_bb, EDGE_TRUE_VALUE);
-  make_edge (new_bb, old_dest, EDGE_FALSE_VALUE);
-  then_old_edge = make_edge (then_bb, old_dest, EDGE_FALLTHRU);
+  make_edge (new_bb, then_bb,
+	     EDGE_TRUE_VALUE | (irr ? EDGE_IRREDUCIBLE_LOOP : 0));
+  make_edge (new_bb, old_dest,
+	     EDGE_FALSE_VALUE | (irr ? EDGE_IRREDUCIBLE_LOOP : 0));
+  then_old_edge = make_edge (then_bb, old_dest,
+			     EDGE_FALLTHRU | (irr ? EDGE_IRREDUCIBLE_LOOP : 0));
 
   set_immediate_dominator (CDI_DOMINATORS, then_bb, new_bb);
 
@@ -2529,21 +2525,6 @@ tree_ssa_lim (void)
 
 /* Loop invariant motion pass.  */
 
-static unsigned int
-tree_ssa_loop_im (void)
-{
-  if (number_of_loops (cfun) <= 1)
-    return 0;
-
-  return tree_ssa_lim ();
-}
-
-static bool
-gate_tree_ssa_loop_im (void)
-{
-  return flag_tree_loop_im != 0;
-}
-
 namespace {
 
 const pass_data pass_data_lim =
@@ -2551,7 +2532,6 @@ const pass_data pass_data_lim =
   GIMPLE_PASS, /* type */
   "lim", /* name */
   OPTGROUP_LOOP, /* optinfo_flags */
-  true, /* has_gate */
   true, /* has_execute */
   TV_LIM, /* tv_id */
   PROP_cfg, /* properties_required */
@@ -2570,10 +2550,19 @@ public:
 
   /* opt_pass methods: */
   opt_pass * clone () { return new pass_lim (m_ctxt); }
-  bool gate () { return gate_tree_ssa_loop_im (); }
-  unsigned int execute () { return tree_ssa_loop_im (); }
+  virtual bool gate (function *) { return flag_tree_loop_im != 0; }
+  virtual unsigned int execute (function *);
 
 }; // class pass_lim
+
+unsigned int
+pass_lim::execute (function *fun)
+{
+  if (number_of_loops (fun) <= 1)
+    return 0;
+
+  return tree_ssa_lim ();
+}
 
 } // anon namespace
 

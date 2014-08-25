@@ -146,7 +146,7 @@ cgraph_clone_edge (struct cgraph_edge *e, struct cgraph_node *n,
       if (e->indirect_info)
 	{
 	  new_edge->indirect_info
-	    = ggc_alloc_cleared_cgraph_indirect_call_info ();
+	    = ggc_cleared_alloc<cgraph_indirect_call_info> ();
 	  *new_edge->indirect_info = *e->indirect_info;
 	}
     }
@@ -283,7 +283,6 @@ static void
 set_new_clone_decl_and_node_flags (cgraph_node *new_node)
 {
   DECL_EXTERNAL (new_node->decl) = 0;
-  DECL_COMDAT_GROUP (new_node->decl) = 0;
   TREE_PUBLIC (new_node->decl) = 0;
   DECL_COMDAT (new_node->decl) = 0;
   DECL_WEAK (new_node->decl) = 0;
@@ -558,7 +557,7 @@ cgraph_create_virtual_clone (struct cgraph_node *old_node,
      that is not weak also.
      ??? We cannot use COMDAT linkage because there is no
      ABI support for this.  */
-  if (DECL_ONE_ONLY (old_decl))
+  if (old_node->get_comdat_group ())
     DECL_SECTION_NAME (new_node->decl) = NULL;
   set_new_clone_decl_and_node_flags (new_node);
   new_node->clone.tree_map = tree_map;
@@ -974,7 +973,9 @@ cgraph_function_versioning (struct cgraph_node *old_version_node,
     cgraph_copy_node_for_versioning (old_version_node, new_decl,
 				     redirect_callers, bbs_to_copy);
 
-  gcc_assert (!old_version_node->ipa_transforms_to_apply.exists ());
+  if (old_version_node->ipa_transforms_to_apply.exists ())
+    new_version_node->ipa_transforms_to_apply
+      = old_version_node->ipa_transforms_to_apply.copy ();
   /* Copy the OLD_VERSION_NODE function tree to the new version.  */
   tree_function_versioning (old_decl, new_decl, tree_map, false, args_to_skip,
 			    skip_return, bbs_to_copy, new_entry_block);

@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "convert.h"
 #include "decl.h"
 #include "target.h"
+#include "wide-int.h"
 
 static tree cp_convert_to_pointer (tree, tree, tsubst_flags_t);
 static tree convert_to_pointer_force (tree, tree, tsubst_flags_t);
@@ -197,8 +198,9 @@ cp_convert_to_pointer (tree type, tree expr, tsubst_flags_t complain)
 						       complain);
 	    }
 	}
-      error_at (loc, "cannot convert %qE from type %qT to type %qT",
-		expr, intype, type);
+      if (complain & tf_error)
+	error_at (loc, "cannot convert %qE from type %qT to type %qT",
+		  expr, intype, type);
       return error_mark_node;
     }
 
@@ -582,9 +584,7 @@ ignore_overflows (tree expr, tree orig)
     {
       gcc_assert (!TREE_OVERFLOW (orig));
       /* Ensure constant sharing.  */
-      expr = build_int_cst_wide (TREE_TYPE (expr),
-				 TREE_INT_CST_LOW (expr),
-				 TREE_INT_CST_HIGH (expr));
+      expr = wide_int_to_tree (TREE_TYPE (expr), expr);
     }
   return expr;
 }
@@ -1285,7 +1285,7 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 	    }
 	else
 	  return error_mark_node;
-	expr = void_zero_node;
+	expr = void_node;
       }
     else if (implicit != ICV_CAST && probe == expr && is_overloaded_fn (probe))
       {
@@ -1415,7 +1415,7 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
       expr = build1 (CONVERT_EXPR, void_type_node, expr);
     }
   if (! TREE_SIDE_EFFECTS (expr))
-    expr = void_zero_node;
+    expr = void_node;
   return expr;
 }
 

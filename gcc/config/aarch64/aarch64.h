@@ -32,7 +32,7 @@
       else						\
 	builtin_define ("__AARCH64EL__");		\
 							\
-      if (!TARGET_GENERAL_REGS_ONLY)			\
+      if (TARGET_SIMD)					\
 	builtin_define ("__ARM_NEON");			\
 							\
       switch (aarch64_cmodel)				\
@@ -83,9 +83,9 @@
 #define WORDS_BIG_ENDIAN (BYTES_BIG_ENDIAN)
 
 /* AdvSIMD is supported in the default configuration, unless disabled by
-   -mgeneral-regs-only.  */
-#define TARGET_SIMD !TARGET_GENERAL_REGS_ONLY
-#define TARGET_FLOAT !TARGET_GENERAL_REGS_ONLY
+   -mgeneral-regs-only or by the +nosimd extension.  */
+#define TARGET_SIMD (!TARGET_GENERAL_REGS_ONLY && AARCH64_ISA_SIMD)
+#define TARGET_FLOAT (!TARGET_GENERAL_REGS_ONLY && AARCH64_ISA_FP)
 
 #define UNITS_PER_WORD		8
 
@@ -185,8 +185,8 @@ extern unsigned long aarch64_isa_flags;
 extern unsigned long aarch64_tune_flags;
 #define AARCH64_TUNE_SLOWMUL       (aarch64_tune_flags & AARCH64_FL_SLOWMUL)
 
-/* Crypto is an optional feature.  */
-#define TARGET_CRYPTO AARCH64_ISA_CRYPTO
+/* Crypto is an optional extension to AdvSIMD.  */
+#define TARGET_CRYPTO (TARGET_SIMD && AARCH64_ISA_CRYPTO)
 
 /* Standard register usage.  */
 
@@ -365,8 +365,7 @@ extern unsigned long aarch64_tune_flags;
 
 #define HARD_REGNO_MODE_OK(REGNO, MODE)	aarch64_hard_regno_mode_ok (REGNO, MODE)
 
-#define MODES_TIEABLE_P(MODE1, MODE2)			\
-  (GET_MODE_CLASS (MODE1) == GET_MODE_CLASS (MODE2))
+#define MODES_TIEABLE_P(MODE1, MODE2) aarch64_modes_tieable_p (MODE1, MODE2)
 
 #define DWARF2_UNWIND_INFO 1
 
@@ -409,7 +408,7 @@ extern unsigned long aarch64_tune_flags;
 enum reg_class
 {
   NO_REGS,
-  CORE_REGS,
+  CALLER_SAVE_REGS,
   GENERAL_REGS,
   STACK_REG,
   POINTER_REGS,
@@ -424,7 +423,7 @@ enum reg_class
 #define REG_CLASS_NAMES				\
 {						\
   "NO_REGS",					\
-  "CORE_REGS",					\
+  "CALLER_SAVE_REGS",				\
   "GENERAL_REGS",				\
   "STACK_REG",					\
   "POINTER_REGS",				\
@@ -436,7 +435,7 @@ enum reg_class
 #define REG_CLASS_CONTENTS						\
 {									\
   { 0x00000000, 0x00000000, 0x00000000 },	/* NO_REGS */		\
-  { 0x7fffffff, 0x00000000, 0x00000003 },	/* CORE_REGS */		\
+  { 0x0007ffff, 0x00000000, 0x00000000 },	/* CALLER_SAVE_REGS */	\
   { 0x7fffffff, 0x00000000, 0x00000003 },	/* GENERAL_REGS */	\
   { 0x80000000, 0x00000000, 0x00000000 },	/* STACK_REG */		\
   { 0xffffffff, 0x00000000, 0x00000003 },	/* POINTER_REGS */	\
@@ -447,7 +446,7 @@ enum reg_class
 
 #define REGNO_REG_CLASS(REGNO)	aarch64_regno_regclass (REGNO)
 
-#define INDEX_REG_CLASS	CORE_REGS
+#define INDEX_REG_CLASS	GENERAL_REGS
 #define BASE_REG_CLASS  POINTER_REGS
 
 /* Register pairs used to eliminate unneeded registers that point into
@@ -520,7 +519,6 @@ struct GTY (()) aarch64_frame
      been saved.  */
   HOST_WIDE_INT padding0;
   HOST_WIDE_INT hardfp_offset;	/* HARD_FRAME_POINTER_REGNUM */
-  HOST_WIDE_INT fp_lr_offset;	/* Space needed for saving fp and/or lr */
 
   bool laid_out;
 };
@@ -825,6 +823,11 @@ do {									     \
   aarch64_cannot_change_mode_class (FROM, TO, CLASS)
 
 #define SHIFT_COUNT_TRUNCATED !TARGET_SIMD
+
+/* Choose appropriate mode for caller saves, so we do the minimum
+   required size of load/store.  */
+#define HARD_REGNO_CALLER_SAVE_MODE(REGNO, NREGS, MODE) \
+  aarch64_hard_regno_caller_save_mode ((REGNO), (NREGS), (MODE))
 
 /* Callee only saves lower 64-bits of a 128-bit register.  Tell the
    compiler the callee clobbers the top 64-bits when restoring the

@@ -26,8 +26,9 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #ifndef LIBCAF_H
 #define LIBCAF_H
 
+#include <stdbool.h>
+#include <stddef.h>	/* For size_t.  */
 #include <stdint.h>	/* For int32_t.  */
-#include <stddef.h>	/* For ptrdiff_t.  */
 
 #ifndef __GNUC__
 #define __attribute__(x)
@@ -55,21 +56,36 @@ typedef enum caf_register_t {
 }
 caf_register_t;
 
+typedef void* caf_token_t;
+
 /* Linked list of static coarrays registered.  */
 typedef struct caf_static_t {
-  void **token;
+  caf_token_t token;
   struct caf_static_t *prev;
 }
 caf_static_t;
 
+typedef struct caf_vector_t {
+  size_t nvec;  /* size of the vector; 0 means dim triplet.  */
+  union {
+    struct {
+      ptrdiff_t lower_bound, upper_bound, stride;
+    } triplet;
+    ptrdiff_t *vector;
+  } u;
+}
+caf_vector_t;
 
-void _gfortran_caf_init (int *, char ***, int *, int *);
+
+void _gfortran_caf_init (int *, char ***);
 void _gfortran_caf_finalize (void);
 
-void * _gfortran_caf_register (ptrdiff_t, caf_register_t, void ***, int *,
-			       char *, int);
-void _gfortran_caf_deregister (void ***, int *, char *, int);
+int _gfortran_caf_this_image (int);
+int _gfortran_caf_num_images (int, int);
 
+void *_gfortran_caf_register (size_t, caf_register_t, caf_token_t *, int *,
+			      char *, int);
+void _gfortran_caf_deregister (caf_token_t *, int *, char *, int);
 
 void _gfortran_caf_sync_all (int *, char *, int);
 void _gfortran_caf_sync_images (int, int[], int *, char *, int);
@@ -86,5 +102,11 @@ void _gfortran_caf_end_critical (void)  { }
 void _gfortran_caf_error_stop_str (const char *, int32_t)
      __attribute__ ((noreturn));
 void _gfortran_caf_error_stop (int32_t) __attribute__ ((noreturn));
+
+void _gfortran_caf_co_sum (void *, caf_vector_t *, int, int *, char *, int);
+void _gfortran_caf_co_min (void *, caf_vector_t *, int, int *, char *, int,
+			   int);
+void _gfortran_caf_co_max (void *, caf_vector_t *, int, int *, char *, int,
+			   int);
 
 #endif  /* LIBCAF_H  */

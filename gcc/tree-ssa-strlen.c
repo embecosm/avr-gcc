@@ -2061,8 +2061,37 @@ strlen_dom_walker::after_dom_children (basic_block bb)
 
 /* Main entry point.  */
 
-static unsigned int
-tree_ssa_strlen (void)
+namespace {
+
+const pass_data pass_data_strlen =
+{
+  GIMPLE_PASS, /* type */
+  "strlen", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_execute */
+  TV_TREE_STRLEN, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
+};
+
+class pass_strlen : public gimple_opt_pass
+{
+public:
+  pass_strlen (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_strlen, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  virtual bool gate (function *) { return flag_optimize_strlen != 0; }
+  virtual unsigned int execute (function *);
+
+}; // class pass_strlen
+
+unsigned int
+pass_strlen::execute (function *fun)
 {
   ssa_ver_to_stridx.safe_grow_cleared (num_ssa_names);
   max_stridx = 1;
@@ -2073,7 +2102,7 @@ tree_ssa_strlen (void)
 
   /* String length optimization is implemented as a walk of the dominator
      tree and a forward walk of statements within each block.  */
-  strlen_dom_walker (CDI_DOMINATORS).walk (cfun->cfg->x_entry_block_ptr);
+  strlen_dom_walker (CDI_DOMINATORS).walk (fun->cfg->x_entry_block_ptr);
 
   ssa_ver_to_stridx.release ();
   free_alloc_pool (strinfo_pool);
@@ -2088,42 +2117,6 @@ tree_ssa_strlen (void)
 
   return 0;
 }
-
-static bool
-gate_strlen (void)
-{
-  return flag_optimize_strlen != 0;
-}
-
-namespace {
-
-const pass_data pass_data_strlen =
-{
-  GIMPLE_PASS, /* type */
-  "strlen", /* name */
-  OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
-  true, /* has_execute */
-  TV_TREE_STRLEN, /* tv_id */
-  ( PROP_cfg | PROP_ssa ), /* properties_required */
-  0, /* properties_provided */
-  0, /* properties_destroyed */
-  0, /* todo_flags_start */
-  TODO_verify_ssa, /* todo_flags_finish */
-};
-
-class pass_strlen : public gimple_opt_pass
-{
-public:
-  pass_strlen (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_strlen, ctxt)
-  {}
-
-  /* opt_pass methods: */
-  bool gate () { return gate_strlen (); }
-  unsigned int execute () { return tree_ssa_strlen (); }
-
-}; // class pass_strlen
 
 } // anon namespace
 

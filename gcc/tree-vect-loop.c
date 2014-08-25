@@ -1629,6 +1629,7 @@ vect_analyze_loop_2 (loop_vec_info loop_vinfo)
   int max_vf = MAX_VECTORIZATION_FACTOR;
   int min_vf = 2;
   unsigned int th;
+  unsigned int n_stmts = 0;
 
   /* Find all data references in the loop (which correspond to vdefs/vuses)
      and analyze their evolution in the loop.  Also adjust the minimal
@@ -1637,7 +1638,7 @@ vect_analyze_loop_2 (loop_vec_info loop_vinfo)
      FORNOW: Handle only simple, array references, which
      alignment can be forced, and aligned pointer-references.  */
 
-  ok = vect_analyze_data_refs (loop_vinfo, NULL, &min_vf);
+  ok = vect_analyze_data_refs (loop_vinfo, NULL, &min_vf, &n_stmts);
   if (!ok)
     {
       if (dump_enabled_p ())
@@ -1747,7 +1748,7 @@ vect_analyze_loop_2 (loop_vec_info loop_vinfo)
     }
 
   /* Check the SLP opportunities in the loop, analyze and build SLP trees.  */
-  ok = vect_analyze_slp (loop_vinfo, NULL);
+  ok = vect_analyze_slp (loop_vinfo, NULL, n_stmts);
   if (ok)
     {
       /* Decide which possible SLP instances to SLP.  */
@@ -3951,8 +3952,12 @@ vect_create_epilog_for_reduction (vec<tree> vect_defs, gimple stmt,
   /* Set phi nodes arguments.  */
   FOR_EACH_VEC_ELT (reduction_phis, i, phi)
     {
-      tree vec_init_def = vec_initial_defs[i];
-      tree def = vect_defs[i];
+      tree vec_init_def, def;
+      gimple_seq stmts;
+      vec_init_def = force_gimple_operand (vec_initial_defs[i], &stmts,
+					   true, NULL_TREE);
+      gsi_insert_seq_on_edge_immediate (loop_preheader_edge (loop), stmts);
+      def = vect_defs[i];
       for (j = 0; j < ncopies; j++)
         {
           /* Set the loop-entry arg of the reduction-phi.  */
@@ -6109,19 +6114,17 @@ vect_transform_loop (loop_vec_info loop_vinfo)
   scale_loop_profile (loop, GCOV_COMPUTE_SCALE (1, vectorization_factor),
 		      expected_iterations / vectorization_factor);
   loop->nb_iterations_upper_bound
-    = loop->nb_iterations_upper_bound.udiv (double_int::from_uhwi (vectorization_factor),
-					    FLOOR_DIV_EXPR);
+    = wi::udiv_floor (loop->nb_iterations_upper_bound, vectorization_factor);
   if (LOOP_VINFO_PEELING_FOR_GAPS (loop_vinfo)
-      && loop->nb_iterations_upper_bound != double_int_zero)
-    loop->nb_iterations_upper_bound = loop->nb_iterations_upper_bound - double_int_one;
+      && loop->nb_iterations_upper_bound != 0)
+    loop->nb_iterations_upper_bound = loop->nb_iterations_upper_bound - 1;
   if (loop->any_estimate)
     {
       loop->nb_iterations_estimate
-        = loop->nb_iterations_estimate.udiv (double_int::from_uhwi (vectorization_factor),
-					     FLOOR_DIV_EXPR);
+        = wi::udiv_floor (loop->nb_iterations_estimate, vectorization_factor);
        if (LOOP_VINFO_PEELING_FOR_GAPS (loop_vinfo)
-	   && loop->nb_iterations_estimate != double_int_zero)
-	 loop->nb_iterations_estimate = loop->nb_iterations_estimate - double_int_one;
+	   && loop->nb_iterations_estimate != 0)
+	 loop->nb_iterations_estimate = loop->nb_iterations_estimate - 1;
     }
 
   if (dump_enabled_p ())

@@ -247,15 +247,27 @@ class Backend
   virtual Bexpression*
   error_expression() = 0;
 
+  // Create a nil pointer expression.
+  virtual Bexpression*
+  nil_pointer_expression() = 0;
+
   // Create a reference to a variable.
   virtual Bexpression*
   var_expression(Bvariable* var, Location) = 0;
 
   // Create an expression that indirects through the pointer expression EXPR
   // (i.e., return the expression for *EXPR). KNOWN_VALID is true if the pointer
-  // is known to point to a valid memory location.
+  // is known to point to a valid memory location.  BTYPE is the expected type
+  // of the indirected EXPR.
   virtual Bexpression*
-  indirect_expression(Bexpression* expr, bool known_valid, Location) = 0;
+  indirect_expression(Btype* btype, Bexpression* expr, bool known_valid,
+		      Location) = 0;
+
+  // Return an expression that declares a constant named NAME with the
+  // constant value VAL in BTYPE.
+  virtual Bexpression*
+  named_constant_expression(Btype* btype, const std::string& name,
+                             Bexpression* val, Location) = 0;
 
   // Return an expression for the multi-precision integer VAL in BTYPE.
   virtual Bexpression*
@@ -272,6 +284,10 @@ class Backend
   // Return an expression for the string value VAL.
   virtual Bexpression*
   string_constant_expression(const std::string& val) = 0;
+
+  // Return an expression for the boolean value VAL.
+  virtual Bexpression*
+  boolean_constant_expression(bool val) = 0;
 
   // Return an expression for the real part of BCOMPLEX.
   virtual Bexpression*
@@ -400,9 +416,9 @@ class Backend
   // integers, then STATEMENTS[i] is executed.  STATEMENTS[i] will
   // either end with a goto statement or will fall through into
   // STATEMENTS[i + 1].  CASES[i] is empty for the default clause,
-  // which need not be last.
+  // which need not be last.  FUNCTION is the current function.
   virtual Bstatement*
-  switch_statement(Bexpression* value,
+  switch_statement(Bfunction* function, Bexpression* value,
 		   const std::vector<std::vector<Bexpression*> >& cases,
 		   const std::vector<Bstatement*>& statements,
 		   Location) = 0;
@@ -528,6 +544,17 @@ class Backend
 		     bool address_is_taken, Location location,
 		     Bstatement** pstatement) = 0;
 
+  // Create an implicit variable that is compiler-defined.  This is used when
+  // generating GC root variables and storing the values of a slice constructor.
+  // NAME is the name of the variable, either gc# for GC roots or C# for slice
+  // initializers.  TYPE is the type of the implicit variable with an initial
+  // value INIT.  IS_CONSTANT is true if the implicit variable should be treated
+  // like it is immutable.  For slice initializers, if the values must be copied
+  // to the heap, the variable IS_CONSTANT.
+  virtual Bvariable*
+  implicit_variable(const std::string& name, Btype* type, Bexpression* init,
+		    bool is_constant) = 0;
+
   // Create a named immutable initialized data structure.  This is
   // used for type descriptors, map descriptors, and function
   // descriptors.  This returns a Bvariable because it corresponds to
@@ -647,25 +674,25 @@ class Backend
   // true on success, false on failure.
   virtual bool
   function_set_body(Bfunction* function, Bstatement* code_stmt) = 0;
+
+  // Look up a named built-in function in the current backend implementation.
+  // Returns NULL if no built-in function by that name exists.
+  virtual Bfunction*
+  lookup_builtin(const std::string&) = 0;
+
+  // Utility.
+
+  // Write the definitions for all TYPE_DECLS, CONSTANT_DECLS,
+  // FUNCTION_DECLS, and VARIABLE_DECLS declared globally.
+  virtual void
+  write_global_definitions(const std::vector<Btype*>& type_decls,
+                           const std::vector<Bexpression*>& constant_decls,
+                           const std::vector<Bfunction*>& function_decls,
+                           const std::vector<Bvariable*>& variable_decls) = 0;
 };
 
 // The backend interface has to define this function.
 
 extern Backend* go_get_backend();
-
-// FIXME: Temporary helper functions while converting to new backend
-// interface.
-
-extern Btype* tree_to_type(tree);
-extern Bexpression* tree_to_expr(tree);
-extern Bstatement* tree_to_stat(tree);
-extern Bfunction* tree_to_function(tree);
-extern Bblock* tree_to_block(tree);
-extern tree type_to_tree(Btype*);
-extern tree expr_to_tree(Bexpression*);
-extern tree stat_to_tree(Bstatement*);
-extern tree block_to_tree(Bblock*);
-extern tree var_to_tree(Bvariable*);
-extern tree function_to_tree(Bfunction*);
 
 #endif // !defined(GO_BACKEND_H)

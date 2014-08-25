@@ -44,6 +44,7 @@ class Backend;
 class Export;
 class Import;
 class Bexpression;
+class Btype;
 class Bstatement;
 class Bblock;
 class Bvariable;
@@ -214,7 +215,27 @@ class Gogo
   // Set the relative import path from a command line option.
   void
   set_relative_import_path(const std::string& s)
-  {this->relative_import_path_ = s; }
+  { this->relative_import_path_ = s; }
+
+  // Return whether to check for division by zero in binary operations.
+  bool
+  check_divide_by_zero() const
+  { return this->check_divide_by_zero_; }
+
+  // Set the option to check division by zero from a command line option.
+  void
+  set_check_divide_by_zero(bool b)
+  { this->check_divide_by_zero_ = b; }
+
+  // Return whether to check for division overflow in binary operations.
+  bool
+  check_divide_overflow() const
+  { return this->check_divide_overflow_; }
+
+  // Set the option to check division overflow from a command line option.
+  void
+  set_check_divide_overflow(bool b)
+  { this->check_divide_overflow_ = b; }
 
   // Return the priority to use for the package we are compiling.
   // This is two more than the largest priority of any package we
@@ -574,39 +595,9 @@ class Gogo
   void
   write_globals();
 
-  // Create trees for implicit builtin functions.
-  void
-  define_builtin_function_trees();
-
-  // Build a call to a builtin function.  PDECL should point to a NULL
-  // initialized static pointer which will hold the fndecl.  NAME is
-  // the name of the function.  NARGS is the number of arguments.
-  // RETTYPE is the return type.  It is followed by NARGS pairs of
-  // type and argument (both trees).
-  static tree
-  call_builtin(tree* pdecl, Location, const char* name, int nargs,
-	       tree rettype, ...);
-
   // Build a call to the runtime error function.
   Expression*
   runtime_error(int code, Location);
-
-  // Build a builtin struct with a list of fields.
-  static tree
-  builtin_struct(tree* ptype, const char* struct_name, tree struct_type,
-		 int nfields, ...);
-
-  // Mark a function declaration as a builtin library function.
-  static void
-  mark_fndecl_as_builtin_library(tree fndecl);
-
-  // Build a constructor for a slice.  SLICE_TYPE_TREE is the type of
-  // the slice.  VALUES points to the values.  COUNT is the size,
-  // CAPACITY is the capacity.  If CAPACITY is NULL, it is set to
-  // COUNT.
-  static tree
-  slice_constructor(tree slice_type_tree, tree values, tree count,
-		    tree capacity);
 
   // Build required interface method tables.
   void
@@ -615,6 +606,10 @@ class Gogo
   // Return an expression which allocates memory to hold values of type TYPE.
   Expression*
   allocate_memory(Type *type, Location);
+
+  // Get the name of the magic initialization function.
+  const std::string&
+  get_init_fn_name();
 
  private:
   // During parsing, we keep a stack of functions.  Each function on
@@ -642,25 +637,22 @@ class Gogo
   const Bindings*
   current_bindings() const;
 
-  // Get the name of the magic initialization function.
-  const std::string&
-  get_init_fn_name();
-
   // Get the decl for the magic initialization function.
-  tree
+  Named_object*
   initialization_function_decl();
 
-  // Write the magic initialization function.
-  void
-  write_initialization_function(tree fndecl, tree init_stmt_list);
+  // Create the magic initialization function.
+  Named_object*
+  create_initialization_function(Named_object* fndecl, Bstatement* code_stmt);
 
   // Initialize imported packages.
   void
-  init_imports(tree*);
+  init_imports(std::vector<Bstatement*>&);
 
   // Register variables with the garbage collector.
   void
-  register_gc_vars(const std::vector<Named_object*>&, tree*);
+  register_gc_vars(const std::vector<Named_object*>&,
+                   std::vector<Bstatement*>&);
 
   // Type used to map import names to packages.
   typedef std::map<std::string, Package*> Imports;
@@ -744,6 +736,12 @@ class Gogo
   // The relative import path, from the -fgo-relative-import-path
   // option.
   std::string relative_import_path_;
+  // Whether or not to check for division by zero, from the
+  // -fgo-check-divide-zero option.
+  bool check_divide_by_zero_;
+  // Whether or not to check for division overflow, from the
+  // -fgo-check-divide-overflow option.
+  bool check_divide_overflow_;
   // A list of types to verify.
   std::vector<Type*> verify_types_;
   // A list of interface types defined while parsing.
@@ -1086,7 +1084,7 @@ class Function
   get_or_make_decl(Gogo*, Named_object*);
 
   // Return the function's decl after it has been built.
-  tree
+  Bfunction*
   get_decl() const;
 
   // Set the function decl to hold a backend representation of the function
@@ -1098,7 +1096,7 @@ class Function
   Bstatement*
   return_value(Gogo*, Named_object*, Location) const;
 
-  // Get a tree for the variable holding the defer stack.
+  // Get an expression for the variable holding the defer stack.
   Expression*
   defer_stack(Location);
 
@@ -1675,7 +1673,7 @@ class Named_constant
   Named_constant(Type* type, Expression* expr, int iota_value,
 		 Location location)
     : type_(type), expr_(expr), iota_value_(iota_value), location_(location),
-      lowering_(false), is_sink_(false)
+      lowering_(false), is_sink_(false), bconst_(NULL)
   { }
 
   Type*
@@ -1737,6 +1735,10 @@ class Named_constant
   static void
   import_const(Import*, std::string*, Type**, Expression**);
 
+  // Get the backend representation of the constant value.
+  Bexpression*
+  get_backend(Gogo*, Named_object*);
+
  private:
   // The type of the constant.
   Type* type_;
@@ -1754,6 +1756,8 @@ class Named_constant
   bool lowering_;
   // Whether this constant is blank named and needs only type checking.
   bool is_sink_;
+  // The backend representation of the constant value.
+  Bexpression* bconst_;
 };
 
 // A type declaration.
@@ -2176,9 +2180,10 @@ class Named_object
   std::string
   get_id(Gogo*);
 
-  // Return a tree representing this object.
-  tree
-  get_tree(Gogo*, Named_object* function);
+  // Get the backend representation of this object.
+  void
+  get_backend(Gogo*, std::vector<Bexpression*>&, std::vector<Btype*>&,
+              std::vector<Bfunction*>&);
 
   // Define a type declaration.
   void
@@ -2219,8 +2224,6 @@ class Named_object
     Function_declaration* func_declaration_value;
     Package* package_value;
   } u_;
-  // The DECL tree for this object if we have already converted it.
-  tree tree_;
 };
 
 // A binding contour.  This binds names to objects.

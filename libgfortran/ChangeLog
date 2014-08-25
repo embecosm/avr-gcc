@@ -1,3 +1,179 @@
+2014-05-27  Uros Bizjak  <ubizjak@gmail.com>
+
+	* intrinsics/getcwd.c: Include stdlib.h.
+
+2014-05-26  Janne Blomqvist  <jb@gcc.gnu.org>
+
+	* libgfortran.h (xrealloc): New prototype.
+	* runtime/memory.c (xrealloc): New function.
+	* io/fbuf.c (fbuf_alloc): Use xrealloc.
+	* io/list_read.c (push_char_default): Likewise.
+	(push_char4): Likewise.
+
+2014-05-26  Janne Blomqvist  <jb@gcc.gnu.org>
+
+	PR libfortran/61310
+	* intrinsics/ctime.c (strctime): Rename to gf_ctime, use snprintf
+	instead of strftime.
+	(fdate): Use gf_ctime.
+	(fdate_sub): Likewise.
+	(ctime): Likewise.
+	(ctime_sub): Likewise.
+
+2014-05-26  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libgfortran/55117
+	* io/list_read.c (extended_look_ahead): New helper function to
+	scan the namelist name and look for matches with the new '+'
+	extended type parent indicator.  (str_comp_extended): New
+	helper function to compare the namelist name with the varname
+	namelist. (find_nml_name): Use the new helper functions to match
+	the extended type varnames.
+
+2014-05-23  Jerry DeLisle  <jvdelisle@gcc.gnu>
+
+	PR libfortran/61173
+	* io/list_read.c (eat_spaces): If the next character pointed to
+	is a space, don't seek, must be at the end.
+
+2014-05-23  Hans-Peter Nilsson  <hp@axis.com>
+
+	* configure.ac [with_newlib] (HAVE_STRNLEN, HAVE_STRNDUP): Define.
+	* configure: Regenerate.
+
+2014-05-23  Janne Blomqvist  <jb@gcc.gnu.org>
+
+	PR libfortran/60324
+	* runtime/string.c: Include stdlib.h.
+
+2014-05-22  Janne Blomqvist  <jb@gcc.gnu.org>
+
+	PR libfortran/60324
+	* config.h.in: Regenerated.
+	* configure: Regenerated.
+	* configure.ac (AC_CHECK_FUNCS_ONCE): Check for strnlen and
+	strndup.
+	* libgfortran.h (fc_strdup): New prototype.
+	* runtime/string.c (strnlen): New fallback function.
+	(strndup): New fallback function.
+	(fc_strdup): New function.
+	* io/close.c (st_close): Use fc_strdup.
+	* io/open.c (new_unit): Likewise.
+	(already_open): Likewise.
+	* io/unit.c (filename_from_unit): Likewise.
+	* io/unix.c (unpack_filename): Remove function.
+	(regular_file): Rename to regular_file2, add path argument.
+	(regular_file): New function calling regular_file2.
+	(compare_file_filename): Use fc_strdup.
+	(find_file): Likewise.
+	(delete_file): Likewise.
+	(file_exists): Likewise.
+	(file_size): Likewise.
+	(inquire_sequential): Likewise.
+	(inquire_direct): Likewise.
+	(inquire_formatted): Likewise.
+	(inquire_access): Likewise.
+	* io/unix.h (unpack_filename): Remove prototype.
+	* runtime/main.c (please_free_exe_path_when_done): Change type to
+	bool.
+	(store_exe_path): Use malloced buffer, grow as needed.
+
+2014-05-17  Jerry DeLisle  <jvdelisle@gcc.gnu>
+
+	PR libfortran/52539
+	* io/io.h (gfc_unit): New function pointers *next_char_fn_ptr
+	and *push_char_fn_ptr.
+	*io/list_read.c (next_char): Create macro with this name to call
+	the new function pointer. Split the original next_char function
+	into three new functions. (next_char_default, next_char_internal,
+	next_char_utf8): New functions. (push_char): Create macro with
+	this name to call new function pointer. Split the original
+	push_char into three new functions. (push_char_default,
+	push_char_internal, push_char4): New functions. (set_workers):
+	New function to initilize the function pointers depending on the
+	type of IO to be performed. (list_formatted_read_scalar): Use
+	set_workers function. (finish_list_read): Likewise.
+	(namelist_read): Likewise.
+	(nml_get_obj_data): Use push_char_default.
+
+2014-05-16  Janne Blomqvist  <jb@gcc.gnu.org>
+
+	PR libfortran/61187
+	* io/unix.c (raw_close): Check if s->fd is -1.
+	(fd_to_stream): Check return value of fstat(), handle error.
+
+2014-05-12  Janne Blomqvist  <jb@gcc.gnu.org>
+
+	PR libfortran/61035
+	* intrinsics/getcwd.c (getcwd_i4_sub): Avoid potentially large
+	stack allocation, avoid extra copying in the common case.
+
+2014-05-12  Janne Blomqvist  <jb@gcc.gnu.org>
+
+	* configure.ac (AM_CFLAGS): Use -std=gnu11.
+	(CFLAGS): Likewise.
+	* configure: Regenerated.
+
+2014-05-11  Tobias Burnus  <burnus@net-b.de>
+
+	* caf/libcaf.h (_gfortran_caf_num_images): Change type of
+	second argument to int.
+	* caf/mpi.c (_gfortran_caf_num_images): Ditto.
+	* caf/single.c (_gfortran_caf_num_images): Ditto.
+
+2014-05-08  Tobias Burnus  <burnus@net-b.de>
+
+	* caf/libcaf.h (caf_vector_t, _gfortran_caf_co_sum,
+	_gfortran_caf_co_min, _gfortran_caf_co_max): Declare
+	* caf/single.c
+
+2014-05-06  Jerry DeLisle  <jvdelisle@gcc.gnu>
+
+	PR libfortran/61049
+	* io/list_read.c (list_formatted_read_scalar): Use eat_separator
+	and delete extraneous code.
+
+2014-04-30  Tobias Burnus  <burnus@net-b.de>
+
+	* caf/libcaf.h (_gfortran_caf_this_image, _gfortran_caf_num_images):
+	New prototypes.
+	(_gfortran_caf_init): Change prototype.
+	(mpi_token_t): New typedef.
+	(TOKEN): New define.
+	* caf/mpi.c (_gfortran_caf_this_image, _gfortran_caf_num_images):
+	New functions.
+	(_gfortran_caf_init): Update.
+	(_gfortran_caf_finalize, _gfortran_caf_register,
+	_gfortran_caf_deregister): Use mpi_token_t.
+	* caf/single.c (_gfortran_caf_this_image, _gfortran_caf_num_images):
+	New functions.
+	(_gfortran_caf_init): Update.
+	(_gfortran_caf_finalize, _gfortran_caf_register,
+	_gfortran_caf_deregister): Use mpi_token_t, simplify.
+
+2014-04-26  Jerry DeLisle  <jvdelisle@gcc.gnu>
+
+	PR libfortran/52539
+	* io/list_read.c: Add uchar typedef. (push_char4): New function
+	to save kind=4 character. (next_char_utf8): New function to read
+	a single UTF-8 encoded character value. (read_chracter): Update
+	to use the new functions for reading UTF-8 strings.
+	(list_formatted_read_scalar): Update to handle list directed
+	reads of UTF-8 strings. (nml_read_obj): Likewise update for
+	UTF-8 strings in namelists.
+	* io/write.c (nml_write_obj): Add kind=4 character support for
+	namelist writes.
+
+2014-04-24  Kyrylo Tkachov  <kyrylo.tkachov@arm.com>
+
+	* configure.ac: Quote usage of ac_cv_func_clock_gettime in if test.
+	* configure: Regenerate.
+
+2014-04-22  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* config/fpu-387.h [__sun__ && __svr4__]: Remove SSE execution
+	check.
+
 2014-04-11  Jerry DeLisle  <jvdelisle@gcc.gnu>
 
 	PR libfortran/60810
@@ -129,7 +305,7 @@
 	line_buffer_pos for line_buffer look ahead.
 	(read_logical, read_integer, parse_real, read_real, check_type):
 	Adjust location of free_line to after generating error messages
-	to retain the correct item count for the message. 
+	to retain the correct item count for the message.
 
 2014-01-02  Richard Sandiford  <rdsandiford@googlemail.com>
 
@@ -152,7 +328,7 @@
 	checks for library ok. (new_unit): Do cleanup after error.
 	(st_open): Do proper return after error.
 	* io/transfer.c (data_transfer_init): Likewise.
-	
+
 2013-12-11  Tobias Burnus  <burnus@net-b.de>
 
 	* config/fpu-387.h (sigill_hdlr, get_fpu_rounding_mode): Emit SSE

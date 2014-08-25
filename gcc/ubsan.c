@@ -47,6 +47,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "asan.h"
 #include "gimplify-me.h"
 #include "intl.h"
+#include "realmpfr.h"
+#include "dfp.h"
 
 /* Map from a tree to a VAR_DECL tree.  */
 
@@ -99,7 +101,7 @@ decl_for_type_insert (tree type, tree decl)
   struct tree_type_map *h;
   void **slot;
 
-  h = ggc_alloc_tree_type_map ();
+  h = ggc_alloc<tree_type_map> ();
   h->type.from = type;
   h->decl = decl;
   slot = htab_find_slot_with_hash (decl_tree_for_type, h, TYPE_UID (type),
@@ -267,9 +269,14 @@ static unsigned short
 get_ubsan_type_info_for_type (tree type)
 {
   gcc_assert (TYPE_SIZE (type) && tree_fits_uhwi_p (TYPE_SIZE (type)));
-  int prec = exact_log2 (tree_to_uhwi (TYPE_SIZE (type)));
-  gcc_assert (prec != -1);
-  return (prec << 1) | !TYPE_UNSIGNED (type);
+  if (TREE_CODE (type) == REAL_TYPE)
+    return tree_to_uhwi (TYPE_SIZE (type));
+  else
+    {
+      int prec = exact_log2 (tree_to_uhwi (TYPE_SIZE (type)));
+      gcc_assert (prec != -1);
+      return (prec << 1) | !TYPE_UNSIGNED (type);
+    }
 }
 
 /* Helper routine that returns ADDR_EXPR of a VAR_DECL of a type
@@ -359,7 +366,14 @@ ubsan_type_descriptor (tree type, bool want_pointer_type_p)
       tkind = 0x0000;
       break;
     case REAL_TYPE:
-      tkind = 0x0001;
+      /* FIXME: libubsan right now only supports float, double and
+	 long double type formats.  */
+      if (TYPE_MODE (type) == TYPE_MODE (float_type_node)
+	  || TYPE_MODE (type) == TYPE_MODE (double_type_node)
+	  || TYPE_MODE (type) == TYPE_MODE (long_double_type_node))
+	tkind = 0x0001;
+      else
+	tkind = 0xffff;
       break;
     default:
       tkind = 0xffff;
@@ -516,6 +530,9 @@ ubsan_create_data (const char *name, const location_t *ploc,
 tree
 ubsan_instrument_unreachable (location_t loc)
 {
+  if (flag_sanitize_undefined_trap_on_error)
+    return build_call_expr_loc (loc, builtin_decl_explicit (BUILT_IN_TRAP), 0);
+
   initialize_sanitizer_builtins ();
   tree data = ubsan_create_data ("__ubsan_unreachable_data", &loc, NULL,
 				 NULL_TREE);
@@ -528,9 +545,9 @@ ubsan_instrument_unreachable (location_t loc)
 bool
 is_ubsan_builtin_p (tree t)
 {
-  gcc_checking_assert (TREE_CODE (t) == FUNCTION_DECL);
-  return strncmp (IDENTIFIER_POINTER (DECL_NAME (t)),
-		  "__builtin___ubsan_", 18) == 0;
+  return TREE_CODE (t) == FUNCTION_DECL
+	 && strncmp (IDENTIFIER_POINTER (DECL_NAME (t)),
+		     "__builtin___ubsan_", 18) == 0;
 }
 
 /* Expand UBSAN_NULL internal call.  */
@@ -583,16 +600,25 @@ ubsan_expand_null_ifn (gimple_stmt_iterator gsi)
     set_immediate_dominator (CDI_DOMINATORS, then_bb, cond_bb);
 
   /* Put the ubsan builtin call into the newly created BB.  */
-  tree fn = builtin_decl_implicit (BUILT_IN_UBSAN_HANDLE_TYPE_MISMATCH);
-  const struct ubsan_mismatch_data m
-    = { build_zero_cst (pointer_sized_int_node), ckind };
-  tree data = ubsan_create_data ("__ubsan_null_data",
-				 &loc, &m,
-				 ubsan_type_descriptor (TREE_TYPE (ptr), true),
-				 NULL_TREE);
-  data = build_fold_addr_expr_loc (loc, data);
-  gimple g = gimple_build_call (fn, 2, data,
-				build_zero_cst (pointer_sized_int_node));
+  gimple g;
+  if (flag_sanitize_undefined_trap_on_error)
+    g = gimple_build_call (builtin_decl_implicit (BUILT_IN_TRAP), 0);
+  else
+    {
+      enum built_in_function bcode
+	= flag_sanitize_recover
+	  ? BUILT_IN_UBSAN_HANDLE_TYPE_MISMATCH
+	  : BUILT_IN_UBSAN_HANDLE_TYPE_MISMATCH_ABORT;
+      tree fn = builtin_decl_implicit (bcode);
+      const struct ubsan_mismatch_data m
+	= { build_zero_cst (pointer_sized_int_node), ckind };
+      tree data = ubsan_create_data ("__ubsan_null_data", &loc, &m,
+				     ubsan_type_descriptor (TREE_TYPE (ptr),
+							    true), NULL_TREE);
+      data = build_fold_addr_expr_loc (loc, data);
+      g = gimple_build_call (fn, 2, data,
+			     build_zero_cst (pointer_sized_int_node));
+    }
   gimple_set_location (g, loc);
   gimple_stmt_iterator gsi2 = gsi_start_bb (then_bb);
   gsi_insert_after (&gsi2, g, GSI_NEW_STMT);
@@ -662,6 +688,9 @@ tree
 ubsan_build_overflow_builtin (tree_code code, location_t loc, tree lhstype,
 			      tree op0, tree op1)
 {
+  if (flag_sanitize_undefined_trap_on_error)
+    return build_call_expr_loc (loc, builtin_decl_explicit (BUILT_IN_TRAP), 0);
+
   tree data = ubsan_create_data ("__ubsan_overflow_data", &loc, NULL,
 				 ubsan_type_descriptor (lhstype, false),
 				 NULL_TREE);
@@ -670,16 +699,24 @@ ubsan_build_overflow_builtin (tree_code code, location_t loc, tree lhstype,
   switch (code)
     {
     case PLUS_EXPR:
-      fn_code = BUILT_IN_UBSAN_HANDLE_ADD_OVERFLOW;
+      fn_code = flag_sanitize_recover
+		? BUILT_IN_UBSAN_HANDLE_ADD_OVERFLOW
+		: BUILT_IN_UBSAN_HANDLE_ADD_OVERFLOW_ABORT;
       break;
     case MINUS_EXPR:
-      fn_code = BUILT_IN_UBSAN_HANDLE_SUB_OVERFLOW;
+      fn_code = flag_sanitize_recover
+		? BUILT_IN_UBSAN_HANDLE_SUB_OVERFLOW
+		: BUILT_IN_UBSAN_HANDLE_SUB_OVERFLOW_ABORT;
       break;
     case MULT_EXPR:
-      fn_code = BUILT_IN_UBSAN_HANDLE_MUL_OVERFLOW;
+      fn_code = flag_sanitize_recover
+		? BUILT_IN_UBSAN_HANDLE_MUL_OVERFLOW
+		: BUILT_IN_UBSAN_HANDLE_MUL_OVERFLOW_ABORT;
       break;
     case NEGATE_EXPR:
-      fn_code = BUILT_IN_UBSAN_HANDLE_NEGATE_OVERFLOW;
+      fn_code = flag_sanitize_recover
+		? BUILT_IN_UBSAN_HANDLE_NEGATE_OVERFLOW
+		: BUILT_IN_UBSAN_HANDLE_NEGATE_OVERFLOW_ABORT;
       break;
     default:
       gcc_unreachable ();
@@ -844,32 +881,197 @@ instrument_bool_enum_load (gimple_stmt_iterator *gsi)
   gimple_assign_set_rhs_with_ops (&gsi2, NOP_EXPR, urhs, NULL_TREE);
   update_stmt (stmt);
 
-  tree data = ubsan_create_data ("__ubsan_invalid_value_data",
-				 &loc, NULL,
-				 ubsan_type_descriptor (type, false),
-				 NULL_TREE);
-  data = build_fold_addr_expr_loc (loc, data);
-  tree fn = builtin_decl_explicit (BUILT_IN_UBSAN_HANDLE_LOAD_INVALID_VALUE);
-
   gsi2 = gsi_after_labels (then_bb);
-  tree val = force_gimple_operand_gsi (&gsi2, ubsan_encode_value (urhs),
-				       true, NULL_TREE, true, GSI_SAME_STMT);
-  g = gimple_build_call (fn, 2, data, val);
+  if (flag_sanitize_undefined_trap_on_error)
+    g = gimple_build_call (builtin_decl_explicit (BUILT_IN_TRAP), 0);
+  else
+    {
+      tree data = ubsan_create_data ("__ubsan_invalid_value_data", &loc, NULL,
+				     ubsan_type_descriptor (type, false),
+				     NULL_TREE);
+      data = build_fold_addr_expr_loc (loc, data);
+      enum built_in_function bcode
+	= flag_sanitize_recover
+	  ? BUILT_IN_UBSAN_HANDLE_LOAD_INVALID_VALUE
+	  : BUILT_IN_UBSAN_HANDLE_LOAD_INVALID_VALUE_ABORT;
+      tree fn = builtin_decl_explicit (bcode);
+
+      tree val = force_gimple_operand_gsi (&gsi2, ubsan_encode_value (urhs),
+					   true, NULL_TREE, true,
+					   GSI_SAME_STMT);
+      g = gimple_build_call (fn, 2, data, val);
+    }
   gimple_set_location (g, loc);
   gsi_insert_before (&gsi2, g, GSI_SAME_STMT);
 }
 
-/* Gate and execute functions for ubsan pass.  */
+/* Instrument float point-to-integer conversion.  TYPE is an integer type of
+   destination, EXPR is floating-point expression.  */
 
-static unsigned int
-ubsan_pass (void)
+tree
+ubsan_instrument_float_cast (location_t loc, tree type, tree expr)
+{
+  tree expr_type = TREE_TYPE (expr);
+  tree t, tt, fn, min, max;
+  enum machine_mode mode = TYPE_MODE (expr_type);
+  int prec = TYPE_PRECISION (type);
+  bool uns_p = TYPE_UNSIGNED (type);
+
+  /* Float to integer conversion first truncates toward zero, so
+     even signed char c = 127.875f; is not problematic.
+     Therefore, we should complain only if EXPR is unordered or smaller
+     or equal than TYPE_MIN_VALUE - 1.0 or greater or equal than
+     TYPE_MAX_VALUE + 1.0.  */
+  if (REAL_MODE_FORMAT (mode)->b == 2)
+    {
+      /* For maximum, TYPE_MAX_VALUE might not be representable
+	 in EXPR_TYPE, e.g. if TYPE is 64-bit long long and
+	 EXPR_TYPE is IEEE single float, but TYPE_MAX_VALUE + 1.0 is
+	 either representable or infinity.  */
+      REAL_VALUE_TYPE maxval = dconst1;
+      SET_REAL_EXP (&maxval, REAL_EXP (&maxval) + prec - !uns_p);
+      real_convert (&maxval, mode, &maxval);
+      max = build_real (expr_type, maxval);
+
+      /* For unsigned, assume -1.0 is always representable.  */
+      if (uns_p)
+	min = build_minus_one_cst (expr_type);
+      else
+	{
+	  /* TYPE_MIN_VALUE is generally representable (or -inf),
+	     but TYPE_MIN_VALUE - 1.0 might not be.  */
+	  REAL_VALUE_TYPE minval = dconstm1, minval2;
+	  SET_REAL_EXP (&minval, REAL_EXP (&minval) + prec - 1);
+	  real_convert (&minval, mode, &minval);
+	  real_arithmetic (&minval2, MINUS_EXPR, &minval, &dconst1);
+	  real_convert (&minval2, mode, &minval2);
+	  if (real_compare (EQ_EXPR, &minval, &minval2)
+	      && !real_isinf (&minval))
+	    {
+	      /* If TYPE_MIN_VALUE - 1.0 is not representable and
+		 rounds to TYPE_MIN_VALUE, we need to subtract
+		 more.  As REAL_MODE_FORMAT (mode)->p is the number
+		 of base digits, we want to subtract a number that
+		 will be 1 << (REAL_MODE_FORMAT (mode)->p - 1)
+		 times smaller than minval.  */
+	      minval2 = dconst1;
+	      gcc_assert (prec > REAL_MODE_FORMAT (mode)->p);
+	      SET_REAL_EXP (&minval2,
+			    REAL_EXP (&minval2) + prec - 1
+			    - REAL_MODE_FORMAT (mode)->p + 1);
+	      real_arithmetic (&minval2, MINUS_EXPR, &minval, &minval2);
+	      real_convert (&minval2, mode, &minval2);
+	    }
+	  min = build_real (expr_type, minval2);
+	}
+    }
+  else if (REAL_MODE_FORMAT (mode)->b == 10)
+    {
+      /* For _Decimal128 up to 34 decimal digits, - sign,
+	 dot, e, exponent.  */
+      char buf[64];
+      mpfr_t m;
+      int p = REAL_MODE_FORMAT (mode)->p;
+      REAL_VALUE_TYPE maxval, minval;
+
+      /* Use mpfr_snprintf rounding to compute the smallest
+	 representable decimal number greater or equal than
+	 1 << (prec - !uns_p).  */
+      mpfr_init2 (m, prec + 2);
+      mpfr_set_ui_2exp (m, 1, prec - !uns_p, GMP_RNDN);
+      mpfr_snprintf (buf, sizeof buf, "%.*RUe", p - 1, m);
+      decimal_real_from_string (&maxval, buf);
+      max = build_real (expr_type, maxval);
+
+      /* For unsigned, assume -1.0 is always representable.  */
+      if (uns_p)
+	min = build_minus_one_cst (expr_type);
+      else
+	{
+	  /* Use mpfr_snprintf rounding to compute the largest
+	     representable decimal number less or equal than
+	     (-1 << (prec - 1)) - 1.  */
+	  mpfr_set_si_2exp (m, -1, prec - 1, GMP_RNDN);
+	  mpfr_sub_ui (m, m, 1, GMP_RNDN);
+	  mpfr_snprintf (buf, sizeof buf, "%.*RDe", p - 1, m);
+	  decimal_real_from_string (&minval, buf);
+	  min = build_real (expr_type, minval);
+	}
+      mpfr_clear (m);
+    }
+  else
+    return NULL_TREE;
+
+  if (flag_sanitize_undefined_trap_on_error)
+    fn = build_call_expr_loc (loc, builtin_decl_explicit (BUILT_IN_TRAP), 0);
+  else
+    {
+      /* Create the __ubsan_handle_float_cast_overflow fn call.  */
+      tree data = ubsan_create_data ("__ubsan_float_cast_overflow_data", NULL,
+				     NULL,
+				     ubsan_type_descriptor (expr_type, false),
+				     ubsan_type_descriptor (type, false),
+				     NULL_TREE);
+      enum built_in_function bcode
+	= flag_sanitize_recover
+	  ? BUILT_IN_UBSAN_HANDLE_FLOAT_CAST_OVERFLOW
+	  : BUILT_IN_UBSAN_HANDLE_FLOAT_CAST_OVERFLOW_ABORT;
+      fn = builtin_decl_explicit (bcode);
+      fn = build_call_expr_loc (loc, fn, 2,
+				build_fold_addr_expr_loc (loc, data),
+				ubsan_encode_value (expr, false));
+    }
+
+  t = fold_build2 (UNLE_EXPR, boolean_type_node, expr, min);
+  tt = fold_build2 (UNGE_EXPR, boolean_type_node, expr, max);
+  return fold_build3 (COND_EXPR, void_type_node,
+		      fold_build2 (TRUTH_OR_EXPR, boolean_type_node, t, tt),
+		      fn, integer_zero_node);
+}
+
+namespace {
+
+const pass_data pass_data_ubsan =
+{
+  GIMPLE_PASS, /* type */
+  "ubsan", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  true, /* has_execute */
+  TV_TREE_UBSAN, /* tv_id */
+  ( PROP_cfg | PROP_ssa ), /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_update_ssa, /* todo_flags_finish */
+};
+
+class pass_ubsan : public gimple_opt_pass
+{
+public:
+  pass_ubsan (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_ubsan, ctxt)
+  {}
+
+  /* opt_pass methods: */
+  virtual bool gate (function *)
+    {
+      return flag_sanitize & (SANITIZE_NULL | SANITIZE_SI_OVERFLOW
+			      | SANITIZE_BOOL | SANITIZE_ENUM);
+    }
+
+  virtual unsigned int execute (function *);
+
+}; // class pass_ubsan
+
+unsigned int
+pass_ubsan::execute (function *fun)
 {
   basic_block bb;
   gimple_stmt_iterator gsi;
 
   initialize_sanitizer_builtins ();
 
-  FOR_EACH_BB_FN (bb, cfun)
+  FOR_EACH_BB_FN (bb, fun)
     {
       for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi);)
 	{
@@ -901,43 +1103,6 @@ ubsan_pass (void)
     }
   return 0;
 }
-
-static bool
-gate_ubsan (void)
-{
-  return flag_sanitize & (SANITIZE_NULL | SANITIZE_SI_OVERFLOW
-			  | SANITIZE_BOOL | SANITIZE_ENUM);
-}
-
-namespace {
-
-const pass_data pass_data_ubsan =
-{
-  GIMPLE_PASS, /* type */
-  "ubsan", /* name */
-  OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_gate */
-  true, /* has_execute */
-  TV_TREE_UBSAN, /* tv_id */
-  ( PROP_cfg | PROP_ssa ), /* properties_required */
-  0, /* properties_provided */
-  0, /* properties_destroyed */
-  0, /* todo_flags_start */
-  TODO_update_ssa, /* todo_flags_finish */
-};
-
-class pass_ubsan : public gimple_opt_pass
-{
-public:
-  pass_ubsan (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_ubsan, ctxt)
-  {}
-
-  /* opt_pass methods: */
-  bool gate () { return gate_ubsan (); }
-  unsigned int execute () { return ubsan_pass (); }
-
-}; // class pass_ubsan
 
 } // anon namespace
 

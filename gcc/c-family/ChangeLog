@@ -1,3 +1,149 @@
+2014-05-22  Thomas Schwinge  <thomas@codesourcery.com>
+
+	* c-common.h (c_omp_sharing_predetermined, c_omp_remap_decl):
+	Remove prototypes.
+	(record_types_used_by_current_var_decl): Move prototype to where
+	it belongs.
+
+	* c-common.c (DEF_FUNCTION_TYPE_0, DEF_FUNCTION_TYPE_6)
+	(DEF_FUNCTION_TYPE_7, DEF_FUNCTION_TYPE_8)
+	(DEF_FUNCTION_TYPE_VAR_5): Cosmetic fixes.
+
+2014-05-21  Richard Sandiford  <rsandifo@linux.vnet.ibm.com>
+
+	* c-common.h (CTI_VOID_ZERO, void_zero_node): Delete.
+	* c-common.c (c_common_nodes_and_builtins): Don't initialize
+	void_zero_node.
+	* c-pretty-print.c (pp_c_void_constant): New function.
+	(c_pretty_printer::constant, c_pretty_printer::primary_expression)
+	(c_pretty_printer::expression): Handle VOID_CST.
+	* cilk.c (extract_free_variables): Likewise.
+	* c-ubsan.c (ubsan_instrument_division, ubsan_instrument_shift)
+	(ubsan_instrument_vla): Use void_node instead of void_zero_node.
+
+2014-05-17  Trevor Saunders  <tsaunders@mozilla.com>
+
+	* c-common.h (sorted_fields_type): Remove variable_size GTY attribute.
+	* c-pragma.c (push_alignment): Adjust.
+	(handle_pragma_push_options): Likewise.
+
+2014-05-09  Marek Polacek  <polacek@redhat.com>
+
+	PR c/50459
+	* c-common.c (check_user_alignment): Return -1 if alignment is error
+	node.
+	(handle_aligned_attribute): Don't call default_conversion on
+	FUNCTION_DECLs.
+	(handle_vector_size_attribute): Likewise.
+	(handle_tm_wrap_attribute): Handle case when wrap_decl is error node.
+	(handle_sentinel_attribute): Call default_conversion and allow even
+	integral types as an argument.
+
+2014-05-08  Marek Polacek  <polacek@redhat.com>
+
+	PR c/61053
+	* c-common.c (min_align_of_type): New function factored out from...
+	(c_sizeof_or_alignof_type): ...here.
+	* c-common.h (min_align_of_type): Declare.
+
+2014-05-08  Marek Polacek  <polacek@redhat.com>
+
+	PR c/61077
+	* c-common.c (check_main_parameter_types): Warn for _Atomic-qualified
+	parameter type of main.
+
+2014-05-07  DJ Delorie  <dj@redhat.com>
+
+	* c-cppbuiltin.c (print_bits_of_hex): New.
+	(builtin_define_type_minmax): Print values using hex so as not to
+	require a pre-computed list of string values.
+
+2014-05-06  Kenneth Zadeck  <zadeck@naturalbridge.com>
+	    Mike Stump  <mikestump@comcast.net>
+	    Richard Sandiford  <rdsandiford@googlemail.com>
+
+	* c-ada-spec.c: Include wide-int.h.
+	(ADA_HOST_WIDE_INT_PRINT_DOUBLE_HEX): Remove.
+	(dump_generic_ada_node): Use wide-int interfaces.
+	* c-common.c: Include wide-int-print.h.
+	(shorten_compare): Use wide-int interfaces and tree_int_cst_lt.
+	(pointer_int_sum): Use wide-int interfaces.
+	(c_common_nodes_and_builtins): Use make_int_cst.
+	(match_case_to_enum_1): Use tree_fits_uhwi_p and tree_fits_shwi_p.
+	(handle_alloc_size_attribute): Use wide-int interfaces.
+	(get_nonnull_operand): Likewise.
+	* c-format.c (get_constant): Use tree_fits_uhwi_p.
+	* c-lex.c: Include wide-int.h.
+	(narrowest_unsigned_type): Take a widest_int rather than two
+	HOST_WIDE_INTs.
+	(narrowest_signed_type): Likewise.
+	(interpret_integer): Update accordingly.  Use wide-int interfaces.
+	(lex_charconst): Use wide-int interfaces.
+	* c-pretty-print.c: Include wide-int.h.
+	(pp_c_integer_constant): Use wide-int interfaces.
+	* cilk.c (declare_one_free_variable): Use tree_int_cst_lt instead of
+	INT_CST_LT_UNSIGNED.
+
+2014-05-06  Richard Biener  <rguenther@suse.de>
+
+	* c-opts.c (c_common_post_options): For -freestanding,
+	-fno-hosted and -fno-builtin disable pattern recognition
+	if not enabled explicitely.
+
+2014-05-02  Marek Polacek  <polacek@redhat.com>
+
+	* c.opt (Wsizeof-pointer-memaccess): Describe option.
+
+2014-05-01  Marek Polacek  <polacek@redhat.com>
+
+	PR c/43245
+	* c.opt (Wdiscarded-qualifiers): Add.
+
+2014-04-30  Marek Polacek  <polacek@redhat.com>
+
+	* c-ubsan.c (ubsan_instrument_division): Handle REAL_TYPEs.  Perform
+	INT_MIN / -1 sanitization only for integer types.
+
+2014-04-25  Marek Polacek  <polacek@redhat.com>
+
+	PR c/18079
+	* c-common.c (handle_noinline_attribute): Warn if the attribute
+	conflicts with always_inline attribute.
+	(handle_always_inline_attribute): Warn if the attribute conflicts
+	with noinline attribute.
+
+2014-04-25  Marek Polacek  <polacek@redhat.com>
+
+	PR c/60156
+	* c-common.c (check_main_parameter_types): Warn about variadic main.
+
+2014-04-24  Mike Stump  <mikestump@comcast.net>
+
+	* c.opt (Wshadow-ivar): Default to on.
+
+2014-04-24  Dimitris Papavasiliou  <dpapavas@gmail.com>
+
+	* c.opt (Wshadow-ivar, flocal-ivars, fivar-visibility): Add.
+
+2014-04-23  Marek Polacek  <polacek@redhat.com>
+
+	* c-common.c (handle_tm_wrap_attribute): Tweak error message.
+
+2014-04-22  Jakub Jelinek  <jakub@redhat.com>
+
+	PR sanitizer/60275
+	* c-ubsan.c (ubsan_instrument_return): Return __builtin_trap ()
+	if flag_sanitize_undefined_trap_on_error.
+	(ubsan_instrument_division, ubsan_instrument_shift,
+	ubsan_instrument_vla): Likewise.  Use __ubsan_handle_*_abort ()
+	if !flag_sanitize_recover.
+
+2014-04-22  Marc Glisse  <marc.glisse@inria.fr>
+
+	PR libstdc++/43622
+	* c-common.c (registered_builtin_types): Make non-static.
+	* c-common.h (registered_builtin_types): Declare.
+
 2014-04-14  Richard Biener  <rguenther@suse.de>
 	Marc Glisse  <marc.glisse@inria.fr>
 
