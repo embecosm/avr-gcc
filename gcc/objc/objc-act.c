@@ -4650,16 +4650,14 @@ mark_referenced_methods (void)
       chain = CLASS_CLS_METHODS (impent->imp_context);
       while (chain)
 	{
-	  cgraph_mark_force_output_node (
-			   cgraph_get_create_node (METHOD_DEFINITION (chain)));
+	  cgraph_node::get_create (METHOD_DEFINITION (chain))->mark_force_output ();
 	  chain = DECL_CHAIN (chain);
 	}
 
       chain = CLASS_NST_METHODS (impent->imp_context);
       while (chain)
 	{
-	  cgraph_mark_force_output_node (
-			   cgraph_get_create_node (METHOD_DEFINITION (chain)));
+	  cgraph_node::get_create (METHOD_DEFINITION (chain))->mark_force_output ();
 	  chain = DECL_CHAIN (chain);
 	}
     }
@@ -10114,5 +10112,22 @@ objc_common_init_ts (void)
   MARK_TS_TYPED (MESSAGE_SEND_EXPR);
   MARK_TS_TYPED (PROPERTY_REF);
 }
+
+size_t
+objc_common_tree_size (enum tree_code code)
+{
+  switch (code)
+    {
+    case CLASS_METHOD_DECL:
+    case INSTANCE_METHOD_DECL:
+    case KEYWORD_DECL:
+    case PROPERTY_DECL:
+      return sizeof (struct tree_decl_non_common);
+    default:
+      gcc_unreachable ();
+  
+    }
+}
+
 
 #include "gt-objc-objc-act.h"

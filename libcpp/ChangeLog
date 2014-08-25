@@ -1,3 +1,60 @@
+2014-08-23  Edward Smith-Rowland  <3dw4rd@verizon.net>
+
+	* include/cpplib.h (enum c_lang): Add CLK_GNUCXX1Z, CLK_CXX1Z;
+	Rename CLK_GNUCXX1Y, CLK_CXX1Y to CLK_GNUCXX14, CLK_CXX14;
+	* init.c (struct lang_flags lang_defaults): Add column for trigraphs;
+	Add rows for CLK_GNUCXX1Z, CLK_CXX1Z; (cpp_set_lang): Set trigraphs;
+	(cpp_init_builtins): Set __cplusplus to 201402L for C++14;
+	Set __cplusplus to 201500L for C++17.
+	* expr.c (cpp_classify_number): Change C++1y to C++14 in binary
+	constants error message.
+
+2014-08-20  Marek Polacek  <polacek@redhat.com>
+
+	* include/cpplib.h (cpp_options): Use signed char.
+	* lex.c (_cpp_lex_direct): Don't warn in C++ mode.
+
+2014-08-19  Marek Polacek  <polacek@redhat.com>
+
+	* lex.c (_cpp_lex_direct): Fix a typo.
+
+2014-08-19  Marek Polacek  <polacek@redhat.com>
+
+	* charset.c (_cpp_valid_ucn): Warn only if -Wc90-c99-compat.
+	* lex.c (_cpp_lex_direct): Likewise.
+	* macro.c (replace_args): Likewise.
+	(parse_params): Likewise.
+	* include/cpplib.h (cpp_options): Change cpp_warn_c90_c99_compat
+	to char.
+
+2014-08-10 Marek Polacek  <polacek@redhat.com>
+
+	PR c/51849
+	* lex.c (_cpp_lex_direct): Warn when -Wc90-c99-compat is in effect.
+	* charset.c (_cpp_valid_ucn): Likewise.
+	* include/cpplib.h (cpp_options): Add cpp_warn_c90_c99_compat.
+	* macro.c (replace_args): Warn when -Wc90-c99-compat is in effect.
+	(parse_params): Likewise.
+
+2014-07-27  Marek Polacek  <polacek@redhat.com>
+
+	PR c/61861
+	* macro.c (builtin_macro): Add location parameter.  Set
+	location of builtin macro to the expansion point.
+	(enter_macro_context): Pass location to builtin_macro.
+
+2014-07-16  Dodji Seketeli  <dodji@redhat.com>
+
+	Support location tracking for built-in macro tokens
+	* include/line-map.h (line_maps::builtin_location): New data
+	member.
+	(line_map_init): Add a new parameter to initialize the new
+	line_maps::builtin_location data member.
+	* line-map.c (linemap_init): Initialize the
+	line_maps::builtin_location data member.
+	* macro.c (builtin_macro): Create a macro map and track the token
+	resulting from the expansion of a built-in macro.
+
 2014-07-10  Edward Smith-Rowland  <3dw4rd@verizon.net>
 	    Jonathan Wakely  <jwakely@redhat.com>
 

@@ -24,12 +24,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "gfortran.h"
 #include "tree.h"
 #include "stringpool.h"
 #include "diagnostic-core.h"	/* For fatal_error.  */
 #include "langhooks.h"
 #include "flags.h"
-#include "gfortran.h"
 #include "arith.h"
 #include "constructor.h"
 #include "trans.h"
@@ -564,7 +564,7 @@ gfc_conv_intrinsic_to_class (gfc_se *parmse, gfc_expr *e,
   var = gfc_create_var (tmp, "class");
 
   /* Set the vptr.  */
-  ctree =  gfc_class_vptr_get (var);
+  ctree = gfc_class_vptr_get (var);
 
   vtab = gfc_find_vtab (&e->ts);
   gcc_assert (vtab);
@@ -573,7 +573,7 @@ gfc_conv_intrinsic_to_class (gfc_se *parmse, gfc_expr *e,
 		  fold_convert (TREE_TYPE (ctree), tmp));
 
   /* Now set the data field.  */
-  ctree =  gfc_class_data_get (var);
+  ctree = gfc_class_data_get (var);
   if (parmse->ss && parmse->ss->info->useflags)
     {
       /* For an array reference in an elemental procedure call we need
@@ -589,7 +589,16 @@ gfc_conv_intrinsic_to_class (gfc_se *parmse, gfc_expr *e,
 	{
 	  parmse->ss = NULL;
 	  gfc_conv_expr_reference (parmse, e);
-	  tmp = fold_convert (TREE_TYPE (ctree), parmse->expr);
+	  if (class_ts.u.derived->components->as
+	      && class_ts.u.derived->components->as->type == AS_ASSUMED_RANK)
+	    {
+	      tmp = gfc_conv_scalar_to_descriptor (parmse, parmse->expr,
+						   gfc_expr_attr (e));
+	      tmp = fold_build1_loc (input_location, VIEW_CONVERT_EXPR,
+				     TREE_TYPE (ctree), tmp);
+	    }
+	  else
+	      tmp = fold_convert (TREE_TYPE (ctree), parmse->expr);
 	  gfc_add_modify (&parmse->pre, ctree, tmp);
 	}
       else
@@ -597,7 +606,14 @@ gfc_conv_intrinsic_to_class (gfc_se *parmse, gfc_expr *e,
 	  parmse->ss = ss;
 	  parmse->use_offset = 1;
 	  gfc_conv_expr_descriptor (parmse, e);
-	  gfc_add_modify (&parmse->pre, ctree, parmse->expr);
+	  if (class_ts.u.derived->components->as->rank != e->rank)
+	    {
+	      tmp = fold_build1_loc (input_location, VIEW_CONVERT_EXPR,
+				     TREE_TYPE (ctree), parmse->expr);
+	      gfc_add_modify (&parmse->pre, ctree, tmp);
+	    }
+	  else
+	    gfc_add_modify (&parmse->pre, ctree, parmse->expr);
 	}
     }
 
@@ -6244,7 +6260,9 @@ gfc_conv_structure (gfc_se * se, gfc_expr * expr, int init)
       else if (cm->ts.u.derived && strcmp (cm->name, "_size") == 0)
 	{
 	  val = TYPE_SIZE_UNIT (gfc_get_derived_type (cm->ts.u.derived));
-	  CONSTRUCTOR_APPEND_ELT (v, cm->backend_decl, val);
+	  CONSTRUCTOR_APPEND_ELT (v, cm->backend_decl,
+				  fold_convert (TREE_TYPE (cm->backend_decl),
+						val));
 	}
       else
 	{
@@ -7879,7 +7897,7 @@ is_runtime_conformable (gfc_expr *expr1, gfc_expr *expr2)
 	  for (a = expr2->value.function.actual; a != NULL; a = a->next)
 	    {
 	      e1 = a->expr;
-	      if (e1->rank > 0 && !is_runtime_conformable (expr1, e1))
+	      if (e1 && e1->rank > 0 && !is_runtime_conformable (expr1, e1))
 		return false;
 	    }
 	  return true;
@@ -7890,7 +7908,7 @@ is_runtime_conformable (gfc_expr *expr1, gfc_expr *expr2)
 	  for (a = expr2->value.function.actual; a != NULL; a = a->next)
 	    {
 	      e1 = a->expr;
-	      if (e1->rank > 0 && !is_runtime_conformable (expr1, e1))
+	      if (e1 && e1->rank > 0 && !is_runtime_conformable (expr1, e1))
 		return false;
 	    }
 	  return true;

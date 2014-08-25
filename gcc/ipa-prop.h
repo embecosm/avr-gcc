@@ -529,6 +529,7 @@ void ipa_free_all_edge_args (void);
 void ipa_free_all_structures_after_ipa_cp (void);
 void ipa_free_all_structures_after_iinln (void);
 void ipa_register_cgraph_hooks (void);
+int count_formal_params (tree fndecl);
 
 /* This function ensures the array of node param infos is big enough to
    accommodate a structure for all nodes and reallocates it if not.  */
@@ -576,7 +577,7 @@ ipa_get_agg_replacements_for_node (struct cgraph_node *node)
 /* Function formal parameters related computations.  */
 void ipa_initialize_node_params (struct cgraph_node *node);
 bool ipa_propagate_indirect_call_infos (struct cgraph_edge *cs,
-					vec<cgraph_edge_p> *new_edges);
+					vec<cgraph_edge *> *new_edges);
 
 /* Indirect edge and binfo processing.  */
 tree ipa_get_indirect_edge_target (struct cgraph_edge *ie,

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2013, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -313,7 +313,12 @@ package Atree is
 
    Warnings_Detected : Nat := 0;
    --  Number of warnings detected. Initialized to zero at the start of
-   --  compilation. Initialized for -gnatVa use, see comment above.
+   --  compilation. Initialized for -gnatVa use, see comment above. This
+   --  count includes the count of style and info messages.
+
+   Info_Messages : Nat := 0;
+   --  Number of info messages generated. Info messages are neved treated as
+   --  errors (whether from use of the pragma, or the compiler switch -gnatwe).
 
    Warnings_Treated_As_Errors : Nat := 0;
    --  Number of warnings changed into errors as a result of matching a pattern
@@ -3884,7 +3889,7 @@ package Atree is
       end record;
 
       pragma Pack (Node_Record);
-      for Node_Record'Size use 8*32;
+      for Node_Record'Size use 8 * 32;
       for Node_Record'Alignment use 4;
 
       function E_To_N is new Unchecked_Conversion (Entity_Kind, Node_Kind);

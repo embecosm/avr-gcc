@@ -474,7 +474,7 @@ add_capture (tree lambda, tree id, tree orig_init, bool by_reference_p,
     }
   else if (variably_modified_type_p (type, NULL_TREE))
     {
-      error ("capture of variable-size type %qT that is not a C++1y array "
+      error ("capture of variable-size type %qT that is not a C++14 array "
 	     "of runtime bound", type);
       if (TREE_CODE (type) == ARRAY_TYPE
 	  && variably_modified_type_p (TREE_TYPE (type), NULL_TREE))
@@ -824,6 +824,7 @@ void
 maybe_add_lambda_conv_op (tree type)
 {
   bool nested = (current_function_decl != NULL_TREE);
+  bool nested_def = decl_function_context (TYPE_MAIN_DECL (type));
   tree callop = lambda_function (type);
 
   if (LAMBDA_EXPR_CAPTURE_LIST (CLASSTYPE_LAMBDA_EXPR (type)) != NULL_TREE)
@@ -976,7 +977,7 @@ maybe_add_lambda_conv_op (tree type)
   DECL_NOT_REALLY_EXTERN (fn) = 1;
   DECL_DECLARED_INLINE_P (fn) = 1;
   DECL_ARGUMENTS (fn) = build_this_parm (fntype, TYPE_QUAL_CONST);
-  if (nested)
+  if (nested_def)
     DECL_INTERFACE_KNOWN (fn) = 1;
 
   if (generic_lambda_p)
@@ -1016,7 +1017,7 @@ maybe_add_lambda_conv_op (tree type)
       DECL_NAME (arg) = NULL_TREE;
       DECL_CONTEXT (arg) = fn;
     }
-  if (nested)
+  if (nested_def)
     DECL_INTERFACE_KNOWN (fn) = 1;
 
   if (generic_lambda_p)
@@ -1038,9 +1039,8 @@ maybe_add_lambda_conv_op (tree type)
   if (DECL_ONE_ONLY (statfn))
     {
       /* Put the thunk in the same comdat group as the call op.  */
-      symtab_add_to_same_comdat_group
-	 (cgraph_get_create_node (statfn),
-          cgraph_get_create_node (callop));
+      cgraph_node::get_create (statfn)->add_to_same_comdat_group
+	(cgraph_node::get_create (callop));
     }
   tree body = begin_function_body ();
   tree compound_stmt = begin_compound_stmt (0);

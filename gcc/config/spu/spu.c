@@ -49,7 +49,6 @@
 #include "sched-int.h"
 #include "params.h"
 #include "machmode.h"
-#include "pointer-set.h"
 #include "hash-table.h"
 #include "tree-ssa-alias.h"
 #include "internal-fn.h"
@@ -2105,7 +2104,7 @@ spu_emit_branch_hint (rtx before, rtx branch, rtx target,
   rtx branch_label = 0;
   rtx hint;
   rtx insn;
-  rtx table;
+  rtx_jump_table_data *table;
 
   if (before == 0 || branch == 0 || target == 0)
     return;

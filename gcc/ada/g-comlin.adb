@@ -584,7 +584,6 @@ package body GNAT.Command_Line is
       Parser      : Opt_Parser := Command_Line_Parser) return Character
    is
       Dummy : Boolean;
-      pragma Unreferenced (Dummy);
 
    begin
       <<Restart>>
@@ -3534,10 +3533,7 @@ package body GNAT.Command_Line is
                    & ": unrecognized option '"
                    & Full_Switch (Parser)
                    & "'");
-         Put_Line (Standard_Error,
-                   "Try `"
-                   & Base_Name (Ada.Command_Line.Command_Name)
-                   & " --help` for more information.");
+         Try_Help;
 
          raise;
 
@@ -3587,5 +3583,20 @@ package body GNAT.Command_Line is
          Next (Iter);
       end loop;
    end Build;
+
+   --------------
+   -- Try_Help --
+   --------------
+
+   --  Note: Any change to the message displayed should also be done in
+   --  gnatbind.adb that does not use this interface.
+
+   procedure Try_Help is
+   begin
+      Put_Line
+        (Standard_Error,
+         "try """ & Base_Name (Ada.Command_Line.Command_Name)
+         & " --help"" for more information.");
+   end Try_Help;
 
 end GNAT.Command_Line;

@@ -533,8 +533,11 @@ reinit_regs (void)
   init_regs ();
   /* caller_save needs to be re-initialized.  */
   caller_save_initialized_p = false;
-  ira_init ();
-  recog_init ();
+  if (this_target_rtl->target_specific_initialized)
+    {
+      ira_init ();
+      recog_init ();
+    }
 }
 
 /* Initialize some fake stack-frame MEM references for use in
@@ -1019,12 +1022,12 @@ setup_reg_classes (int regno,
    again just before loop.  It finds the first and last use of each
    pseudo-register.  */
 
-static void reg_scan_mark_refs (rtx, rtx);
+static void reg_scan_mark_refs (rtx, rtx_insn *);
 
 void
-reg_scan (rtx f, unsigned int nregs ATTRIBUTE_UNUSED)
+reg_scan (rtx_insn *f, unsigned int nregs ATTRIBUTE_UNUSED)
 {
-  rtx insn;
+  rtx_insn *insn;
 
   timevar_push (TV_REG_SCAN);
 
@@ -1045,7 +1048,7 @@ reg_scan (rtx f, unsigned int nregs ATTRIBUTE_UNUSED)
    We should only record information for REGs with numbers
    greater than or equal to MIN_REGNO.  */
 static void
-reg_scan_mark_refs (rtx x, rtx insn)
+reg_scan_mark_refs (rtx x, rtx_insn *insn)
 {
   enum rtx_code code;
   rtx dest;
@@ -1256,7 +1259,7 @@ void
 init_subregs_of_mode (void)
 {
   basic_block bb;
-  rtx insn;
+  rtx_insn *insn;
   bitmap_obstack srom_obstack;
   bitmap subregs_of_mode;
 

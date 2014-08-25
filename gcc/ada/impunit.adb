@@ -273,6 +273,7 @@ package body Impunit is
     ("g-expect", F),  -- GNAT.Expect
     ("g-exptty", F),  -- GNAT.Expect.TTY
     ("g-flocon", F),  -- GNAT.Float_Control
+    ("g-forstr", F),  -- GNAT.Formatted_String
     ("g-heasor", F),  -- GNAT.Heap_Sort
     ("g-hesora", F),  -- GNAT.Heap_Sort_A
     ("g-hesorg", F),  -- GNAT.Heap_Sort_G
@@ -291,6 +292,7 @@ package body Impunit is
     ("g-regexp", F),  -- GNAT.Regexp
     ("g-regist", F),  -- GNAT.Registry
     ("g-regpat", F),  -- GNAT.Regpat
+    ("g-rewdat", F),  -- GNAT.Rewrite_Data
     ("g-semaph", F),  -- GNAT.Semaphores
     ("g-sercom", F),  -- GNAT.Serial_Communications
     ("g-sestin", F),  -- GNAT.Secondary_Stack_Info
@@ -343,7 +345,6 @@ package body Impunit is
     ("i-cexten", F),  -- Interfaces.C.Extensions
     ("i-cil   ", F),  -- Interfaces.CIL
     ("i-cilobj", F),  -- Interfaces.CIL.Object
-    ("i-cpp   ", F),  -- Interfaces.CPP
     ("i-cstrea", F),  -- Interfaces.C.Streams
     ("i-java  ", F),  -- Interfaces.Java
     ("i-javjni", F),  -- Interfaces.Java.JNI
@@ -381,8 +382,8 @@ package body Impunit is
     ("s-ststop", F),  -- System.Strings.Stream_Ops
     ("s-tasinf", F),  -- System.Task_Info
     ("s-unstyp", F),  -- System.Unsigned_Types
-    ("s-wchcnv", F),  -- System.Wch_Cnv
-    ("s-wchcon", F),  -- System.Wch_Con
+    ("s-wchcnv", F),  -- System.WCh_Cnv
+    ("s-wchcon", F),  -- System.WCh_Con
 
    --  The following are strictly speaking Ada 2012 units, but we are allowed
    --  to add children to system, so we consider them to be implementation

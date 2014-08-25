@@ -42,6 +42,7 @@ with Alloc; use Alloc;
 with Namet; use Namet;
 with Table;
 with Types; use Types;
+with Sinfo; use Sinfo;
 
 package Sem_Aux is
 
@@ -130,7 +131,7 @@ package Sem_Aux is
    --  stored discriminants are the same as the actual discriminants of the
    --  type, and hence this function is the same as First_Discriminant.
    --
-   --  For derived non-tagged types that rename discriminants in the root type
+   --  For derived untagged types that rename discriminants in the root type
    --  this is the first of the discriminants that occur in the root type. To
    --  be precise, in this case stored discriminants are entities attached to
    --  the entity chain of the derived type which are a copy of the
@@ -150,6 +151,18 @@ package Sem_Aux is
    function First_Tag_Component (Typ : Entity_Id) return Entity_Id;
    --  Typ must be a tagged record type. This function returns the Entity for
    --  the first _Tag field in the record type.
+
+   function Get_Binary_Nkind (Op : Entity_Id) return Node_Kind;
+   --  Op must be an entity with an Ekind of E_Operator. This function returns
+   --  the Nkind value that would be used to construct a binary operator node
+   --  referencing this entity. It is an error to call this function if Ekind
+   --  (Op) /= E_Operator.
+
+   function Get_Unary_Nkind (Op : Entity_Id) return Node_Kind;
+   --  Op must be an entity with an Ekind of E_Operator. This function returns
+   --  the Nkind value that would be used to construct a unary operator node
+   --  referencing this entity. It is an error to call this function if Ekind
+   --  (Op) /= E_Operator.
 
    function Get_Rep_Item
      (E             : Entity_Id;
@@ -250,6 +263,17 @@ package Sem_Aux is
    --  If found and if it is the first rep item in the list that matches one of
    --  the given names then True is returned, otherwise False indicates that no
    --  matching entry was found.
+
+   function Has_External_Tag_Rep_Clause (T : Entity_Id) return Boolean;
+   --  Defined in tagged types. Set if an External_Tag rep. clause has been
+   --  given for this type. Use to avoid the generation of the default
+   --  External_Tag.
+   --
+   --  Note: we used to use an entity flag for this purpose, but that was wrong
+   --  because it was not propagated from the private view to the full view. We
+   --  could have added that propagation, but it would have been an annoying
+   --  irregularity compared to other representation aspects, and the cost of
+   --  looking up the aspect when needed is small.
 
    function Has_Unconstrained_Elements (T : Entity_Id) return Boolean;
    --  True if T has discriminants and is unconstrained, or is an array type
@@ -373,4 +397,5 @@ package Sem_Aux is
    --  Given an entity for a package or generic package, return corresponding
    --  package specification. Simplifies handling of child units, and better
    --  than the old idiom: Specification (Unit_Declaration_Node (Pack_Id)).
+
 end Sem_Aux;

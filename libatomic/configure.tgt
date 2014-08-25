@@ -27,7 +27,11 @@
 # work out any special compilation flags as necessary.
 
 case "${target_cpu}" in
-  alpha*)		ARCH=alpha ;;
+  alpha*)
+	# fenv.c needs this option to generate inexact exceptions.
+	XCFLAGS="${XCFLAGS} -mfp-trap-mode=sui"
+	ARCH=alpha
+	;;
   rs6000 | powerpc*)	ARCH=powerpc ;;
   sh*)			ARCH=sh ;;
 
@@ -103,7 +107,7 @@ case "${target}" in
   *-*-linux* | *-*-gnu* | *-*-k*bsd*-gnu \
   | *-*-netbsd* | *-*-freebsd* | *-*-openbsd* \
   | *-*-solaris2* | *-*-sysv4* | *-*-irix6* | *-*-osf* | *-*-hpux11* \
-  | *-*-darwin* | *-*-aix*)
+  | *-*-darwin* | *-*-aix* | *-*-cygwin*)
 	# POSIX system.  The OS is supported.
 	config_path="${config_path} posix"
 	;;

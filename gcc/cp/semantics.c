@@ -44,7 +44,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "cgraph.h"
 #include "tree-iterator.h"
 #include "target.h"
-#include "pointer-set.h"
 #include "hash-table.h"
 #include "gimplify.h"
 #include "bitmap.h"
@@ -1611,7 +1610,7 @@ tree
 force_paren_expr (tree expr)
 {
   /* This is only needed for decltype(auto) in C++14.  */
-  if (cxx_dialect < cxx1y)
+  if (cxx_dialect < cxx14)
     return expr;
 
   /* If we're in unevaluated context, we can't be deducing a
@@ -2418,6 +2417,15 @@ finish_call_expr (tree fn, vec<tree, va_gc> **args, bool disallow_virtual,
   return result;
 }
 
+/* Instantiate a variable declaration from a TEMPLATE_ID_EXPR for use. */
+
+tree
+finish_template_variable (tree var)
+{
+  return instantiate_template (TREE_OPERAND (var, 0), TREE_OPERAND (var, 1),
+                               tf_error);
+}
+
 /* Finish a call to a postfix increment or decrement or EXPR.  (Which
    is indicated by CODE, which should be POSTINCREMENT_EXPR or
    POSTDECREMENT_EXPR.)  */
@@ -2589,8 +2597,8 @@ finish_compound_literal (tree type, tree compound_literal,
   compound_literal = reshape_init (type, compound_literal, complain);
   if (SCALAR_TYPE_P (type)
       && !BRACE_ENCLOSED_INITIALIZER_P (compound_literal)
-      && (complain & tf_warning_or_error))
-    check_narrowing (type, compound_literal);
+      && !check_narrowing (type, compound_literal, complain))
+    return error_mark_node;
   if (TREE_CODE (type) == ARRAY_TYPE
       && TYPE_DOMAIN (type) == NULL_TREE)
     {
@@ -3500,6 +3508,12 @@ finish_id_expression (tree id_expression,
 	     a call to its wrapper.  */
 	  decl = build_cxx_call (wrap, 0, NULL, tf_warning_or_error);
 	}
+      else if (TREE_CODE (decl) == TEMPLATE_ID_EXPR
+	       && variable_template_p (TREE_OPERAND (decl, 0)))
+	{
+	  decl = finish_template_variable (decl);
+	  mark_used (decl);
+	}
       else if (scope)
 	{
 	  decl = (adjust_result_of_qualified_name_lookup
@@ -3949,13 +3963,16 @@ emit_associated_thunks (tree fn)
 }
 
 /* Returns true iff FUN is an instantiation of a constexpr function
-   template.  */
+   template or a defaulted constexpr function.  */
 
 static inline bool
 is_instantiation_of_constexpr (tree fun)
 {
-  return (DECL_TEMPLOID_INSTANTIATION (fun)
-	  && DECL_DECLARED_CONSTEXPR_P (DECL_TI_TEMPLATE (fun)));
+  return ((DECL_TEMPLOID_INSTANTIATION (fun)
+	   && DECL_DECLARED_CONSTEXPR_P (DECL_TI_TEMPLATE (fun)))
+	  || (DECL_DEFAULTED_FN (fun)
+	      && DECL_DECLARED_CONSTEXPR_P (fun)));
+
 }
 
 /* Generate RTL for FN.  */
@@ -3998,11 +4015,11 @@ expand_or_defer_fn_1 (tree fn)
 	 this function as needed so that finish_file will make sure to
 	 output it later.  Similarly, all dllexport'd functions must
 	 be emitted; there may be callers in other DLLs.  */
-      if ((flag_keep_inline_functions
-	   && DECL_DECLARED_INLINE_P (fn)
-	   && !DECL_REALLY_EXTERN (fn))
-	  || (flag_keep_inline_dllexport
-	      && lookup_attribute ("dllexport", DECL_ATTRIBUTES (fn))))
+      if (DECL_DECLARED_INLINE_P (fn)
+	  && !DECL_REALLY_EXTERN (fn)
+	  && (flag_keep_inline_functions
+	      || (flag_keep_inline_dllexport
+		  && lookup_attribute ("dllexport", DECL_ATTRIBUTES (fn)))))
 	{
 	  mark_needed (fn);
 	  DECL_EXTERNAL (fn) = 0;
@@ -4974,15 +4991,15 @@ clone_omp_udr (tree stmt, tree omp_decl1, tree omp_decl2,
 	       tree decl, tree placeholder)
 {
   copy_body_data id;
-  struct pointer_map_t *decl_map = pointer_map_create ();
+  hash_map<tree, tree> decl_map;
 
-  *pointer_map_insert (decl_map, omp_decl1) = placeholder;
-  *pointer_map_insert (decl_map, omp_decl2) = decl;
+  decl_map.put (omp_decl1, placeholder);
+  decl_map.put (omp_decl2, decl);
   memset (&id, 0, sizeof (id));
   id.src_fn = DECL_CONTEXT (omp_decl1);
   id.dst_fn = current_function_decl;
   id.src_cfun = DECL_STRUCT_FUNCTION (id.src_fn);
-  id.decl_map = decl_map;
+  id.decl_map = &decl_map;
 
   id.copy_decl = copy_decl_no_change;
   id.transform_call_graph_edges = CB_CGE_DUPLICATE;
@@ -4991,7 +5008,6 @@ clone_omp_udr (tree stmt, tree omp_decl1, tree omp_decl2,
   id.transform_lang_insert_block = NULL;
   id.eh_lp_nr = 0;
   walk_tree (&stmt, copy_tree_body_r, &id, NULL);
-  pointer_map_destroy (decl_map);
   return stmt;
 }
 
@@ -7048,7 +7064,7 @@ finish_decltype_type (tree expr, bool id_expression_or_member_access_p,
 	}
     }
 
-  if (cxx_dialect >= cxx1y && array_of_runtime_bound_p (type)
+  if (cxx_dialect >= cxx14 && array_of_runtime_bound_p (type)
       && (flag_iso || warn_vla > 0))
     {
       if (complain & tf_warning_or_error)
@@ -8028,7 +8044,7 @@ register_constexpr_fundef (tree fun, tree body)
 void
 explain_invalid_constexpr_fn (tree fun)
 {
-  static struct pointer_set_t *diagnosed;
+  static hash_set<tree> *diagnosed;
   tree body;
   location_t save_loc;
   /* Only diagnose defaulted functions or instantiations.  */
@@ -8036,8 +8052,8 @@ explain_invalid_constexpr_fn (tree fun)
       && !is_instantiation_of_constexpr (fun))
     return;
   if (diagnosed == NULL)
-    diagnosed = pointer_set_create ();
-  if (pointer_set_insert (diagnosed, fun) != 0)
+    diagnosed = new hash_set<tree>;
+  if (diagnosed->add (fun))
     /* Already explained.  */
     return;
 
@@ -8048,7 +8064,7 @@ explain_invalid_constexpr_fn (tree fun)
   if (is_valid_constexpr_fn (fun, true))
     {
       /* Then if it's OK, the body.  */
-      if (DECL_DEFAULTED_FN (fun))
+      if (!DECL_DECLARED_CONSTEXPR_P (fun))
 	explain_implicit_non_constexpr (fun);
       else
 	{
@@ -8961,7 +8977,9 @@ cxx_eval_bare_aggregate (const constexpr_call *call, tree t,
 	  constructor_elt *inner = base_field_constructor_elt (n, ce->index);
 	  inner->value = elt;
 	}
-      else if (ce->index && TREE_CODE (ce->index) == NOP_EXPR)
+      else if (ce->index
+	       && (TREE_CODE (ce->index) == NOP_EXPR
+		   || TREE_CODE (ce->index) == POINTER_PLUS_EXPR))
 	{
 	  /* This is an initializer for an empty base; now that we've
 	     checked that it's constant, we can ignore it.  */
@@ -9960,6 +9978,11 @@ maybe_constant_value (tree t)
 tree
 maybe_constant_init (tree t)
 {
+  if (TREE_CODE (t) == EXPR_STMT)
+    t = TREE_OPERAND (t, 0);
+  if (TREE_CODE (t) == CONVERT_EXPR
+      && VOID_TYPE_P (TREE_TYPE (t)))
+    t = TREE_OPERAND (t, 0);
   t = maybe_constant_value (t);
   if (TREE_CODE (t) == TARGET_EXPR)
     {

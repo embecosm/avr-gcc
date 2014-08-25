@@ -27,6 +27,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "basic-block.h"
 #include "gimple-pretty-print.h"
 #include "tree-inline.h"
+#include "inchash.h"
 #include "hash-table.h"
 #include "tree-ssa-alias.h"
 #include "internal-fn.h"
@@ -63,6 +64,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "domwalk.h"
 #include "ipa-prop.h"
 #include "tree-ssa-propagate.h"
+#include "ipa-utils.h"
 
 /* TODO:
 
@@ -4359,23 +4361,53 @@ eliminate_dom_walker::before_dom_children (basic_block b)
 	{
 	  tree fn = gimple_call_fn (stmt);
 	  if (fn
-	      && TREE_CODE (fn) == OBJ_TYPE_REF
-	      && TREE_CODE (OBJ_TYPE_REF_EXPR (fn)) == SSA_NAME)
+	      && flag_devirtualize
+	      && virtual_method_call_p (fn))
 	    {
-	      fn = ipa_intraprocedural_devirtualization (stmt);
-	      if (fn && dbg_cnt (devirt))
+	      tree otr_type;
+	      HOST_WIDE_INT otr_token;
+	      ipa_polymorphic_call_context context;
+	      tree instance;
+	      bool final;
+
+	      instance = get_polymorphic_call_info (current_function_decl,
+						    fn,
+						    &otr_type, &otr_token, &context, stmt);
+
+	      context.get_dynamic_type (instance, OBJ_TYPE_REF_OBJECT (fn), otr_type, stmt);
+
+	      vec <cgraph_node *>targets
+		= possible_polymorphic_call_targets (obj_type_ref_class (fn),
+						     tree_to_uhwi
+						       (OBJ_TYPE_REF_TOKEN (fn)),
+						     context,
+						     &final);
+	      if (dump_enabled_p ())
+		dump_possible_polymorphic_call_targets (dump_file, 
+							obj_type_ref_class (fn),
+							tree_to_uhwi
+							  (OBJ_TYPE_REF_TOKEN (fn)),
+							context);
+	      if (final && targets.length () <= 1 && dbg_cnt (devirt))
 		{
+		  tree fn;
+		  if (targets.length () == 1)
+		    fn = targets[0]->decl;
+		  else
+		    fn = builtin_decl_implicit (BUILT_IN_UNREACHABLE);
 		  if (dump_enabled_p ())
 		    {
 		      location_t loc = gimple_location_safe (stmt);
 		      dump_printf_loc (MSG_OPTIMIZED_LOCATIONS, loc,
 				       "converting indirect call to "
 				       "function %s\n",
-				       cgraph_get_node (fn)->name ());
+				       cgraph_node::get (fn)->name ());
 		    }
 		  gimple_call_set_fndecl (stmt, fn);
 		  gimple_set_modified (stmt, true);
 		}
+	      else
+	        gcc_assert (!ipa_intraprocedural_devirtualization (stmt));
 	    }
 	}
 

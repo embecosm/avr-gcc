@@ -3620,6 +3620,16 @@ Unary_expression::do_lower(Gogo*, Named_object*, Statement_inserter*, int)
       return Expression::make_error(this->location());
     }
 
+  // Check for an invalid pointer dereference.  We need to do this
+  // here because Unary_expression::do_type will return an error type
+  // in this case.  That can cause code to appear erroneous, and
+  // therefore disappear at lowering time, without any error message.
+  if (op == OPERATOR_MULT && expr->type()->points_to() == NULL)
+    {
+      this->report_error(_("expected pointer"));
+      return Expression::make_error(this->location());
+    }
+
   if (op == OPERATOR_PLUS || op == OPERATOR_MINUS || op == OPERATOR_XOR)
     {
       Numeric_constant nc;
@@ -9003,8 +9013,51 @@ Call_expression::lower_varargs(Gogo* gogo, Named_object* function,
 // Flatten a call with multiple results into a temporary.
 
 Expression*
-Call_expression::do_flatten(Gogo*, Named_object*, Statement_inserter* inserter)
+Call_expression::do_flatten(Gogo* gogo, Named_object*,
+			    Statement_inserter* inserter)
 {
+  if (this->classification() == EXPRESSION_ERROR)
+    return this;
+
+  // Add temporary variables for all arguments that require type
+  // conversion.
+  Function_type* fntype = this->get_function_type();
+  go_assert(fntype != NULL);
+  if (this->args_ != NULL && !this->args_->empty()
+      && fntype->parameters() != NULL && !fntype->parameters()->empty())
+    {
+      bool is_interface_method =
+	this->fn_->interface_field_reference_expression() != NULL;
+
+      Expression_list *args = new Expression_list();
+      Typed_identifier_list::const_iterator pp = fntype->parameters()->begin();
+      Expression_list::const_iterator pa = this->args_->begin();
+      if (!is_interface_method && fntype->is_method())
+	{
+	  // The receiver argument.
+	  args->push_back(*pa);
+	  ++pa;
+	}
+      for (; pa != this->args_->end(); ++pa, ++pp)
+	{
+	  go_assert(pp != fntype->parameters()->end());
+	  if (Type::are_identical(pp->type(), (*pa)->type(), true, NULL))
+	    args->push_back(*pa);
+	  else
+	    {
+	      Location loc = (*pa)->location();
+	      Expression* arg =
+		Expression::convert_for_assignment(gogo, pp->type(), *pa, loc);
+	      Temporary_statement* temp =
+		Statement::make_temporary(pp->type(), arg, loc);
+	      inserter->insert(temp);
+	      args->push_back(Expression::make_temporary_reference(temp, loc));
+	    }
+	}
+      delete this->args_;
+      this->args_ = args;
+    }
+
   size_t rc = this->result_count();
   if (rc > 1 && this->call_temp_ == NULL)
     {
@@ -9063,6 +9116,15 @@ Call_expression::result(size_t i) const
       return NULL;
     }
   return (*this->results_)[i];
+}
+
+// Set the number of results expected from a call expression.
+
+void
+Call_expression::set_expected_result_count(size_t count)
+{
+  go_assert(this->expected_result_count_ == 0);
+  this->expected_result_count_ = count;
 }
 
 // Return whether this is a call to the predeclared function recover.
@@ -9252,6 +9314,15 @@ Call_expression::do_check_types(Gogo*)
       return;
     }
 
+  if (this->expected_result_count_ != 0
+      && this->expected_result_count_ != this->result_count())
+    {
+      if (this->issue_error())
+	this->report_error(_("function result count mismatch"));
+      this->set_is_error();
+      return;
+    }
+
   bool is_method = fntype->is_method();
   if (is_method)
     {
@@ -9300,6 +9371,20 @@ Call_expression::do_check_types(Gogo*)
   else if (parameters == NULL)
     {
       if (!is_method || this->args_->size() > 1)
+	this->report_error(_("too many arguments"));
+    }
+  else if (this->args_->size() == 1
+	   && this->args_->front()->call_expression() != NULL
+	   && this->args_->front()->call_expression()->result_count() > 1)
+    {
+      // This is F(G()) when G returns more than one result.  If the
+      // results can be matched to parameters, it would have been
+      // lowered in do_lower.  If we get here we know there is a
+      // mismatch.
+      if (this->args_->front()->call_expression()->result_count()
+	  < parameters->size())
+	this->report_error(_("not enough arguments"));
+      else
 	this->report_error(_("too many arguments"));
     }
   else
@@ -9779,7 +9864,10 @@ Index_expression::do_lower(Gogo*, Named_object*, Statement_inserter*, int)
 
   Type* type = left->type();
   if (type->is_error())
-    return Expression::make_error(location);
+    {
+      go_assert(saw_errors());
+      return Expression::make_error(location);
+    }
   else if (left->is_type_expression())
     {
       error_at(location, "attempt to index type expression");
@@ -10266,9 +10354,9 @@ Array_index_expression::do_get_backend(Translate_context* context)
       go_assert(saw_errors());
       return context->backend()->error_expression();
     }
-  Expression* start_expr = Expression::make_cast(int_type, this->start_, loc);
+
   Bexpression* bad_index =
-    Expression::check_bounds(start_expr, loc)->get_backend(context);
+    Expression::check_bounds(this->start_, loc)->get_backend(context);
 
   Bexpression* start = this->start_->get_backend(context);
   start = gogo->backend()->convert_expression(int_btype, start, loc);

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2013, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -131,9 +131,9 @@ package body Exp_Strm is
    --      return V;
    --    end typSI[_nnn]
 
-   --  Note: the suffix [_nnn] is present for non-tagged types, where we
-   --  generate a local subprogram at the point of the occurrence of the
-   --  attribute reference, so the name must be unique.
+   --  Note: the suffix [_nnn] is present for untagged types, where we generate
+   --  a local subprogram at the point of the occurrence of the attribute
+   --  reference, so the name must be unique.
 
    procedure Build_Array_Input_Function
      (Loc  : Source_Ptr;
@@ -155,7 +155,6 @@ package body Exp_Strm is
       Decls := New_List;
       Ranges := New_List;
       Indx  := First_Index (Typ);
-
       for J in 1 .. Dim loop
          Lnam := New_External_Name ('L', J);
          Hnam := New_External_Name ('H', J);
@@ -435,7 +434,6 @@ package body Exp_Strm is
       Pnam : out Entity_Id)
    is
       Loc : constant Source_Ptr := Sloc (Nod);
-
    begin
       Pnam :=
         Make_Defining_Identifier (Loc,
@@ -636,6 +634,7 @@ package body Exp_Strm is
                  Relocate_Node (Strm))));
 
          Set_Do_Range_Check (Res);
+
          if Base_Type (P_Type) /= Base_Type (U_Type) then
             Res := Unchecked_Convert_To (Base_Type (P_Type), Res);
          end if;
@@ -1124,7 +1123,10 @@ package body Exp_Strm is
 
       J := 1;
 
-      if Has_Discriminants (B_Typ) then
+      if Has_Discriminants (Typ)
+        and then
+          No (Discriminant_Default_Value (First_Discriminant (Typ)))
+      then
          Discr := First_Discriminant (B_Typ);
 
          --  If the prefix subtype is constrained, then retrieve the first
@@ -1250,10 +1252,15 @@ package body Exp_Strm is
    begin
       Stms := New_List;
 
-      --  Note that of course there will be no discriminants for the
-      --  elementary type case, so Has_Discriminants will be False.
+      --  Note that of course there will be no discriminants for the elementary
+      --  type case, so Has_Discriminants will be False. Note that the language
+      --  rules do not allow writing the discriminants in the defaulted case,
+      --  because those are written by 'Write.
 
-      if Has_Discriminants (Typ) then
+      if Has_Discriminants (Typ)
+        and then
+          No (Discriminant_Default_Value (First_Discriminant (Typ)))
+      then
          Disc := First_Discriminant (Typ);
 
          while Present (Disc) loop

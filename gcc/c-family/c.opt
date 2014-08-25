@@ -287,9 +287,21 @@ Wbad-function-cast
 C ObjC Var(warn_bad_function_cast) Warning
 Warn about casting functions to incompatible types
 
+Wbool-compare
+C ObjC C++ ObjC++ Var(warn_bool_compare) Warning LangEnabledBy(C ObjC C++ ObjC++,Wall)
+Warn about boolean expression compared with an integer value different from true/false
+
 Wbuiltin-macro-redefined
 C ObjC C++ ObjC++ Warning
 Warn when a built-in preprocessor macro is undefined or redefined
+
+Wc90-c99-compat
+C ObjC Var(warn_c90_c99_compat) Init(-1) Warning
+Warn about features not present in ISO C90, but present in ISO C99
+
+Wc99-c11-compat
+C ObjC Var(warn_c99_c11_compat) Init(-1) Warning
+Warn about features not present in ISO C99, but present in ISO C11
 
 Wc++-compat
 C ObjC Var(warn_cxx_compat) Warning
@@ -316,7 +328,7 @@ C ObjC C++ ObjC++ Var(warn_clobbered) Warning EnabledBy(Wextra)
 Warn about variables that might be changed by \"longjmp\" or \"vfork\"
 
 Wcomment
-C ObjC C++ ObjC++ Warning
+C ObjC C++ ObjC++ CPP(warn_comments) Var(cpp_warn_comment) Warning LangEnabledBy(C ObjC C++ ObjC++,Wall)
 Warn about possibly nested block comments, and C++ comments spanning more than one physical line
 
 Wcomments
@@ -340,7 +352,7 @@ C++ ObjC++ Var(warn_ctor_dtor_privacy) Warning
 Warn when all constructors and destructors are private
 
 Wdeclaration-after-statement
-C ObjC Var(warn_declaration_after_statement) Warning
+C ObjC Var(warn_declaration_after_statement) Init(-1) Warning
 Warn when a declaration is found after a statement
 
 Wdelete-incomplete
@@ -358,6 +370,10 @@ LangEnabledBy(C++ ObjC++,Weffc++)
 Wdeprecated
 C C++ ObjC ObjC++ Var(warn_deprecated) Init(1) Warning
 Warn if a deprecated compiler feature, class, method, or field is used
+
+Wdesignated-init
+C ObjC Var(warn_designated_init) Init(1) Warning
+Warn about positional initialization of structs requiring designated initializers
 
 Wdiscarded-qualifiers
 C ObjC Var(warn_discarded_qualifiers) Init(1) Warning
@@ -518,6 +534,10 @@ Wmain
 LangEnabledBy(C ObjC C++ ObjC++,Wpedantic, 2, 0)
 ;
 
+Wmemset-transposed-args
+C ObjC C++ ObjC++ Var(warn_memset_transposed_args) Warning LangEnabledBy(C ObjC C++ ObjC++,Wall)
+Warn about suspicious calls to memset where the third argument is constant literal zero and the second is not
+
 Wmissing-braces
 C ObjC C++ ObjC++ Var(warn_missing_braces) Warning LangEnabledBy(C ObjC,Wall)
 Warn about possibly missing braces around initializers
@@ -578,7 +598,7 @@ Wmudflap
 C ObjC C++ ObjC++ Ignore Warn(switch %qs is no longer supported)
 
 Wmultichar
-C ObjC C++ ObjC++ Warning
+C ObjC C++ ObjC++ CPP(warn_multichar) Var(cpp_warn_multichar) Warning
 Warn about use of multi-character character constants
 
 Wnarrowing
@@ -682,7 +702,7 @@ C ObjC C++ ObjC++ Var(warn_pragmas) Init(1) Warning
 Warn about misuses of pragmas
 
 Wdate-time
-Common Var(cpp_warn_date_time) Warning
+C ObjC C++ ObjC++ CPP(warn_date_time) Var(cpp_warn_date_time) Warning
 Warn about __TIME__, __DATE__ and __TIMESTAMP__ usage
 
 Wproperty-assign-default
@@ -700,10 +720,6 @@ Warn about multiple declarations of the same object
 Wreorder
 C++ ObjC++ Var(warn_reorder) Warning LangEnabledBy(C++ ObjC++,Wall)
 Warn when the compiler reorders code
-
-Wreturn-local-addr
-C ObjC C++ ObjC++ Var(warn_return_local_addr) Init(1) Warning
-Warn about returning a pointer/reference to a local or temporary variable.
 
 Wreturn-type
 C ObjC C++ ObjC++ Var(warn_return_type) Warning LangEnabledBy(C ObjC C++ ObjC++,Wall)
@@ -822,8 +838,12 @@ C ObjC C++ ObjC++ Var(warn_unused_result) Init(1) Warning
 Warn if a caller of a function, marked with attribute warn_unused_result, does not use its return value
 
 Wvariadic-macros
-C ObjC C++ ObjC++ Var(cpp_warn_variadic_macros) Init(1) Warning
+C ObjC C++ ObjC++ CPP(warn_variadic_macros) Var(cpp_warn_variadic_macros) Warning LangEnabledBy(C ObjC C++ ObjC++,Wpedantic)
 Warn about using variadic macros
+
+Wvariadic-macros
+LangEnabledBy(C ObjC C++ ObjC++,Wtraditional)
+;
 
 Wvarargs
 C ObjC C++ ObjC++ Warning Var(warn_varargs) Init(1)
@@ -1268,10 +1288,6 @@ funsigned-char
 C ObjC C++ ObjC++ LTO Var(flag_signed_char, 0)
 Make \"char\" unsigned by default
 
-fuse-all-virtuals
-C++ ObjC++ Var(flag_use_all_virtuals) Init(1)
-Treat all virtual functions as odr-used
-
 fuse-cxa-atexit
 C++ ObjC++ Var(flag_use_cxa_atexit) Init(DEFAULT_USE_CXA_ATEXIT)
 Use __cxa_atexit to register destructors
@@ -1424,11 +1440,12 @@ C++ ObjC++ Alias(std=c++11) Undocumented
 Deprecated in favor of -std=c++11
 
 std=c++1y
-C++ ObjC++
-Conform to the ISO 2014(?) C++ draft standard (experimental and incomplete support)
+C++ ObjC++ Alias(std=c++14) Undocumented
+Deprecated in favor of -std=c++14
 
 std=c++14
-C++ ObjC++ Alias(std=c++1y) Undocumented
+C++ ObjC++ Undocumented
+Conform to the ISO 2014 C++ standard (experimental and incomplete support)
 
 std=c++1z
 C++ ObjC++
@@ -1480,18 +1497,18 @@ C++ ObjC++ Alias(std=gnu++11)
 Deprecated in favor of -std=gnu++11
 
 std=gnu++1y
-C++ ObjC++
-Conform to the ISO 201y(4?) C++ draft standard with GNU extensions (experimental and incomplete support)
+C++ ObjC++ Alias(std=gnu++14) Undocumented
 
 std=gnu++14
-C++ ObjC++ Alias(std=gnu++1y) Undocumented
+C++ ObjC++
+Conform to the ISO 2014 C++ standard with GNU extensions (experimental and incomplete support)
 
 std=gnu++1z
 C++ ObjC++
 Conform to the ISO 201z(7?) C++ draft standard with GNU extensions (experimental and incomplete support)
 
 std=gnu++17
-C++ ObjC++ Alias(std=gnu++1y) Undocumented
+C++ ObjC++ Alias(std=gnu++1z) Undocumented
 
 std=gnu11
 C ObjC

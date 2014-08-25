@@ -182,7 +182,7 @@ diagnostic_file_cache_init (void)
     fcache_tab = new fcache[fcache_tab_size];
 }
 
-/* Free the ressources used by the set of cache used for files accessed
+/* Free the resources used by the set of cache used for files accessed
    by caret diagnostic.  */
 
 void
@@ -711,6 +711,22 @@ location_get_source_line (expanded_location xloc,
     *line_len = len;
 
   return read ? buffer : NULL;
+}
+
+/* Test if the location originates from the spelling location of a
+   builtin-tokens.  That is, return TRUE if LOC is a (possibly
+   virtual) location of a built-in token that appears in the expansion
+   list of a macro.  Please note that this function also works on
+   tokens that result from built-in tokens.  For instance, the
+   function would return true if passed a token "4" that is the result
+   of the expansion of the built-in __LINE__ macro.  */
+bool
+is_location_from_builtin_token (source_location loc)
+{
+  const line_map *map = NULL;
+  loc = linemap_resolve_location (line_table, loc,
+				  LRK_SPELLING_LOCATION, &map);
+  return loc == BUILTINS_LOCATION;
 }
 
 /* Expand the source location LOC into a human readable location.  If

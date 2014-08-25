@@ -734,7 +734,7 @@ rx_print_operand (FILE * file, rtx op, int letter)
       break;
 
     case 'R':
-      gcc_assert (GET_MODE_SIZE (GET_MODE (op)) < 4);
+      gcc_assert (GET_MODE_SIZE (GET_MODE (op)) <= 4);
       unsigned_load = true;
       /* Fall through.  */
     case 'Q':
@@ -2787,12 +2787,13 @@ rx_option_override (void)
 
   rx_override_options_after_change ();
 
+  /* These values are bytes, not log.  */
   if (align_jumps == 0 && ! optimize_size)
-    align_jumps = ((rx_cpu_type == RX100 || rx_cpu_type == RX200) ? 2 : 3);
+    align_jumps = ((rx_cpu_type == RX100 || rx_cpu_type == RX200) ? 4 : 8);
   if (align_loops == 0 && ! optimize_size)
-    align_loops = ((rx_cpu_type == RX100 || rx_cpu_type == RX200) ? 2 : 3);
+    align_loops = ((rx_cpu_type == RX100 || rx_cpu_type == RX200) ? 4 : 8);
   if (align_labels == 0 && ! optimize_size)
-    align_labels = ((rx_cpu_type == RX100 || rx_cpu_type == RX200) ? 2 : 3);
+    align_labels = ((rx_cpu_type == RX100 || rx_cpu_type == RX200) ? 4 : 8);
 }
 
 
@@ -3199,9 +3200,10 @@ rx_align_for_label (rtx lab, int uses_threshold)
 
   if (optimize_size)
     return 0;
+  /* These values are log, not bytes.  */
   if (rx_cpu_type == RX100 || rx_cpu_type == RX200)
-    return 2;
-  return 2;
+    return 2; /* 4 bytes */
+  return 3;   /* 8 bytes */
 }
 
 static int

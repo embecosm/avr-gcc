@@ -51,7 +51,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "common/common-target.h"
 #include "targhooks.h"
 #include "cgraph.h"
-#include "pointer-set.h"
+#include "hash-set.h"
 #include "asan.h"
 #include "basic-block.h"
 
@@ -440,8 +440,8 @@ resolve_unique_section (tree decl, int reloc ATTRIBUTE_UNUSED,
     {
       targetm.asm_out.unique_section (decl, reloc);
       if (DECL_SECTION_NAME (decl))
-        symtab_for_node_and_aliases (symtab_get_node (decl),
-				     set_implicit_section, NULL, true);
+	symtab_node::get (decl)->call_for_symbol_and_aliases
+	  (set_implicit_section, NULL, true);
     }
 }
 
@@ -521,7 +521,7 @@ get_named_text_section (tree decl,
 	  buffer = ACONCAT ((stripped_name, named_section_suffix, NULL));
 	  return get_named_section (decl, buffer, 0);
 	}
-      else if (symtab_get_node (decl)->implicit_section)
+      else if (symtab_node::get (decl)->implicit_section)
 	{
 	  const char *name;
 
@@ -550,7 +550,7 @@ default_function_section (tree decl, enum node_frequency freq,
   /* Old GNU linkers have buggy --gc-section support, which sometimes
      results in .gcc_except_table* sections being garbage collected.  */
   if (decl
-      && symtab_get_node (decl)->implicit_section)
+      && symtab_node::get (decl)->implicit_section)
     return NULL;
 #endif
 
@@ -606,7 +606,7 @@ function_section_1 (tree decl, bool force_cold)
 
   if (decl)
     {
-      struct cgraph_node *node = cgraph_get_node (decl);
+      struct cgraph_node *node = cgraph_node::get (decl);
 
       if (node)
 	{
@@ -956,7 +956,10 @@ bool
 bss_initializer_p (const_tree decl)
 {
   return (DECL_INITIAL (decl) == NULL
-	  || DECL_INITIAL (decl) == error_mark_node
+	  /* In LTO we have no errors in program; error_mark_node is used
+	     to mark offlined constructors.  */
+	  || (DECL_INITIAL (decl) == error_mark_node
+	      && !in_lto_p)
 	  || (flag_zero_initialized_in_bss
 	      /* Leave constant zeroes in .rodata so they
 		 can be shared.  */
@@ -1017,7 +1020,9 @@ align_variable (tree decl, bool dont_output_data)
 #endif
 #ifdef CONSTANT_ALIGNMENT
 	  if (DECL_INITIAL (decl) != 0
-	      && DECL_INITIAL (decl) != error_mark_node)
+	      /* In LTO we have no errors in program; error_mark_node is used
+		 to mark offlined constructors.  */
+	      && (in_lto_p || DECL_INITIAL (decl) != error_mark_node))
 	    {
 	      unsigned int const_align
 		= CONSTANT_ALIGNMENT (DECL_INITIAL (decl), align);
@@ -1068,7 +1073,10 @@ get_variable_align (tree decl)
 	align = data_align;
 #endif
 #ifdef CONSTANT_ALIGNMENT
-      if (DECL_INITIAL (decl) != 0 && DECL_INITIAL (decl) != error_mark_node)
+      if (DECL_INITIAL (decl) != 0
+	  /* In LTO we have no errors in program; error_mark_node is used
+	     to mark offlined constructors.  */
+	  && (in_lto_p || DECL_INITIAL (decl) != error_mark_node))
 	{
 	  unsigned int const_align = CONSTANT_ALIGNMENT (DECL_INITIAL (decl),
 							 align);
@@ -1092,12 +1100,19 @@ get_variable_section (tree decl, bool prefer_noswitch_p)
 {
   addr_space_t as = ADDR_SPACE_GENERIC;
   int reloc;
-  symtab_node *snode = symtab_get_node (decl);
-  if (snode)
-    decl = symtab_alias_ultimate_target (snode)->decl;
+  varpool_node *vnode = varpool_node::get (decl);
+  if (vnode)
+    {
+      vnode = vnode->ultimate_alias_target ();
+      decl = vnode->decl;
+    }
 
   if (TREE_TYPE (decl) != error_mark_node)
     as = TYPE_ADDR_SPACE (TREE_TYPE (decl));
+
+  /* We need the constructor to figure out reloc flag.  */
+  if (vnode)
+    vnode->get_constructor ();
 
   if (DECL_COMMON (decl))
     {
@@ -1210,7 +1225,7 @@ use_blocks_for_decl_p (tree decl)
   /* If this decl is an alias, then we don't want to emit a
      definition.  */
   if (TREE_CODE (decl) == VAR_DECL
-      && (snode = symtab_get_node (decl)) != NULL
+      && (snode = symtab_node::get (decl)) != NULL
       && snode->alias)
     return false;
 
@@ -1600,7 +1615,7 @@ decide_function_section (tree decl)
 
  if (DECL_SECTION_NAME (decl))
     {
-      struct cgraph_node *node = cgraph_get_node (current_function_decl);
+      struct cgraph_node *node = cgraph_node::get (current_function_decl);
       /* Calls to function_section rely on first_function_block_is_cold
 	 being accurate.  */
       first_function_block_is_cold = (node
@@ -1963,6 +1978,9 @@ assemble_variable_contents (tree decl, const char *name,
 
   if (!dont_output_data)
     {
+      /* Caller is supposed to use varpool_get_constructor when it wants
+	 to output the body.  */
+      gcc_assert (!in_lto_p || DECL_INITIAL (decl) != error_mark_node);
       if (DECL_INITIAL (decl)
 	  && DECL_INITIAL (decl) != error_mark_node
 	  && !initializer_zerop (DECL_INITIAL (decl)))
@@ -2231,7 +2249,7 @@ static bool pending_assemble_externals_processed;
 
 /* Avoid O(external_decls**2) lookups in the pending_assemble_externals
    TREE_LIST in assemble_external.  */
-static struct pointer_set_t *pending_assemble_externals_set;
+static hash_set<tree> *pending_assemble_externals_set;
 
 /* True if DECL is a function decl for which no out-of-line copy exists.
    It is assumed that DECL's assembler name has been set.  */
@@ -2285,7 +2303,7 @@ process_pending_assemble_externals (void)
 
   pending_assemble_externals = 0;
   pending_assemble_externals_processed = true;
-  pointer_set_destroy (pending_assemble_externals_set);
+  delete pending_assemble_externals_set;
 #endif
 }
 
@@ -2343,7 +2361,7 @@ assemble_external (tree decl ATTRIBUTE_UNUSED)
       return;
     }
 
-  if (! pointer_set_insert (pending_assemble_externals_set, decl))
+  if (! pending_assemble_externals_set->add (decl))
     pending_assemble_externals = tree_cons (NULL, decl,
 					    pending_assemble_externals);
 #endif
@@ -2387,14 +2405,14 @@ mark_decl_referenced (tree decl)
 	 If we know a method will be emitted in other TU and no new
 	 functions can be marked reachable, just use the external
 	 definition.  */
-      struct cgraph_node *node = cgraph_get_create_node (decl);
+      struct cgraph_node *node = cgraph_node::get_create (decl);
       if (!DECL_EXTERNAL (decl)
 	  && !node->definition)
-	cgraph_mark_force_output_node (node);
+	node->mark_force_output ();
     }
   else if (TREE_CODE (decl) == VAR_DECL)
     {
-      varpool_node *node = varpool_node_for_decl (decl);
+      varpool_node *node = varpool_node::get_create (decl);
       /* C++ frontend use mark_decl_references to force COMDAT variables
          to be output that might appear dead otherwise.  */
       node->force_output = true;
@@ -3400,7 +3418,7 @@ tree_output_constant_def (tree exp)
     }
 
   decl = SYMBOL_REF_DECL (XEXP (desc->rtl, 0));
-  varpool_finalize_decl (decl);
+  varpool_node::finalize_decl (decl);
   return decl;
 }
 
@@ -3898,7 +3916,7 @@ mark_constant (rtx *current_rtx, void *data ATTRIBUTE_UNUSED)
    deferred strings that are used.  */
 
 static void
-mark_constants (rtx insn)
+mark_constants (rtx_insn *insn)
 {
   if (!INSN_P (insn))
     return;
@@ -3928,7 +3946,7 @@ mark_constants (rtx insn)
 static void
 mark_constant_pool (void)
 {
-  rtx insn;
+  rtx_insn *insn;
 
   if (!crtl->uses_const_pool && n_deferred_constants == 0)
     return;
@@ -5632,9 +5650,9 @@ assemble_alias (tree decl, tree target)
 
   /* Allow aliases to aliases.  */
   if (TREE_CODE (decl) == FUNCTION_DECL)
-    cgraph_get_create_node (decl)->alias = true;
+    cgraph_node::get_create (decl)->alias = true;
   else
-    varpool_node_for_decl (decl)->alias = true;
+    varpool_node::get_create (decl)->alias = true;
 
   /* If the target has already been emitted, we don't have to queue the
      alias.  This saves a tad of memory.  */
@@ -5728,8 +5746,8 @@ dump_tm_clone_pairs (vec<tm_alias_pair> tm_alias_pairs)
     {
       tree src = p->from;
       tree dst = p->to;
-      struct cgraph_node *src_n = cgraph_get_node (src);
-      struct cgraph_node *dst_n = cgraph_get_node (dst);
+      struct cgraph_node *src_n = cgraph_node::get (src);
+      struct cgraph_node *dst_n = cgraph_node::get (dst);
 
       /* The function ipa_tm_create_version() marks the clone as needed if
 	 the original function was needed.  But we also mark the clone as
@@ -5878,9 +5896,9 @@ make_decl_one_only (tree decl, tree comdat_group)
   TREE_PUBLIC (decl) = 1;
 
   if (TREE_CODE (decl) == VAR_DECL)
-    symbol = varpool_node_for_decl (decl);
+    symbol = varpool_node::get_create (decl);
   else
-    symbol = cgraph_get_create_node (decl);
+    symbol = cgraph_node::get_create (decl);
 
   if (SUPPORTS_ONE_ONLY)
     {
@@ -5890,7 +5908,8 @@ make_decl_one_only (tree decl, tree comdat_group)
       symbol->set_comdat_group (comdat_group);
     }
   else if (TREE_CODE (decl) == VAR_DECL
-      && (DECL_INITIAL (decl) == 0 || DECL_INITIAL (decl) == error_mark_node))
+           && (DECL_INITIAL (decl) == 0
+	       || (!in_lto_p && DECL_INITIAL (decl) == error_mark_node)))
     DECL_COMMON (decl) = 1;
   else
     {
@@ -5972,7 +5991,7 @@ init_varasm_once (void)
     readonly_data_section = text_section;
 
 #ifdef ASM_OUTPUT_EXTERNAL
-  pending_assemble_externals_set = pointer_set_create ();
+  pending_assemble_externals_set = new hash_set<tree>;
 #endif
 }
 
@@ -6692,7 +6711,7 @@ default_binds_local_p_1 (const_tree exp, int shlib)
   if (TREE_CODE (exp) == VAR_DECL && TREE_PUBLIC (exp)
       && (TREE_STATIC (exp) || DECL_EXTERNAL (exp)))
     {
-      varpool_node *vnode = varpool_get_node (exp);
+      varpool_node *vnode = varpool_node::get (exp);
       if (vnode && (resolution_local_p (vnode->resolution) || vnode->in_other_partition))
 	resolved_locally = true;
       if (vnode
@@ -6701,7 +6720,7 @@ default_binds_local_p_1 (const_tree exp, int shlib)
     }
   else if (TREE_CODE (exp) == FUNCTION_DECL && TREE_PUBLIC (exp))
     {
-      struct cgraph_node *node = cgraph_get_node (exp);
+      struct cgraph_node *node = cgraph_node::get (exp);
       if (node
 	  && (resolution_local_p (node->resolution) || node->in_other_partition))
 	resolved_locally = true;
@@ -6752,7 +6771,7 @@ default_binds_local_p_1 (const_tree exp, int shlib)
   else if (DECL_COMMON (exp)
 	   && !resolved_locally
 	   && (DECL_INITIAL (exp) == NULL
-	       || DECL_INITIAL (exp) == error_mark_node))
+	       || (!in_lto_p && DECL_INITIAL (exp) == error_mark_node)))
     local_p = false;
   /* Otherwise we're left with initialized (or non-common) global data
      which is of necessity defined locally.  */
@@ -6785,14 +6804,14 @@ decl_binds_to_current_def_p (const_tree decl)
   if (TREE_CODE (decl) == VAR_DECL
       && (TREE_STATIC (decl) || DECL_EXTERNAL (decl)))
     {
-      varpool_node *vnode = varpool_get_node (decl);
+      varpool_node *vnode = varpool_node::get (decl);
       if (vnode
 	  && vnode->resolution != LDPR_UNKNOWN)
 	return resolution_to_local_definition_p (vnode->resolution);
     }
   else if (TREE_CODE (decl) == FUNCTION_DECL)
     {
-      struct cgraph_node *node = cgraph_get_node (decl);
+      struct cgraph_node *node = cgraph_node::get (decl);
       if (node
 	  && node->resolution != LDPR_UNKNOWN)
 	return resolution_to_local_definition_p (node->resolution);
@@ -6807,7 +6826,7 @@ decl_binds_to_current_def_p (const_tree decl)
     return false;
   if (DECL_COMMON (decl)
       && (DECL_INITIAL (decl) == NULL
-	  || DECL_INITIAL (decl) == error_mark_node))
+	  || (!in_lto_p && DECL_INITIAL (decl) == error_mark_node)))
     return false;
   if (DECL_EXTERNAL (decl))
     return false;
@@ -7042,10 +7061,10 @@ place_block_symbol (rtx symbol)
       struct symtab_node *snode;
       decl = SYMBOL_REF_DECL (symbol);
 
-      snode = symtab_get_node (decl);
+      snode = symtab_node::get (decl);
       if (snode->alias)
 	{
-	  rtx target = DECL_RTL (symtab_alias_ultimate_target (snode)->decl);
+	  rtx target = DECL_RTL (snode->ultimate_alias_target ()->decl);
 
 	  place_block_symbol (target);
 	  SYMBOL_REF_BLOCK_OFFSET (symbol) = SYMBOL_REF_BLOCK_OFFSET (target);

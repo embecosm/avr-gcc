@@ -403,7 +403,7 @@ copy_cost (rtx x, enum machine_mode mode, reg_class_t rclass, bool to_p,
 static void
 record_reg_classes (int n_alts, int n_ops, rtx *ops,
 		    enum machine_mode *modes, const char **constraints,
-		    rtx insn, enum reg_class *pref)
+		    rtx_insn *insn, enum reg_class *pref)
 {
   int alt;
   int i, j, k;
@@ -1168,7 +1168,7 @@ record_address_regs (enum machine_mode mode, addr_space_t as, rtx x,
 
 /* Calculate the costs of insn operands.  */
 static void
-record_operand_costs (rtx insn, enum reg_class *pref)
+record_operand_costs (rtx_insn *insn, enum reg_class *pref)
 {
   const char *constraints[MAX_RECOG_OPERANDS];
   enum machine_mode modes[MAX_RECOG_OPERANDS];
@@ -1312,8 +1312,8 @@ record_operand_costs (rtx insn, enum reg_class *pref)
 /* Process one insn INSN.  Scan it and record each time it would save
    code to put a certain allocnos in a certain class.  Return the last
    insn processed, so that the scan can be continued from there.  */
-static rtx
-scan_one_insn (rtx insn)
+static rtx_insn *
+scan_one_insn (rtx_insn *insn)
 {
   enum rtx_code pat_code;
   rtx set, note;
@@ -1496,7 +1496,7 @@ print_pseudo_costs (FILE *f)
 static void
 process_bb_for_costs (basic_block bb)
 {
-  rtx insn;
+  rtx_insn *insn;
 
   frequency = REG_FREQ_FROM_BB (bb);
   if (frequency == 0)
@@ -1753,6 +1753,20 @@ find_costs_and_classes (FILE *dump_file)
 	  alt_class = ira_allocno_class_translate[alt_class];
 	  if (best_cost > i_mem_cost)
 	    regno_aclass[i] = NO_REGS;
+	  else if (!optimize && !targetm.class_likely_spilled_p (best))
+	    /* Registers in the alternative class are likely to need
+	       longer or slower sequences than registers in the best class.
+	       When optimizing we make some effort to use the best class
+	       over the alternative class where possible, but at -O0 we
+	       effectively give the alternative class equal weight.
+	       We then run the risk of using slower alternative registers
+	       when plenty of registers from the best class are still free.
+	       This is especially true because live ranges tend to be very
+	       short in -O0 code and so register pressure tends to be low.
+
+	       Avoid that by ignoring the alternative class if the best
+	       class has plenty of registers.  */
+	    regno_aclass[i] = best;
 	  else
 	    {
 	      /* Make the common class the biggest class of best and
@@ -1889,7 +1903,8 @@ process_bb_node_for_hard_reg_moves (ira_loop_tree_node_t loop_tree_node)
   ira_loop_tree_node_t curr_loop_tree_node;
   enum reg_class rclass;
   basic_block bb;
-  rtx insn, set, src, dst;
+  rtx_insn *insn;
+  rtx set, src, dst;
 
   bb = loop_tree_node->bb;
   if (bb == NULL)

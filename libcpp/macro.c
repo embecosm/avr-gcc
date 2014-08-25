@@ -84,7 +84,7 @@ struct macro_arg_token_iter
 
 static int enter_macro_context (cpp_reader *, cpp_hashnode *,
 				const cpp_token *, source_location);
-static int builtin_macro (cpp_reader *, cpp_hashnode *);
+static int builtin_macro (cpp_reader *, cpp_hashnode *, source_location);
 static void push_ptoken_context (cpp_reader *, cpp_hashnode *, _cpp_buff *,
 				 const cpp_token **, unsigned int);
 static void push_extended_tokens_context (cpp_reader *, cpp_hashnode *,
@@ -399,9 +399,10 @@ _cpp_builtin_macro_text (cpp_reader *pfile, cpp_hashnode *node)
 /* Convert builtin macros like __FILE__ to a token and push it on the
    context stack.  Also handles _Pragma, for which a new token may not
    be created.  Returns 1 if it generates a new token context, 0 to
-   return the token to the caller.  */
+   return the token to the caller.  LOC is the location of the expansion
+   point of the macro.  */
 static int
-builtin_macro (cpp_reader *pfile, cpp_hashnode *node)
+builtin_macro (cpp_reader *pfile, cpp_hashnode *node, source_location loc)
 {
   const uchar *buf;
   size_t len;
@@ -428,7 +429,30 @@ builtin_macro (cpp_reader *pfile, cpp_hashnode *node)
 
   /* Set pfile->cur_token as required by _cpp_lex_direct.  */
   pfile->cur_token = _cpp_temp_token (pfile);
-  _cpp_push_token_context (pfile, NULL, _cpp_lex_direct (pfile), 1);
+  cpp_token *token = _cpp_lex_direct (pfile);
+  /* We should point to the expansion point of the builtin macro.  */
+  token->src_loc = loc;
+  if (pfile->context->tokens_kind == TOKENS_KIND_EXTENDED)
+    {
+      /* We are tracking tokens resulting from macro expansion.
+	 Create a macro line map and generate a virtual location for
+	 the token resulting from the expansion of the built-in
+	 macro.  */
+      source_location *virt_locs = NULL;
+      _cpp_buff *token_buf = tokens_buff_new (pfile, 1, &virt_locs);
+      const line_map * map =
+	linemap_enter_macro (pfile->line_table, node,
+					    token->src_loc, 1);
+      tokens_buff_add_token (token_buf, virt_locs, token,
+			     pfile->line_table->builtin_location,
+			     pfile->line_table->builtin_location,
+			    map, /*macro_token_index=*/0);
+      push_extended_tokens_context (pfile, node, token_buf, virt_locs,
+				    (const cpp_token **)token_buf->base,
+				    1);
+    }
+  else
+    _cpp_push_token_context (pfile, NULL, token, 1);
   if (pfile->buffer->cur != pfile->buffer->rlimit)
     cpp_error (pfile, CPP_DL_ICE, "invalid built-in macro \"%s\"",
 	       NODE_NAME (node));
@@ -1191,7 +1215,7 @@ enter_macro_context (cpp_reader *pfile, cpp_hashnode *node,
 
   pfile->about_to_expand_macro_p = false;
   /* Handle built-in macros and the _Pragma operator.  */
-  return builtin_macro (pfile, node);
+  return builtin_macro (pfile, node, location);
 }
 
 /* De-allocate the memory used by BUFF which is an array of instances
@@ -1763,7 +1787,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
 		       " in ISO C++98",
 		       NODE_NAME (node),
 		       src->val.macro_arg.arg_no);
-	  else
+	  else if (CPP_OPTION (pfile, cpp_warn_c90_c99_compat))
 	    cpp_error (pfile, CPP_DL_PEDWARN,
 		       "invoking macro %s argument %d: "
 		       "empty macro arguments are undefined"
@@ -1771,6 +1795,16 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
 		       NODE_NAME (node),
 		       src->val.macro_arg.arg_no);
 	}
+      else if (CPP_OPTION (pfile, cpp_warn_c90_c99_compat) > 0
+	       && ! macro->syshdr
+	       && ! cpp_in_system_header (pfile)
+	       && ! CPP_OPTION (pfile, cplusplus))
+	cpp_error (pfile, CPP_DL_WARNING,
+		   "invoking macro %s argument %d: "
+		   "empty macro arguments are undefined"
+		   " in ISO C90",
+		   NODE_NAME (node),
+		   src->val.macro_arg.arg_no);
 
       /* Avoid paste on RHS (even case count == 0).  */
       if (!pfile->state.in_directive && !(src->flags & PASTE_LEFT))
@@ -2824,6 +2858,10 @@ parse_params (cpp_reader *pfile, cpp_macro *macro)
 			(pfile, CPP_W_VARIADIC_MACROS,
 			"anonymous variadic macros were introduced in C99");
 		}
+	      else if (CPP_OPTION (pfile, cpp_warn_c90_c99_compat) > 0
+		       && ! CPP_OPTION (pfile, cplusplus))
+		cpp_error (pfile, CPP_DL_WARNING,
+			   "anonymous variadic macros were introduced in C99");
 	    }
 	  else if (CPP_OPTION (pfile, cpp_pedantic)
 		   && CPP_OPTION (pfile, warn_variadic_macros))

@@ -649,7 +649,7 @@ struct df_d
 			: BLOCK_FOR_INSN (DF_REF_INSN (REF)))
 #define DF_REF_BBNO(REF) (DF_REF_BB (REF)->index)
 #define DF_REF_INSN_INFO(REF) ((REF)->base.insn_info)
-#define DF_REF_INSN(REF) ((REF)->base.insn_info->insn)
+extern rtx_insn *DF_REF_INSN (df_ref ref);
 #define DF_REF_INSN_UID(REF) (INSN_UID (DF_REF_INSN(REF)))
 #define DF_REF_CLASS(REF) ((REF)->base.cl)
 #define DF_REF_TYPE(REF) ((REF)->base.type)
@@ -1184,20 +1184,22 @@ df_single_use (const df_insn_info *info)
 
 /* web */
 
-/* This entry is allocated for each reference in the insn stream.  */
-struct web_entry
+class web_entry_base
 {
-  /* Pointer to the parent in the union/find tree.  */
-  struct web_entry *pred;
-  /* Newly assigned register to the entry.  Set only for roots.  */
-  rtx reg;
-  void* extra_info;
-};
+ private:
+  /* Reference to the parent in the union/find tree.  */
+  web_entry_base *pred_pvt;
 
-extern struct web_entry *unionfind_root (struct web_entry *);
-extern bool unionfind_union (struct web_entry *, struct web_entry *);
-extern void union_defs (df_ref, struct web_entry *,
-			unsigned int *used, struct web_entry *,
-			bool (*fun) (struct web_entry *, struct web_entry *));
+ public:
+  /* Accessors.  */
+  web_entry_base *pred () { return pred_pvt; }
+  void set_pred (web_entry_base *p) { pred_pvt = p; }
+
+  /* Find representative in union-find tree.  */
+  web_entry_base *unionfind_root ();
+
+  /* Union with another set, returning TRUE if they are already unioned.  */
+  friend bool unionfind_union (web_entry_base *first, web_entry_base *second);
+};
 
 #endif /* GCC_DF_H */

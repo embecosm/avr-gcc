@@ -103,8 +103,8 @@ dk_to_ds (enum reg_note dk)
 void
 init_dep_1 (dep_t dep, rtx pro, rtx con, enum reg_note type, ds_t ds)
 {
-  DEP_PRO (dep) = pro;
-  DEP_CON (dep) = con;
+  SET_DEP_PRO (dep) = pro;
+  SET_DEP_CON (dep) = con;
   DEP_TYPE (dep) = type;
   DEP_STATUS (dep) = ds;
   DEP_COST (dep) = UNKNOWN_DEP_COST;
@@ -927,8 +927,8 @@ sd_find_dep_between (rtx pro, rtx con, bool resolved_p)
 static enum DEPS_ADJUST_RESULT
 maybe_add_or_update_dep_1 (dep_t dep, bool resolved_p, rtx mem1, rtx mem2)
 {
-  rtx elem = DEP_PRO (dep);
-  rtx insn = DEP_CON (dep);
+  rtx_insn *elem = DEP_PRO (dep);
+  rtx_insn *insn = DEP_CON (dep);
 
   gcc_assert (INSN_P (insn) && INSN_P (elem));
 
@@ -1118,8 +1118,8 @@ change_spec_dep_to_hard (sd_iterator_def sd_it)
   dep_node_t node = DEP_LINK_NODE (*sd_it.linkp);
   dep_link_t link = DEP_NODE_BACK (node);
   dep_t dep = DEP_NODE_DEP (node);
-  rtx elem = DEP_PRO (dep);
-  rtx insn = DEP_CON (dep);
+  rtx_insn *elem = DEP_PRO (dep);
+  rtx_insn *insn = DEP_CON (dep);
 
   move_dep_link (link, INSN_SPEC_BACK_DEPS (insn), INSN_HARD_BACK_DEPS (insn));
 
@@ -1296,7 +1296,7 @@ get_back_and_forw_lists (dep_t dep, bool resolved_p,
 			 deps_list_t *back_list_ptr,
 			 deps_list_t *forw_list_ptr)
 {
-  rtx con = DEP_CON (dep);
+  rtx_insn *con = DEP_CON (dep);
 
   if (!resolved_p)
     {
@@ -1322,8 +1322,8 @@ sd_add_dep (dep_t dep, bool resolved_p)
   dep_node_t n = create_dep_node ();
   deps_list_t con_back_deps;
   deps_list_t pro_forw_deps;
-  rtx elem = DEP_PRO (dep);
-  rtx insn = DEP_CON (dep);
+  rtx_insn *elem = DEP_PRO (dep);
+  rtx_insn *insn = DEP_CON (dep);
 
   gcc_assert (INSN_P (insn) && INSN_P (elem) && insn != elem);
 
@@ -1365,8 +1365,8 @@ sd_resolve_dep (sd_iterator_def sd_it)
 {
   dep_node_t node = DEP_LINK_NODE (*sd_it.linkp);
   dep_t dep = DEP_NODE_DEP (node);
-  rtx pro = DEP_PRO (dep);
-  rtx con = DEP_CON (dep);
+  rtx_insn *pro = DEP_PRO (dep);
+  rtx_insn *con = DEP_CON (dep);
 
   if (dep_spec_p (dep))
     move_dep_link (DEP_NODE_BACK (node), INSN_SPEC_BACK_DEPS (con),
@@ -1386,8 +1386,8 @@ sd_unresolve_dep (sd_iterator_def sd_it)
 {
   dep_node_t node = DEP_LINK_NODE (*sd_it.linkp);
   dep_t dep = DEP_NODE_DEP (node);
-  rtx pro = DEP_PRO (dep);
-  rtx con = DEP_CON (dep);
+  rtx_insn *pro = DEP_PRO (dep);
+  rtx_insn *con = DEP_CON (dep);
 
   if (dep_spec_p (dep))
     move_dep_link (DEP_NODE_BACK (node), INSN_RESOLVED_BACK_DEPS (con),
@@ -1416,7 +1416,7 @@ sd_copy_back_deps (rtx to, rtx from, bool resolved_p)
       dep_def _new_dep, *new_dep = &_new_dep;
 
       copy_dep (new_dep, dep);
-      DEP_CON (new_dep) = to;
+      SET_DEP_CON (new_dep) = to;
       sd_add_dep (new_dep, resolved_p);
     }
 }
@@ -1428,8 +1428,8 @@ sd_delete_dep (sd_iterator_def sd_it)
 {
   dep_node_t n = DEP_LINK_NODE (*sd_it.linkp);
   dep_t dep = DEP_NODE_DEP (n);
-  rtx pro = DEP_PRO (dep);
-  rtx con = DEP_CON (dep);
+  rtx_insn *pro = DEP_PRO (dep);
+  rtx_insn *con = DEP_CON (dep);
   deps_list_t con_back_deps;
   deps_list_t pro_forw_deps;
 
@@ -1670,7 +1670,7 @@ chain_to_prev_insn (rtx insn)
   FOR_EACH_DEP (insn, SD_LIST_BACK, sd_it, dep)
     {
       rtx i = insn;
-      rtx pro = DEP_PRO (dep);
+      rtx_insn *pro = DEP_PRO (dep);
 
       do
 	{
@@ -2750,7 +2750,8 @@ sched_analyze_2 (struct deps_desc *deps, rtx x, rtx insn)
 	   Consider for instance a volatile asm that changes the fpu rounding
 	   mode.  An insn should not be moved across this even if it only uses
 	   pseudo-regs because it might give an incorrectly rounded result.  */
-	if (code != ASM_OPERANDS || MEM_VOLATILE_P (x))
+	if ((code != ASM_OPERANDS || MEM_VOLATILE_P (x))
+	    && !DEBUG_INSN_P (insn))
 	  reg_pending_barrier = TRUE_BARRIER;
 
 	/* For all ASM_OPERANDS, we must traverse the vector of input operands.
@@ -2820,35 +2821,42 @@ sched_analyze_2 (struct deps_desc *deps, rtx x, rtx insn)
     sched_deps_info->finish_rhs ();
 }
 
-/* Try to group comparison and the following conditional jump INSN if
-   they're already adjacent. This is to prevent scheduler from scheduling
-   them apart.  */
+/* Try to group two fuseable insns together to prevent scheduler
+   from scheduling them apart.  */
 
 static void
-try_group_insn (rtx insn)
+sched_macro_fuse_insns (rtx insn)
 {
-  unsigned int condreg1, condreg2;
-  rtx cc_reg_1;
   rtx prev;
 
-  if (!any_condjump_p (insn))
-    return;
+  if (any_condjump_p (insn))
+    {
+      unsigned int condreg1, condreg2;
+      rtx cc_reg_1;
+      targetm.fixed_condition_code_regs (&condreg1, &condreg2);
+      cc_reg_1 = gen_rtx_REG (CCmode, condreg1);
+      prev = prev_nonnote_nondebug_insn (insn);
+      if (!reg_referenced_p (cc_reg_1, PATTERN (insn))
+          || !prev
+          || !modified_in_p (cc_reg_1, prev))
+        return;
+    }
+  else
+    {
+      rtx insn_set = single_set (insn);
 
-  targetm.fixed_condition_code_regs (&condreg1, &condreg2);
-  cc_reg_1 = gen_rtx_REG (CCmode, condreg1);
-  prev = prev_nonnote_nondebug_insn (insn);
-  if (!reg_referenced_p (cc_reg_1, PATTERN (insn))
-      || !prev
-      || !modified_in_p (cc_reg_1, prev))
-    return;
+      prev = prev_nonnote_nondebug_insn (insn);
+      if (!prev
+          || !insn_set
+          || !single_set (prev)
+          || !modified_in_p (SET_DEST (insn_set), prev))
+        return;
 
-  /* Different microarchitectures support macro fusions for different
-     combinations of insn pairs.  */
-  if (!targetm.sched.macro_fusion_pair_p
-      || !targetm.sched.macro_fusion_pair_p (prev, insn))
-    return;
+    }
 
-  SCHED_GROUP_P (insn) = 1;
+  if (targetm.sched.macro_fusion_pair_p (prev, insn))
+    SCHED_GROUP_P (insn) = 1;
+
 }
 
 /* Analyze an INSN with pattern X to find all dependencies.  */
@@ -2877,7 +2885,7 @@ sched_analyze_insn (struct deps_desc *deps, rtx x, rtx insn)
   /* Group compare and branch insns for macro-fusion.  */
   if (targetm.sched.macro_fusion_p
       && targetm.sched.macro_fusion_p ())
-    try_group_insn (insn);
+    sched_macro_fuse_insns (insn);
 
   if (may_trap_p (x))
     /* Avoid moving trapping instructions across function calls that might
@@ -4717,8 +4725,8 @@ find_inc (struct mem_inc_info *mii, bool backwards)
   while (sd_iterator_cond (&sd_it, &dep))
     {
       dep_node_t node = DEP_LINK_NODE (*sd_it.linkp);
-      rtx pro = DEP_PRO (dep);
-      rtx con = DEP_CON (dep);
+      rtx_insn *pro = DEP_PRO (dep);
+      rtx_insn *con = DEP_CON (dep);
       rtx inc_cand = backwards ? pro : con;
       if (DEP_NONREG (dep) || DEP_MULTIPLE (dep))
 	goto next;
@@ -4743,6 +4751,24 @@ find_inc (struct mem_inc_info *mii, bool backwards)
 			   "inc conflicts with store failure.\n");
 		goto next;
 	      }
+
+	  /* The inc instruction could have clobbers, make sure those
+	     registers are not used in mem insn.  */
+	  FOR_EACH_INSN_DEF (def, mii->inc_insn)
+	    if (!reg_overlap_mentioned_p (DF_REF_REG (def), mii->mem_reg0))
+	      {
+		df_ref use;
+		FOR_EACH_INSN_USE (use, mii->mem_insn)
+		  if (reg_overlap_mentioned_p (DF_REF_REG (def),
+					       DF_REF_REG (use)))
+		    {
+		      if (sched_verbose >= 5)
+			fprintf (sched_dump,
+				 "inc clobber used in store failure.\n");
+		      goto next;
+		    }
+	      }
+
 	  newaddr = mii->inc_input;
 	  if (mii->mem_index != NULL_RTX)
 	    newaddr = gen_rtx_PLUS (GET_MODE (newaddr), newaddr,
@@ -4887,6 +4913,26 @@ find_modifiable_mems (rtx head, rtx tail)
   if (success_in_block && sched_verbose >= 5)
     fprintf (sched_dump, "%d candidates for address modification found.\n",
 	     success_in_block);
+}
+
+rtx_insn *DEP_PRO (dep_t dep)
+{
+  return safe_as_a <rtx_insn *> (dep->pro);
+}
+
+rtx_insn *DEP_CON (dep_t dep)
+{
+  return safe_as_a <rtx_insn *> (dep->con);
+}
+
+rtx& SET_DEP_PRO (dep_t dep)
+{
+  return dep->pro;
+}
+
+rtx& SET_DEP_CON (dep_t dep)
+{
+  return dep->con;
 }
 
 #endif /* INSN_SCHEDULING */

@@ -1943,7 +1943,7 @@ df_set_clean_cfg (void)
 df_ref
 df_bb_regno_first_def_find (basic_block bb, unsigned int regno)
 {
-  rtx insn;
+  rtx_insn *insn;
   df_ref def;
 
   FOR_BB_INSNS (bb, insn)
@@ -1964,7 +1964,7 @@ df_bb_regno_first_def_find (basic_block bb, unsigned int regno)
 df_ref
 df_bb_regno_last_def_find (basic_block bb, unsigned int regno)
 {
-  rtx insn;
+  rtx_insn *insn;
   df_ref def;
 
   FOR_BB_INSNS_REVERSE (bb, insn)
@@ -2501,4 +2501,10 @@ debug_df_chain (struct df_link *link)
 {
   df_chain_dump (link, stderr);
   fputc ('\n', stderr);
+}
+
+rtx_insn *DF_REF_INSN (df_ref ref)
+{
+  rtx insn = ref->base.insn_info->insn;
+  return safe_as_a <rtx_insn *> (insn);
 }

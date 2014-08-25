@@ -68,6 +68,9 @@ AC_DEFUN([ISL_INIT_FLAGS],
     ENABLE_ISL_CHECK=no
     AC_MSG_WARN([using in-tree ISL, disabling version check])
   fi
+
+  islinc="-DCLOOG_INT_GMP ${islinc}"
+  isllibs="${isllibs} -lisl"
 ]
 )
 
@@ -119,7 +122,11 @@ AC_DEFUN([ISL_CHECK_VERSION],
     AC_RUN_IFELSE([_ISL_CHECK_CT_PROG($1,$2)],
 	[gcc_cv_isl=yes],
 	[gcc_cv_isl=no],
-	[gcc_cv_isl=yes])
+	[
+	  AC_LINK_IFELSE([_ISL_CHECK_CT_PROG($1,$2)],
+	      [gcc_cv_isl=yes],
+	      [gcc_cv_isl=no])
+	])
     AC_MSG_RESULT([$gcc_cv_isl])
 
     CFLAGS=$_isl_saved_CFLAGS

@@ -36,12 +36,9 @@ struct default_hashmap_traits
       return uintptr_t(p) >> 3;
     }
 
-  /* The right thing to do here would be using is_integral to only allow
-     template arguments of integer type, but reimplementing that is a pain, so
-     we'll just promote everything to [u]int64_t and truncate to hashval_t.  */
+  /* If the value converts to hashval_t just use it.  */
 
-  static hashval_t hash (uint64_t v) { return v; }
-  static hashval_t hash (int64_t v) { return v; }
+  template<typename T> static hashval_t hash (T v) { return v; }
 
   /* Return true if the two keys passed as arguments are equal.  */
 
@@ -93,7 +90,7 @@ private:
   static void
   mark_key_deleted (T *&k)
     {
-      k = static_cast<T *> (1);
+      k = reinterpret_cast<T *> (1);
     }
 
   template<typename T>
@@ -185,6 +182,11 @@ public:
       return e->m_value;
     }
 
+  void remove (const Key &k)
+    {
+      m_table.remove_elt_with_hash (k, Traits::hash (k));
+    }
+
   /* Call the call back on each pair of key and value with the passed in
      arg.  */
 
@@ -194,6 +196,15 @@ public:
       for (typename hash_table<hash_entry>::iterator iter = m_table.begin ();
 	   iter != m_table.end (); ++iter)
 	f ((*iter).m_key, (*iter).m_value, a);
+    }
+
+  template<typename Arg, bool (*f)(const Key &, Value *, Arg)>
+  void traverse (Arg a) const
+    {
+      for (typename hash_table<hash_entry>::iterator iter = m_table.begin ();
+	   iter != m_table.end (); ++iter)
+	if (!f ((*iter).m_key, &(*iter).m_value, a))
+	  break;
     }
 
 private:

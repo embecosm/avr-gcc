@@ -4,6 +4,7 @@
 /* Test runtime errors.  */
 
 struct S { int a[10]; };
+struct T { int a[5]; int s[2]; };
 
 int
 foo_5 (void)
@@ -47,8 +48,9 @@ fn3 (void)
 static void __attribute__ ((noinline, noclone))
 fn4 (void)
 {
-  volatile int a[5];
-  a[foo_5 ()] = 1;
+  struct T t;
+  asm ("" : : "r" (&t.a) : "memory");
+  t.a[foo_5 ()] = 1;
 }
 
 static void __attribute__ ((noinline, noclone))
@@ -162,4 +164,4 @@ main (void)
 /* { dg-output "\[^\n\r]*index 10 out of bounds for type 'int \\\[10\\\]'\[^\n\r]*(\n|\r\n|\r)" } */
 /* { dg-output "\[^\n\r]*index 10 out of bounds for type 'long int \\\*\\\[10\\\]\\\[5\\\]'\[^\n\r]*(\n|\r\n|\r)" } */
 /* { dg-output "\[^\n\r]*index 5 out of bounds for type 'char \\\*\\\*\\\*\\\[5\\\]'\[^\n\r]*(\n|\r\n|\r)" } */
-/* { dg-output "\[^\n\r]*index 5 out of bounds for type 'int \\\[5\\\]'\[^\n\r]*(\n|\r\n|\r)" } */
+/* { dg-output "\[^\n\r]*index 5 out of bounds for type 'int \\\[5\\\]'" } */

@@ -71,7 +71,8 @@ package Rtsfind is
    --    of Ada.Wide_Wide_Text_IO.
 
    --    Names of the form Interfaces_xxx are first level children of
-   --    Interfaces_CPP refers to package Interfaces.CPP
+   --    Interfaces. For example, the name Interfaces_Packed_Decimal refers to
+   --    package Interfaces.Packed_Decimal.
 
    --    Names of the form System_xxx are first level children of System, whose
    --    name is System.xxx. For example, the name System_Str_Concat refers to
@@ -169,7 +170,7 @@ package Rtsfind is
       Ada_Strings_Wide_Wide_Superbounded,
       Ada_Strings_Unbounded,
 
-      --  Children of Ada.Text_IO (for Text_IO_Kludge)
+      --  Children of Ada.Text_IO (for Check_Text_IO_Special_Unit)
 
       Ada_Text_IO_Decimal_IO,
       Ada_Text_IO_Enumeration_IO,
@@ -178,7 +179,7 @@ package Rtsfind is
       Ada_Text_IO_Integer_IO,
       Ada_Text_IO_Modular_IO,
 
-      --  Children of Ada.Wide_Text_IO (for Text_IO_Kludge)
+      --  Children of Ada.Wide_Text_IO (for Check_Text_IO_Special_Unit)
 
       Ada_Wide_Text_IO_Decimal_IO,
       Ada_Wide_Text_IO_Enumeration_IO,
@@ -187,7 +188,7 @@ package Rtsfind is
       Ada_Wide_Text_IO_Integer_IO,
       Ada_Wide_Text_IO_Modular_IO,
 
-      --  Children of Ada.Wide_Wide_Text_IO (for Text_IO_Kludge)
+      --  Children of Ada.Wide_Wide_Text_IO (for Check_Text_IO_Special_Unit)
 
       Ada_Wide_Wide_Text_IO_Decimal_IO,
       Ada_Wide_Wide_Text_IO_Enumeration_IO,
@@ -202,7 +203,6 @@ package Rtsfind is
 
       --  Children of Interfaces
 
-      Interfaces_CPP,
       Interfaces_Packed_Decimal,
 
       --  Package System
@@ -241,6 +241,7 @@ package Rtsfind is
       System_Dim,
       System_DSA_Services,
       System_DSA_Types,
+      System_Elaboration_Allocators,
       System_Exception_Table,
       System_Exceptions_Debug,
       System_Exn_Int,
@@ -373,9 +374,7 @@ package Rtsfind is
       System_Val_Real,
       System_Val_Uns,
       System_Val_WChar,
-      System_Vax_Float_Operations,
       System_Version_Control,
-      System_VMS_Exception_Table,
       System_WCh_StW,
       System_WCh_WtS,
       System_Wid_Bool,
@@ -465,7 +464,7 @@ package Rtsfind is
            Ada_Wide_Wide_Text_IO_Modular_IO;
 
    subtype Interfaces_Child is RTU_Id
-     range Interfaces_CPP .. Interfaces_Packed_Decimal;
+     range Interfaces_Packed_Decimal .. Interfaces_Packed_Decimal;
    --  Range of values for children of Interfaces
 
    subtype System_Child is RTU_Id
@@ -855,6 +854,8 @@ package Rtsfind is
      RE_Get_Passive_Partition_Id,        -- System.DSA_Services
 
      RE_Any_Container_Ptr,               -- System.DSA_Types
+
+     RE_Check_Standard_Allocator,        -- System.Elaboration_Allocators
 
      RE_Register_Exception,              -- System.Exception_Table
 
@@ -1634,60 +1635,8 @@ package Rtsfind is
      RE_Value_Wide_Character,            -- System.Val_WChar
      RE_Value_Wide_Wide_Character,       -- System.Val_WChar
 
-     RE_D,                               -- System.Vax_Float_Operations
-     RE_F,                               -- System.Vax_Float_Operations
-     RE_G,                               -- System.Vax_Float_Operations
-     RE_Q,                               -- System.Vax_Float_Operations
-     RE_S,                               -- System.Vax_Float_Operations
-     RE_T,                               -- System.Vax_Float_Operations
-
-     RE_D_To_G,                          -- System.Vax_Float_Operations
-     RE_F_To_G,                          -- System.Vax_Float_Operations
-     RE_F_To_Q,                          -- System.Vax_Float_Operations
-     RE_F_To_S,                          -- System.Vax_Float_Operations
-     RE_G_To_D,                          -- System.Vax_Float_Operations
-     RE_G_To_F,                          -- System.Vax_Float_Operations
-     RE_G_To_Q,                          -- System.Vax_Float_Operations
-     RE_G_To_T,                          -- System.Vax_Float_Operations
-     RE_Q_To_F,                          -- System.Vax_Float_Operations
-     RE_Q_To_G,                          -- System.Vax_Float_Operations
-     RE_S_To_F,                          -- System.Vax_Float_Operations
-     RE_T_To_D,                          -- System.Vax_Float_Operations
-     RE_T_To_G,                          -- System.Vax_Float_Operations
-
-     RE_Abs_F,                           -- System.Vax_Float_Operations
-     RE_Abs_G,                           -- System.Vax_Float_Operations
-     RE_Add_F,                           -- System.Vax_Float_Operations
-     RE_Add_G,                           -- System.Vax_Float_Operations
-     RE_Div_F,                           -- System.Vax_Float_Operations
-     RE_Div_G,                           -- System.Vax_Float_Operations
-     RE_Mul_F,                           -- System.Vax_Float_Operations
-     RE_Mul_G,                           -- System.Vax_Float_Operations
-     RE_Neg_F,                           -- System.Vax_Float_Operations
-     RE_Neg_G,                           -- System.Vax_Float_Operations
-     RE_Return_D,                        -- System.Vax_Float_Operations
-     RE_Return_F,                        -- System.Vax_Float_Operations
-     RE_Return_G,                        -- System.Vax_Float_Operations
-     RE_Sub_F,                           -- System.Vax_Float_Operations
-     RE_Sub_G,                           -- System.Vax_Float_Operations
-
-     RE_Eq_F,                            -- System.Vax_Float_Operations
-     RE_Eq_G,                            -- System.Vax_Float_Operations
-     RE_Le_F,                            -- System.Vax_Float_Operations
-     RE_Le_G,                            -- System.Vax_Float_Operations
-     RE_Lt_F,                            -- System.Vax_Float_Operations
-     RE_Lt_G,                            -- System.Vax_Float_Operations
-     RE_Ne_F,                            -- System.Vax_Float_Operations
-     RE_Ne_G,                            -- System.Vax_Float_Operations
-
-     RE_Valid_D,                         -- System.Vax_Float_Operations
-     RE_Valid_F,                         -- System.Vax_Float_Operations
-     RE_Valid_G,                         -- System.Vax_Float_Operations
-
      RE_Version_String,                  -- System.Version_Control
      RE_Get_Version_String,              -- System.Version_Control
-
-     RE_Register_VMS_Exception,          -- System.VMS_Exception_Table
 
      RE_String_To_Wide_String,           -- System.WCh_StW
      RE_String_To_Wide_Wide_String,      -- System.WCh_StW
@@ -2140,6 +2089,8 @@ package Rtsfind is
      RE_Get_Passive_Partition_Id         => System_DSA_Services,
 
      RE_Any_Container_Ptr                => System_DSA_Types,
+
+     RE_Check_Standard_Allocator         => System_Elaboration_Allocators,
 
      RE_Register_Exception               => System_Exception_Table,
 
@@ -2919,60 +2870,8 @@ package Rtsfind is
      RE_Value_Wide_Character             => System_Val_WChar,
      RE_Value_Wide_Wide_Character        => System_Val_WChar,
 
-     RE_D                                => System_Vax_Float_Operations,
-     RE_F                                => System_Vax_Float_Operations,
-     RE_G                                => System_Vax_Float_Operations,
-     RE_Q                                => System_Vax_Float_Operations,
-     RE_S                                => System_Vax_Float_Operations,
-     RE_T                                => System_Vax_Float_Operations,
-
-     RE_D_To_G                           => System_Vax_Float_Operations,
-     RE_F_To_G                           => System_Vax_Float_Operations,
-     RE_F_To_Q                           => System_Vax_Float_Operations,
-     RE_F_To_S                           => System_Vax_Float_Operations,
-     RE_G_To_D                           => System_Vax_Float_Operations,
-     RE_G_To_F                           => System_Vax_Float_Operations,
-     RE_G_To_Q                           => System_Vax_Float_Operations,
-     RE_G_To_T                           => System_Vax_Float_Operations,
-     RE_Q_To_F                           => System_Vax_Float_Operations,
-     RE_Q_To_G                           => System_Vax_Float_Operations,
-     RE_S_To_F                           => System_Vax_Float_Operations,
-     RE_T_To_D                           => System_Vax_Float_Operations,
-     RE_T_To_G                           => System_Vax_Float_Operations,
-
-     RE_Abs_F                            => System_Vax_Float_Operations,
-     RE_Abs_G                            => System_Vax_Float_Operations,
-     RE_Add_F                            => System_Vax_Float_Operations,
-     RE_Add_G                            => System_Vax_Float_Operations,
-     RE_Div_F                            => System_Vax_Float_Operations,
-     RE_Div_G                            => System_Vax_Float_Operations,
-     RE_Mul_F                            => System_Vax_Float_Operations,
-     RE_Mul_G                            => System_Vax_Float_Operations,
-     RE_Neg_F                            => System_Vax_Float_Operations,
-     RE_Neg_G                            => System_Vax_Float_Operations,
-     RE_Return_D                         => System_Vax_Float_Operations,
-     RE_Return_F                         => System_Vax_Float_Operations,
-     RE_Return_G                         => System_Vax_Float_Operations,
-     RE_Sub_F                            => System_Vax_Float_Operations,
-     RE_Sub_G                            => System_Vax_Float_Operations,
-
-     RE_Eq_F                             => System_Vax_Float_Operations,
-     RE_Eq_G                             => System_Vax_Float_Operations,
-     RE_Le_F                             => System_Vax_Float_Operations,
-     RE_Le_G                             => System_Vax_Float_Operations,
-     RE_Lt_F                             => System_Vax_Float_Operations,
-     RE_Lt_G                             => System_Vax_Float_Operations,
-     RE_Ne_F                             => System_Vax_Float_Operations,
-     RE_Ne_G                             => System_Vax_Float_Operations,
-
-     RE_Valid_D                          => System_Vax_Float_Operations,
-     RE_Valid_F                          => System_Vax_Float_Operations,
-     RE_Valid_G                          => System_Vax_Float_Operations,
-
      RE_Version_String                   => System_Version_Control,
      RE_Get_Version_String               => System_Version_Control,
-
-     RE_Register_VMS_Exception           => System_VMS_Exception_Table,
 
      RE_String_To_Wide_String            => System_WCh_StW,
      RE_String_To_Wide_Wide_String       => System_WCh_StW,
@@ -3204,6 +3103,20 @@ package Rtsfind is
    --  occur either because the file in which the entity should be found
    --  does not exist, or because the entity is not present in the file.
 
+   procedure Check_Text_IO_Special_Unit (Nam : Node_Id);
+   --  In Ada 83, and hence for compatibility in later versions of Ada, package
+   --  Text_IO has generic subpackages (e.g. Integer_IO). They really should be
+   --  child packages, and in GNAT, they *are* child packages. To maintain the
+   --  required compatibility, this routine is called for package renamings and
+   --  generic instantiations, with the simple name of the referenced package.
+   --  If Text_IO has been with'ed and if the simple name of Nam matches
+   --  one of the subpackages of Text_IO, then this subpackage is with'ed
+   --  automatically. The important result of this approach is that Text_IO
+   --  does not drag in all the code for the subpackages unless they are used.
+   --  Our test is a little crude, and could drag in stuff when it is not
+   --  necessary, but that is acceptable. Wide_[Wide_]Text_IO is handled in
+   --  a similar manner.
+
    procedure Initialize;
    --  Procedure to initialize data structures used by RTE. Called at the
    --  start of processing a new main source file. Must be called after
@@ -3226,11 +3139,11 @@ package Rtsfind is
    --  entity id values are compared and True is returned if Ent is the
    --  entity for this unit.
 
-   function Is_Text_IO_Kludge_Unit (Nam : Node_Id) return Boolean;
+   function Is_Text_IO_Special_Unit (Nam : Node_Id) return Boolean;
    --  Returns True if the given Nam is an Expanded Name, whose Prefix is Ada,
    --  and whose selector is either Text_IO.xxx or Wide_Text_IO.xxx or
    --  Wide_Wide_Text_IO.xxx, where xxx is one of the subpackages of Text_IO
-   --  that is specially handled as described below for Text_IO_Kludge.
+   --  that is specially handled as described for Check_Text_IO_Special_Unit.
 
    function RTE (E : RE_Id) return Entity_Id;
    --  Given the entity defined in the above tables, as identified by the
@@ -3305,19 +3218,5 @@ package Rtsfind is
 
    procedure Set_RTU_Loaded (N : Node_Id);
    --  Register the predefined unit N as already loaded
-
-   procedure Text_IO_Kludge (Nam : Node_Id);
-   --  In Ada 83, and hence for compatibility in Ada 9X, package Text_IO has
-   --  generic subpackages (e.g. Integer_IO). They really should be child
-   --  packages, and in GNAT, they *are* child packages. To maintain the
-   --  required compatibility, this routine is called for package renamings
-   --  and generic instantiations, with the simple name of the referenced
-   --  package. If Text_IO has been with'ed and if the simple name of Nam
-   --  matches one of the subpackages of Text_IO, then this subpackage is
-   --  with'ed automatically. The important result of this approach is that
-   --  Text_IO does not drag in all the code for the subpackages unless they
-   --  are used. Our test is a little crude, and could drag in stuff when it
-   --  is not necessary, but that doesn't matter. Wide_[Wide_]Text_IO is
-   --  handled in a similar manner.
 
 end Rtsfind;

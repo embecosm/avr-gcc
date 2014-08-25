@@ -1072,7 +1072,15 @@ disable_extension_diagnostics (void)
 	     | (flag_iso << 3)
 	     | (warn_long_long << 4)
 	     | (warn_cxx_compat << 5)
-	     | (warn_overlength_strings << 6));
+	     | (warn_overlength_strings << 6)
+	     /* warn_c90_c99_compat has three states: -1/0/1, so we must
+		play tricks to properly restore it.  */
+	     | ((warn_c90_c99_compat == 1) << 7)
+	     | ((warn_c90_c99_compat == -1) << 8)
+	     /* Similarly for warn_c99_c11_compat.  */
+	     | ((warn_c99_c11_compat == 1) << 9)
+	     | ((warn_c99_c11_compat == -1) << 10)
+	     );
   cpp_opts->cpp_pedantic = pedantic = 0;
   warn_pointer_arith = 0;
   cpp_opts->cpp_warn_traditional = warn_traditional = 0;
@@ -1080,6 +1088,8 @@ disable_extension_diagnostics (void)
   cpp_opts->cpp_warn_long_long = warn_long_long = 0;
   warn_cxx_compat = 0;
   warn_overlength_strings = 0;
+  warn_c90_c99_compat = 0;
+  warn_c99_c11_compat = 0;
   return ret;
 }
 
@@ -1096,6 +1106,9 @@ restore_extension_diagnostics (int flags)
   cpp_opts->cpp_warn_long_long = warn_long_long = (flags >> 4) & 1;
   warn_cxx_compat = (flags >> 5) & 1;
   warn_overlength_strings = (flags >> 6) & 1;
+  /* See above for why is this needed.  */
+  warn_c90_c99_compat = (flags >> 7) & 1 ? 1 : ((flags >> 8) & 1 ? -1 : 0);
+  warn_c99_c11_compat = (flags >> 9) & 1 ? 1 : ((flags >> 10) & 1 ? -1 : 0);
 }
 
 /* Possibly kinds of declarator to parse.  */
@@ -1204,7 +1217,8 @@ static struct c_expr c_parser_expression (c_parser *);
 static struct c_expr c_parser_expression_conv (c_parser *);
 static vec<tree, va_gc> *c_parser_expr_list (c_parser *, bool, bool,
 					     vec<tree, va_gc> **, location_t *,
-					     tree *, vec<location_t> *);
+					     tree *, vec<location_t> *,
+					     unsigned int * = NULL);
 static void c_parser_omp_construct (c_parser *);
 static void c_parser_omp_threadprivate (c_parser *);
 static void c_parser_omp_barrier (c_parser *);
@@ -2001,15 +2015,12 @@ c_parser_static_assert_declaration_no_semi (c_parser *parser)
 
   gcc_assert (c_parser_next_token_is_keyword (parser, RID_STATIC_ASSERT));
   assert_loc = c_parser_peek_token (parser)->location;
-  if (!flag_isoc11)
-    {
-      if (flag_isoc99)
-	pedwarn (assert_loc, OPT_Wpedantic,
+  if (flag_isoc99)
+    pedwarn_c99 (assert_loc, OPT_Wpedantic,
 		 "ISO C99 does not support %<_Static_assert%>");
-      else
-	pedwarn (assert_loc, OPT_Wpedantic,
+  else
+    pedwarn_c99 (assert_loc, OPT_Wpedantic,
 		 "ISO C90 does not support %<_Static_assert%>");
-    }
   c_parser_consume_token (parser);
   if (!c_parser_require (parser, CPP_OPEN_PAREN, "expected %<(%>"))
     return;
@@ -2374,15 +2385,12 @@ c_parser_declspecs (c_parser *parser, struct c_declspecs *specs,
 	     correct lvalue-to-rvalue conversions.  */
 	  if (flag_openmp)
 	    sorry ("%<_Atomic%> with OpenMP");
-	  if (!flag_isoc11)
-	    {
-	      if (flag_isoc99)
-		pedwarn (loc, OPT_Wpedantic,
+	  if (flag_isoc99)
+	    pedwarn_c99 (loc, OPT_Wpedantic,
 			 "ISO C99 does not support the %<_Atomic%> qualifier");
-	      else
-		pedwarn (loc, OPT_Wpedantic,
+	  else
+	    pedwarn_c99 (loc, OPT_Wpedantic,
 			 "ISO C90 does not support the %<_Atomic%> qualifier");
-	    }
 	  attrs_ok = true;
 	  tree value;
 	  value = c_parser_peek_token (parser)->value;
@@ -2544,8 +2552,9 @@ c_parser_enum_specifier (c_parser *parser)
 	    }
 	  if (c_parser_next_token_is (parser, CPP_CLOSE_BRACE))
 	    {
-	      if (seen_comma && !flag_isoc99)
-		pedwarn (comma_loc, OPT_Wpedantic, "comma at end of enumerator list");
+	      if (seen_comma)
+		pedwarn_c90 (comma_loc, OPT_Wpedantic,
+			     "comma at end of enumerator list");
 	      c_parser_consume_token (parser);
 	      break;
 	    }
@@ -3046,15 +3055,12 @@ c_parser_alignas_specifier (c_parser * parser)
   location_t loc = c_parser_peek_token (parser)->location;
   gcc_assert (c_parser_next_token_is_keyword (parser, RID_ALIGNAS));
   c_parser_consume_token (parser);
-  if (!flag_isoc11)
-    {
-      if (flag_isoc99)
-	pedwarn (loc, OPT_Wpedantic,
+  if (flag_isoc99)
+    pedwarn_c99 (loc, OPT_Wpedantic,
 		 "ISO C99 does not support %<_Alignas%>");
-      else
-	pedwarn (loc, OPT_Wpedantic,
+  else
+    pedwarn_c99 (loc, OPT_Wpedantic,
 		 "ISO C90 does not support %<_Alignas%>");
-    }
   if (!c_parser_require (parser, CPP_OPEN_PAREN, "expected %<(%>"))
     return ret;
   if (c_parser_next_tokens_start_typename (parser, cla_prefer_id))
@@ -4347,9 +4353,9 @@ c_parser_initelt (c_parser *parser, struct obstack * braced_init_obstack)
 	{
 	  if (c_parser_next_token_is (parser, CPP_EQ))
 	    {
-	      if (!flag_isoc99)
-		pedwarn (des_loc, OPT_Wpedantic,
-			 "ISO C90 forbids specifying subobject to initialize");
+	      pedwarn_c90 (des_loc, OPT_Wpedantic,
+			   "ISO C90 forbids specifying subobject "
+			   "to initialize");
 	      c_parser_consume_token (parser);
 	    }
 	  else
@@ -4565,10 +4571,7 @@ c_parser_compound_statement_nostart (c_parser *parser)
 	  c_parser_declaration_or_fndef (parser, true, true, true, true,
 					 true, NULL, vNULL);
 	  if (last_stmt)
-	    pedwarn_c90 (loc,
-			 (pedantic && !flag_isoc99)
-			 ? OPT_Wpedantic
-			 : OPT_Wdeclaration_after_statement,
+	    pedwarn_c90 (loc, OPT_Wdeclaration_after_statement,
 			 "ISO C90 forbids mixed declarations and code");
 	  last_stmt = false;
 	}
@@ -4596,9 +4599,7 @@ c_parser_compound_statement_nostart (c_parser *parser)
 		 disable this diagnostic.  */
 	      restore_extension_diagnostics (ext);
 	      if (last_stmt)
-		pedwarn_c90 (loc, (pedantic && !flag_isoc99)
-			     ? OPT_Wpedantic
-			     : OPT_Wdeclaration_after_statement,
+		pedwarn_c90 (loc, OPT_Wdeclaration_after_statement,
 			     "ISO C90 forbids mixed declarations and code");
 	      last_stmt = false;
 	    }
@@ -6575,14 +6576,14 @@ c_parser_alignof_expression (c_parser *parser)
   /* A diagnostic is not required for the use of this identifier in
      the implementation namespace; only diagnose it for the C11
      spelling because of existing code using the other spellings.  */
-  if (!flag_isoc11 && is_c11_alignof)
+  if (is_c11_alignof)
     {
       if (flag_isoc99)
-	pedwarn (loc, OPT_Wpedantic, "ISO C99 does not support %qE",
-		 alignof_spelling);
+	pedwarn_c99 (loc, OPT_Wpedantic, "ISO C99 does not support %qE",
+		     alignof_spelling);
       else
-	pedwarn (loc, OPT_Wpedantic, "ISO C90 does not support %qE",
-		 alignof_spelling);
+	pedwarn_c99 (loc, OPT_Wpedantic, "ISO C90 does not support %qE",
+		     alignof_spelling);
     }
   c_parser_consume_token (parser);
   c_inhibit_evaluation_warnings++;
@@ -6741,15 +6742,12 @@ c_parser_generic_selection (c_parser *parser)
   gcc_assert (c_parser_next_token_is_keyword (parser, RID_GENERIC));
   generic_loc = c_parser_peek_token (parser)->location;
   c_parser_consume_token (parser);
-  if (!flag_isoc11)
-    {
-      if (flag_isoc99)
-	pedwarn (generic_loc, OPT_Wpedantic,
+  if (flag_isoc99)
+    pedwarn_c99 (generic_loc, OPT_Wpedantic,
 		 "ISO C99 does not support %<_Generic%>");
-      else
-	pedwarn (generic_loc, OPT_Wpedantic,
+  else
+    pedwarn_c99 (generic_loc, OPT_Wpedantic,
 		 "ISO C90 does not support %<_Generic%>");
-    }
 
   if (!c_parser_require (parser, CPP_OPEN_PAREN, "expected %<(%>"))
     return error_expr;
@@ -7132,8 +7130,24 @@ c_parser_postfix_expression (c_parser *parser)
       switch (c_parser_peek_token (parser)->keyword)
 	{
 	case RID_FUNCTION_NAME:
+	  pedwarn (loc, OPT_Wpedantic,  "ISO C does not support "
+		   "%<__FUNCTION__%> predefined identifier");
+	  expr.value = fname_decl (loc,
+				   c_parser_peek_token (parser)->keyword,
+				   c_parser_peek_token (parser)->value);
+	  c_parser_consume_token (parser);
+	  break;
 	case RID_PRETTY_FUNCTION_NAME:
+	  pedwarn (loc, OPT_Wpedantic,  "ISO C does not support "
+		   "%<__PRETTY_FUNCTION__%> predefined identifier");
+	  expr.value = fname_decl (loc,
+				   c_parser_peek_token (parser)->keyword,
+				   c_parser_peek_token (parser)->value);
+	  c_parser_consume_token (parser);
+	  break;
 	case RID_C99_FUNCTION_NAME:
+	  pedwarn_c90 (loc, OPT_Wpedantic,  "ISO C90 does not support "
+		   "%<__func__%> predefined identifier");
 	  expr.value = fname_decl (loc,
 				   c_parser_peek_token (parser)->keyword,
 				   c_parser_peek_token (parser)->value);
@@ -7400,9 +7414,8 @@ c_parser_postfix_expression (c_parser *parser)
 		expr.value = error_mark_node;
 		break;
 	      }
-	    if (!flag_isoc99)
-	      pedwarn (loc, OPT_Wpedantic,
-		       "ISO C90 does not support complex types");
+	    pedwarn_c90 (loc, OPT_Wpedantic,
+			 "ISO C90 does not support complex types");
 	    expr.value = build2 (COMPLEX_EXPR,
 				 build_complex_type
 				   (TYPE_MAIN_VARIANT
@@ -7606,8 +7619,7 @@ c_parser_postfix_expression_after_paren_type (c_parser *parser,
       type = error_mark_node;
     }
 
-  if (!flag_isoc99)
-    pedwarn (start_loc, OPT_Wpedantic, "ISO C90 forbids compound literals");
+  pedwarn_c90 (start_loc, OPT_Wpedantic, "ISO C90 forbids compound literals");
   non_const = ((init.value && TREE_CODE (init.value) == CONSTRUCTOR)
 	       ? CONSTRUCTOR_NON_CONST (init.value)
 	       : init.original_code == C_MAYBE_CONST_EXPR);
@@ -7655,6 +7667,7 @@ c_parser_postfix_expression_after_primary (c_parser *parser,
   tree ident, idx;
   location_t sizeof_arg_loc[3];
   tree sizeof_arg[3];
+  unsigned int literal_zero_mask;
   unsigned int i;
   vec<tree, va_gc> *exprlist;
   vec<tree, va_gc> *origtypes = NULL;
@@ -7709,12 +7722,13 @@ c_parser_postfix_expression_after_primary (c_parser *parser,
 	      sizeof_arg[i] = NULL_TREE;
 	      sizeof_arg_loc[i] = UNKNOWN_LOCATION;
 	    }
+	  literal_zero_mask = 0;
 	  if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
 	    exprlist = NULL;
 	  else
 	    exprlist = c_parser_expr_list (parser, true, false, &origtypes,
 					   sizeof_arg_loc, sizeof_arg,
-					   &arg_loc);
+					   &arg_loc, &literal_zero_mask);
 	  c_parser_skip_until_found (parser, CPP_CLOSE_PAREN,
 				     "expected %<)%>");
 	  orig_expr = expr;
@@ -7724,6 +7738,19 @@ c_parser_postfix_expression_after_primary (c_parser *parser,
 					      expr.value, exprlist,
 					      sizeof_arg,
 					      sizeof_ptr_memacc_comptypes);
+	  if (warn_memset_transposed_args
+	      && TREE_CODE (expr.value) == FUNCTION_DECL
+	      && DECL_BUILT_IN_CLASS (expr.value) == BUILT_IN_NORMAL
+	      && DECL_FUNCTION_CODE (expr.value) == BUILT_IN_MEMSET
+	      && vec_safe_length (exprlist) == 3
+	      && integer_zerop ((*exprlist)[2])
+	      && (literal_zero_mask & (1 << 2)) != 0
+	      && (!integer_zerop ((*exprlist)[1])
+		  || (literal_zero_mask & (1 << 1)) == 0))
+	    warning_at (expr_loc, OPT_Wmemset_transposed_args,
+			"%<memset%> used with constant zero length parameter; "
+			"this could be due to transposed parameters");
+
 	  expr.value
 	    = c_build_function_call_vec (expr_loc, arg_loc, expr.value,
 					 exprlist, origtypes);
@@ -7891,6 +7918,36 @@ c_parser_expression_conv (c_parser *parser)
   return expr;
 }
 
+/* Helper function of c_parser_expr_list.  Check if IDXth (0 based)
+   argument is a literal zero alone and if so, set it in literal_zero_mask.  */
+
+static inline void
+c_parser_check_literal_zero (c_parser *parser, unsigned *literal_zero_mask,
+			     unsigned int idx)
+{
+  if (idx >= HOST_BITS_PER_INT)
+    return;
+
+  c_token *tok = c_parser_peek_token (parser);
+  switch (tok->type)
+    {
+    case CPP_NUMBER:
+    case CPP_CHAR:
+    case CPP_WCHAR:
+    case CPP_CHAR16:
+    case CPP_CHAR32:
+      /* If a parameter is literal zero alone, remember it
+	 for -Wmemset-transposed-args warning.  */
+      if (integer_zerop (tok->value)
+	  && !TREE_OVERFLOW (tok->value)
+	  && (c_parser_peek_2nd_token (parser)->type == CPP_COMMA
+	      || c_parser_peek_2nd_token (parser)->type == CPP_CLOSE_PAREN))
+	*literal_zero_mask |= 1U << idx;
+    default:
+      break;
+    }
+}
+
 /* Parse a non-empty list of expressions.  If CONVERT_P, convert
    functions and arrays to pointers and lvalues to rvalues.  If
    FOLD_P, fold the expressions.  If LOCATIONS is non-NULL, save the
@@ -7905,7 +7962,8 @@ static vec<tree, va_gc> *
 c_parser_expr_list (c_parser *parser, bool convert_p, bool fold_p,
 		    vec<tree, va_gc> **p_orig_types,
 		    location_t *sizeof_arg_loc, tree *sizeof_arg,
-		    vec<location_t> *locations)
+		    vec<location_t> *locations,
+		    unsigned int *literal_zero_mask)
 {
   vec<tree, va_gc> *ret;
   vec<tree, va_gc> *orig_types;
@@ -7923,6 +7981,8 @@ c_parser_expr_list (c_parser *parser, bool convert_p, bool fold_p,
   if (sizeof_arg != NULL
       && c_parser_next_token_is_keyword (parser, RID_SIZEOF))
     cur_sizeof_arg_loc = c_parser_peek_2nd_token (parser)->location;
+  if (literal_zero_mask)
+    c_parser_check_literal_zero (parser, literal_zero_mask, 0);
   expr = c_parser_expr_no_commas (parser, NULL);
   if (convert_p)
     expr = convert_lvalue_to_rvalue (loc, expr, true, true);
@@ -7949,6 +8009,8 @@ c_parser_expr_list (c_parser *parser, bool convert_p, bool fold_p,
 	cur_sizeof_arg_loc = c_parser_peek_2nd_token (parser)->location;
       else
 	cur_sizeof_arg_loc = UNKNOWN_LOCATION;
+      if (literal_zero_mask)
+	c_parser_check_literal_zero (parser, literal_zero_mask, idx + 1);
       expr = c_parser_expr_no_commas (parser, NULL);
       if (convert_p)
 	expr = convert_lvalue_to_rvalue (loc, expr, true, true);
@@ -14108,6 +14170,13 @@ c_parser_array_notation (location_t loc, c_parser *parser, tree initial_index,
   
   array_type = TREE_TYPE (array_value);
   gcc_assert (array_type);
+  if (TREE_CODE (array_type) != ARRAY_TYPE
+      && TREE_CODE (array_type) != POINTER_TYPE)
+    {
+      error_at (loc, "base of array section must be pointer or array type");
+      c_parser_skip_until_found (parser, CPP_CLOSE_SQUARE, NULL);
+      return error_mark_node;
+    }
   type = TREE_TYPE (array_type);
   token = c_parser_peek_token (parser);
    

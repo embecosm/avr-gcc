@@ -3,10 +3,12 @@
 	* config/avr/avr.opt (mrmw): New option.
 	* config/avr/avr-c.c (avr_cpu_cpp_builtins):
 	Use TARGET_RMW instead of avr_current_device->dev_attributes.
+	Don't define avr_current_device->macro (that's the specfile's job).
 	* config/avr/gen-avr-mmcu-specs.c (print_mcu)
 	<cc1, cc1plus>: Check mcu->dev_attribute for AVR_SHORT_SP and
 	AVR_ISA_RMW; add -rmw as appropriate.
 	<link> Add -Ttext argument.
+	<cpp>: Print __AVR_DEVICE_NAME__ definition.
 
 2014-08-21  Joern Rennecke  <joern.rennecke@embecosm.com>
 

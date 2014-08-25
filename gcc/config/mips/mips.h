@@ -1187,6 +1187,8 @@ struct mips_cpu_info {
 %{mshared} %{mno-shared} \
 %{msym32} %{mno-sym32} \
 %{mtune=*} \
+%{mhard-float} %{msoft-float} \
+%{msingle-float} %{mdouble-float} \
 %(subtarget_asm_spec)"
 
 /* Extra switches sometimes passed to the linker.  */
@@ -1265,6 +1267,12 @@ struct mips_cpu_info {
 
 /* By default, turn on GDB extensions.  */
 #define DEFAULT_GDB_EXTENSIONS 1
+
+/* Registers may have a prefix which can be ignored when matching
+   user asm and register definitions.  */
+#ifndef REGISTER_PREFIX
+#define REGISTER_PREFIX    "$"
+#endif
 
 /* Local compiler-generated symbols must have a prefix that the assembler
    understands.   By default, this is $, although some targets (e.g.,

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2013, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -528,23 +528,23 @@ package body Exp_Dist is
       RACW_Type                 : Entity_Id := Empty;
       Nod                       : Node_Id);
    --  Build calling stubs for general purpose. The parameters are:
-   --    Decls             : a place to put declarations
-   --    Statements        : a place to put statements
-   --    Target            : PCS-specific target information (see details
-   --                        in RPC_Target declaration).
-   --    Subprogram_Id     : a node containing the subprogram ID
+   --    Decls             : A place to put declarations
+   --    Statements        : A place to put statements
+   --    Target            : PCS-specific target information (see details in
+   --                        RPC_Target declaration).
+   --    Subprogram_Id     : A node containing the subprogram ID
    --    Asynchronous      : True if an APC must be made instead of an RPC.
    --                        The value needs not be supplied if one of the
    --                        Is_Known_... is True.
    --    Is_Known_Async... : True if we know that this is asynchronous
    --    Is_Known_Non_A... : True if we know that this is not asynchronous
-   --    Spec              : a node with a Parameter_Specifications and
-   --                        a Result_Definition if applicable
-   --    Stub_Type         : in case of RACW stubs, parameters of type access
-   --                        to Stub_Type will be marshalled using the
+   --    Spec              : Node with a Parameter_Specifications and a
+   --                        Result_Definition if applicable
+   --    Stub_Type         : For case of RACW stubs, parameters of type access
+   --                        to Stub_Type will be marshalled using the address
    --                        address of the object (the addr field) rather
    --                        than using the 'Write on the stub itself
-   --    Nod               : used to provide sloc for generated code
+   --    Nod               : Used to provide sloc for generated code
 
    function Specific_Build_Stub_Target
      (Loc                   : Source_Ptr;
@@ -1162,18 +1162,15 @@ package body Exp_Dist is
 
       return
         Make_Procedure_Call_Statement (Loc,
-          Name =>
-            New_Occurrence_Of
-              (RTE (RE_NVList_Add_Item), Loc),
+          Name                   =>
+            New_Occurrence_Of (RTE (RE_NVList_Add_Item), Loc),
           Parameter_Associations => New_List (
             New_Occurrence_Of (NVList, Loc),
             Make_Function_Call (Loc,
-              Name =>
-                New_Occurrence_Of
-                  (RTE (RE_To_PolyORB_String), Loc),
+              Name                   =>
+                New_Occurrence_Of (RTE (RE_To_PolyORB_String), Loc),
               Parameter_Associations => New_List (
-                Make_String_Literal (Loc,
-                  Strval => Parameter_Name_String))),
+                Make_String_Literal (Loc, Strval => Parameter_Name_String))),
             New_Occurrence_Of (Any, Loc),
             Parameter_Mode));
    end Add_Parameter_To_NVList;
@@ -2036,7 +2033,10 @@ package body Exp_Dist is
          Append_To (Decls, RPC_Receiver_Decl);
 
       else
-         --  Kludge, requires comment???
+         --  Case of RACW implementing a RAS with the GARLIC PCS: there is
+         --  no RPC receiver in that case, this is just an indication of
+         --  where to insert code in the tree (see comment in declaration of
+         --  type Stub_Structure).
 
          RPC_Receiver_Decl := Last (Decls);
       end if;
@@ -9465,7 +9465,7 @@ package body Exp_Dist is
 
             elsif Is_Derived_Type (Typ) and then not Is_Tagged_Type (Typ) then
 
-               --  Non-tagged derived type: convert to root type
+               --  Untagged derived type: convert to root type
 
                declare
                   Rt_Type : constant Entity_Id := Root_Type (Typ);
@@ -9480,7 +9480,7 @@ package body Exp_Dist is
 
             elsif Is_Record_Type (Typ) and then not Is_Tagged_Type (Typ) then
 
-               --  Non-tagged record type
+               --  Untagged record type
 
                if Nkind (Declaration_Node (Typ)) = N_Subtype_Declaration then
                   declare

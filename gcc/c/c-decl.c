@@ -59,7 +59,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cgraph.h"
 #include "hash-table.h"
 #include "langhooks-def.h"
-#include "pointer-set.h"
+#include "hash-set.h"
 #include "plugin.h"
 #include "c-family/c-ada-spec.h"
 #include "cilk.h"
@@ -538,6 +538,8 @@ static tree grokdeclarator (const struct c_declarator *,
 			    bool *, enum deprecated_states);
 static tree grokparms (struct c_arg_info *, bool);
 static void layout_array_type (tree);
+static void warn_defaults_to (location_t, int, const char *, ...)
+    ATTRIBUTE_GCC_DIAG(3,4);
 
 /* T is a statement.  Add it to the statement-tree.  This is the
    C/ObjC version--C++ has a slightly different version of this
@@ -1844,12 +1846,9 @@ diagnose_mismatched_decls (tree newdecl, tree olddecl,
 		 newdecl);
 	  locate_old_decl (olddecl);
 	}
-      else if (pedantic && !flag_isoc11)
-	{
-	  pedwarn (input_location, OPT_Wpedantic,
-		   "redefinition of typedef %q+D", newdecl);
-	  locate_old_decl (olddecl);
-	}
+      else if (pedwarn_c99 (input_location, OPT_Wpedantic,
+			    "redefinition of typedef %q+D", newdecl))
+	locate_old_decl (olddecl);
 
       return true;
     }
@@ -2586,9 +2585,9 @@ duplicate_decls (tree newdecl, tree olddecl)
   if (TREE_CODE (newdecl) == FUNCTION_DECL
       || TREE_CODE (newdecl) == VAR_DECL)
     {
-      struct symtab_node *snode = symtab_get_node (newdecl);
+      struct symtab_node *snode = symtab_node::get (newdecl);
       if (snode)
-	symtab_remove_node (snode);
+	snode->remove ();
     }
   ggc_free (newdecl);
   return true;
@@ -2951,18 +2950,18 @@ pushdecl_top_level (tree x)
 }
 
 static void
-implicit_decl_warning (tree id, tree olddecl)
+implicit_decl_warning (location_t loc, tree id, tree olddecl)
 {
   if (warn_implicit_function_declaration)
     {
       bool warned;
 
       if (flag_isoc99)
-	warned = pedwarn (input_location, OPT_Wimplicit_function_declaration,
+	warned = pedwarn (loc, OPT_Wimplicit_function_declaration,
 			  "implicit declaration of function %qE", id);
       else
-	warned = warning (OPT_Wimplicit_function_declaration,
-			  G_("implicit declaration of function %qE"), id);
+	warned = warning_at (loc, OPT_Wimplicit_function_declaration,
+			     G_("implicit declaration of function %qE"), id);
       if (olddecl && warned)
 	locate_old_decl (olddecl);
     }
@@ -3015,7 +3014,7 @@ implicitly_declare (location_t loc, tree functionid)
 	     then recycle the old declaration but with the new type.  */
 	  if (!C_DECL_IMPLICIT (decl))
 	    {
-	      implicit_decl_warning (functionid, decl);
+	      implicit_decl_warning (loc, functionid, decl);
 	      C_DECL_IMPLICIT (decl) = 1;
 	    }
 	  if (DECL_BUILT_IN (decl))
@@ -3052,7 +3051,7 @@ implicitly_declare (location_t loc, tree functionid)
   DECL_EXTERNAL (decl) = 1;
   TREE_PUBLIC (decl) = 1;
   C_DECL_IMPLICIT (decl) = 1;
-  implicit_decl_warning (functionid, 0);
+  implicit_decl_warning (loc, functionid, 0);
   asmspec_tree = maybe_apply_renaming_pragma (decl, /*asmname=*/NULL);
   if (asmspec_tree)
     set_user_assembler_name (decl, TREE_STRING_POINTER (asmspec_tree));
@@ -3968,16 +3967,13 @@ build_array_declarator (location_t loc,
     }
   declarator->u.array.static_p = static_p;
   declarator->u.array.vla_unspec_p = vla_unspec_p;
-  if (!flag_isoc99)
-    {
-      if (static_p || quals != NULL)
-	pedwarn (loc, OPT_Wpedantic,
+  if (static_p || quals != NULL)
+    pedwarn_c90 (loc, OPT_Wpedantic,
 		 "ISO C90 does not support %<static%> or type "
 		 "qualifiers in parameter array declarators");
-      if (vla_unspec_p)
-	pedwarn (loc, OPT_Wpedantic,
+  if (vla_unspec_p)
+    pedwarn_c90 (loc, OPT_Wpedantic,
 		 "ISO C90 does not support %<[*]%> array declarators");
-    }
   if (vla_unspec_p)
     {
       if (!current_scope->parm_flag)
@@ -4891,10 +4887,9 @@ check_bitfield_type_and_width (tree *type, tree *width, tree orig_name)
   if (!in_system_header_at (input_location)
       && type_mv != integer_type_node
       && type_mv != unsigned_type_node
-      && type_mv != boolean_type_node
-      && !flag_isoc99)
-    pedwarn (input_location, OPT_Wpedantic,
-	     "type of bit-field %qs is a GCC extension", name);
+      && type_mv != boolean_type_node)
+    pedwarn_c90 (input_location, OPT_Wpedantic,
+		 "type of bit-field %qs is a GCC extension", name);
 
   max_width = TYPE_PRECISION (*type);
 
@@ -4924,54 +4919,41 @@ check_bitfield_type_and_width (tree *type, tree *width, tree orig_name)
 static void
 warn_variable_length_array (tree name, tree size)
 {
-  int const_size = TREE_CONSTANT (size);
-
-  if (!flag_isoc99 && pedantic && warn_vla != 0)
+  if (TREE_CONSTANT (size))
     {
-      if (const_size)
-	{
-	  if (name)
-	    pedwarn (input_location, OPT_Wvla,
+      if (name)
+	pedwarn_c90 (input_location, OPT_Wvla,
 		     "ISO C90 forbids array %qE whose size "
-		     "can%'t be evaluated",
-		     name);
-	  else
-	    pedwarn (input_location, OPT_Wvla, "ISO C90 forbids array whose size "
-		     "can%'t be evaluated");
-	}
+		     "can%'t be evaluated", name);
       else
-	{
-	  if (name)
-	    pedwarn (input_location, OPT_Wvla,
-		     "ISO C90 forbids variable length array %qE",
-		     name);
-	  else
-	    pedwarn (input_location, OPT_Wvla, "ISO C90 forbids variable length array");
-	}
+	pedwarn_c90 (input_location, OPT_Wvla, "ISO C90 forbids array "
+		     "whose size can%'t be evaluated");
     }
-  else if (warn_vla > 0)
+  else
     {
-      if (const_size)
-        {
-	  if (name)
-	    warning (OPT_Wvla,
-		     "the size of array %qE can"
-		     "%'t be evaluated", name);
-	  else
-	    warning (OPT_Wvla,
-		     "the size of array can %'t be evaluated");
-	}
+      if (name)
+	pedwarn_c90 (input_location, OPT_Wvla,
+		     "ISO C90 forbids variable length array %qE", name);
       else
-	{
-	  if (name)
-	    warning (OPT_Wvla,
-		     "variable length array %qE is used",
-		     name);
-	  else
-	    warning (OPT_Wvla,
-		     "variable length array is used");
-	}
+	pedwarn_c90 (input_location, OPT_Wvla, "ISO C90 forbids variable "
+		     "length array");
     }
+}
+
+/* Print warning about defaulting to int if necessary.  */
+
+static void
+warn_defaults_to (location_t location, int opt, const char *gmsgid, ...)
+{
+  diagnostic_info diagnostic;
+  va_list ap;
+
+  va_start (ap, gmsgid);
+  diagnostic_set_info (&diagnostic, gmsgid, &ap, location,
+                       flag_isoc99 ? DK_PEDWARN : DK_WARNING);
+  diagnostic.option_index = opt;
+  report_diagnostic (&diagnostic);
+  va_end (ap);
 }
 
 /* Given declspecs and a declarator,
@@ -5150,12 +5132,12 @@ grokdeclarator (const struct c_declarator *declarator,
       else
 	{
 	  if (name)
-	    pedwarn_c99 (loc, flag_isoc99 ? 0 : OPT_Wimplicit_int,
-			 "type defaults to %<int%> in declaration of %qE",
-			 name);
+	    warn_defaults_to (loc, flag_isoc99 ? 0 : OPT_Wimplicit_int,
+			      "type defaults to %<int%> in declaration "
+			      "of %qE", name);
 	  else
-	    pedwarn_c99 (input_location, flag_isoc99 ? 0 : OPT_Wimplicit_int,
-			 "type defaults to %<int%> in type name");
+	    warn_defaults_to (loc, flag_isoc99 ? 0 : OPT_Wimplicit_int,
+			      "type defaults to %<int%> in type name");
 	}
     }
 
@@ -5186,18 +5168,14 @@ grokdeclarator (const struct c_declarator *declarator,
   as2 = TYPE_ADDR_SPACE (element_type);
   address_space = ADDR_SPACE_GENERIC_P (as1)? as2 : as1;
 
-  if (pedantic && !flag_isoc99)
-    {
-      if (constp > 1)
-	pedwarn (loc, OPT_Wpedantic, "duplicate %<const%>");
-      if (restrictp > 1)
-	pedwarn (loc, OPT_Wpedantic, "duplicate %<restrict%>");
-      if (volatilep > 1)
-	pedwarn (loc, OPT_Wpedantic, "duplicate %<volatile%>");
-      if (atomicp > 1)
-	pedwarn (loc, OPT_Wpedantic, "duplicate %<_Atomic%>");
-
-    }
+  if (constp > 1)
+    pedwarn_c90 (loc, OPT_Wpedantic, "duplicate %<const%>");
+  if (restrictp > 1)
+    pedwarn_c90 (loc, OPT_Wpedantic, "duplicate %<restrict%>");
+  if (volatilep > 1)
+    pedwarn_c90 (loc, OPT_Wpedantic, "duplicate %<volatile%>");
+  if (atomicp > 1)
+    pedwarn_c90 (loc, OPT_Wpedantic, "duplicate %<_Atomic%>");
 
   if (!ADDR_SPACE_GENERIC_P (as1) && !ADDR_SPACE_GENERIC_P (as2) && as1 != as2)
     error_at (loc, "conflicting named address spaces (%s vs %s)",
@@ -5602,10 +5580,9 @@ grokdeclarator (const struct c_declarator *declarator,
 		    flexible_array_member = (t->kind == cdk_id);
 		  }
 		if (flexible_array_member
-		    && pedantic && !flag_isoc99
 		    && !in_system_header_at (input_location))
-		  pedwarn (loc, OPT_Wpedantic,
-			   "ISO C90 does not support flexible array members");
+		  pedwarn_c90 (loc, OPT_Wpedantic, "ISO C90 does not "
+			       "support flexible array members");
 
 		/* ISO C99 Flexible array members are effectively
 		   identical to GCC's zero-length array extension.  */
@@ -6287,15 +6264,12 @@ grokdeclarator (const struct c_declarator *declarator,
 	      DECL_DECLARED_INLINE_P (decl) = 1;
 	    if (declspecs->noreturn_p)
 	      {
-		if (!flag_isoc11)
-		  {
-		    if (flag_isoc99)
-		      pedwarn (loc, OPT_Wpedantic,
+		if (flag_isoc99)
+		  pedwarn_c99 (loc, OPT_Wpedantic,
 			       "ISO C99 does not support %<_Noreturn%>");
-		    else
-		      pedwarn (loc, OPT_Wpedantic,
+		else
+		  pedwarn_c99 (loc, OPT_Wpedantic,
 			       "ISO C90 does not support %<_Noreturn%>");
-		  }
 		TREE_THIS_VOLATILE (decl) = 1;
 	      }
 	  }
@@ -7002,15 +6976,12 @@ grokfield (location_t loc,
 	  pedwarn (loc, 0, "declaration does not declare anything");
 	  return NULL_TREE;
 	}
-      if (!flag_isoc11)
-	{
-	  if (flag_isoc99)
-	    pedwarn (loc, OPT_Wpedantic,
+      if (flag_isoc99)
+	pedwarn_c99 (loc, OPT_Wpedantic,
 		     "ISO C99 doesn%'t support unnamed structs/unions");
-	  else
-	    pedwarn (loc, OPT_Wpedantic,
+      else
+	pedwarn_c99 (loc, OPT_Wpedantic,
 		     "ISO C90 doesn%'t support unnamed structs/unions");
-	}
     }
 
   value = grokdeclarator (declarator, declspecs, FIELD, false,
@@ -7221,17 +7192,17 @@ warn_cxx_compat_finish_struct (tree fieldlist)
   if (!struct_parse_info->typedefs_seen.is_empty ()
       && fieldlist != NULL_TREE)
     {
-      /* Use a pointer_set using the name of the typedef.  We can use
-	 a pointer_set because identifiers are interned.  */
-      struct pointer_set_t *tset = pointer_set_create ();
+      /* Use a hash_set<tree> using the name of the typedef.  We can use
+	 a hash_set<tree> because identifiers are interned.  */
+      hash_set<tree> tset;
 
       FOR_EACH_VEC_ELT (struct_parse_info->typedefs_seen, ix, x)
-	pointer_set_insert (tset, DECL_NAME (x));
+	tset.add (DECL_NAME (x));
 
       for (x = fieldlist; x != NULL_TREE; x = DECL_CHAIN (x))
 	{
 	  if (DECL_NAME (x) != NULL_TREE
-	      && pointer_set_contains (tset, DECL_NAME (x)))
+	      && tset.contains (DECL_NAME (x)))
 	    {
 	      warning_at (DECL_SOURCE_LOCATION (x), OPT_Wc___compat,
 			  ("using %qD as both field and typedef name is "
@@ -7241,8 +7212,6 @@ warn_cxx_compat_finish_struct (tree fieldlist)
 		 the typedef name is used.  */
 	    }
 	}
-
-      pointer_set_destroy (tset);
     }
 
   /* For each field which has a binding and which was not defined in
@@ -7953,9 +7922,10 @@ start_function (struct c_declspecs *declspecs, struct c_declarator *declarator,
     }
 
   if (warn_about_return_type)
-    pedwarn_c99 (loc, flag_isoc99 ? 0
-		 : (warn_return_type ? OPT_Wreturn_type : OPT_Wimplicit_int),
-		 "return type defaults to %<int%>");
+    warn_defaults_to (loc, flag_isoc99 ? 0
+			   : (warn_return_type ? OPT_Wreturn_type
+			      : OPT_Wimplicit_int),
+		      "return type defaults to %<int%>");
 
   /* Make the init_value nonzero so pushdecl knows this is not tentative.
      error_mark_node is replaced below (in pop_scope) with the BLOCK.  */
@@ -8189,7 +8159,7 @@ store_parm_decls_oldstyle (tree fndecl, const struct c_arg_info *arg_info)
   struct c_binding *b;
   tree parm, decl, last;
   tree parmids = arg_info->parms;
-  struct pointer_set_t *seen_args = pointer_set_create ();
+  hash_set<tree> seen_args;
 
   if (!in_system_header_at (input_location))
     warning_at (DECL_SOURCE_LOCATION (fndecl),
@@ -8220,7 +8190,7 @@ store_parm_decls_oldstyle (tree fndecl, const struct c_arg_info *arg_info)
 		      "%qD declared as a non-parameter", decl);
 	  /* If the declaration is already marked, we have a duplicate
 	     name.  Complain and ignore the duplicate.  */
-	  else if (pointer_set_contains (seen_args, decl))
+	  else if (seen_args.contains (decl))
 	    {
 	      error_at (DECL_SOURCE_LOCATION (decl),
 			"multiple parameters named %qD", decl);
@@ -8269,7 +8239,7 @@ store_parm_decls_oldstyle (tree fndecl, const struct c_arg_info *arg_info)
 	}
 
       TREE_PURPOSE (parm) = decl;
-      pointer_set_insert (seen_args, decl);
+      seen_args.add (decl);
     }
 
   /* Now examine the parms chain for incomplete declarations
@@ -8289,7 +8259,7 @@ store_parm_decls_oldstyle (tree fndecl, const struct c_arg_info *arg_info)
 	  TREE_TYPE (parm) = error_mark_node;
 	}
 
-      if (!pointer_set_contains (seen_args, parm))
+      if (!seen_args.contains (parm))
 	{
 	  error_at (DECL_SOURCE_LOCATION (parm),
 		    "declaration for parameter %qD but no such parameter",
@@ -8323,8 +8293,6 @@ store_parm_decls_oldstyle (tree fndecl, const struct c_arg_info *arg_info)
 	  }
       DECL_CHAIN (last) = 0;
     }
-
-  pointer_set_destroy (seen_args);
 
   /* If there was a previous prototype,
      set the DECL_ARG_TYPE of each argument according to
@@ -8699,7 +8667,7 @@ finish_function (void)
 	     This should be cleaned up later and this conditional removed.  */
 	  if (cgraph_global_info_ready)
 	    {
-	      cgraph_add_new_function (fndecl, false);
+	      cgraph_node::add_new_function (fndecl, false);
 	      return;
 	    }
 	  cgraph_finalize_function (fndecl, false);
@@ -8709,7 +8677,7 @@ finish_function (void)
 	  /* Register this function with cgraph just far enough to get it
 	    added to our parent's nested function list.  Handy, since the
 	    C front end doesn't have such a list.  */
-	  (void) cgraph_get_create_node (fndecl);
+	  (void) cgraph_node::get_create (fndecl);
 	}
     }
 
@@ -9140,8 +9108,8 @@ declspecs_add_qual (source_location loc,
     default:
       gcc_unreachable ();
     }
-  if (dupe && !flag_isoc99)
-    pedwarn (loc, OPT_Wpedantic, "duplicate %qE", qual);
+  if (dupe)
+    pedwarn_c90 (loc, OPT_Wpedantic, "duplicate %qE", qual);
   return specs;
 }
 
@@ -9385,9 +9353,9 @@ declspecs_add_type (location_t loc, struct c_declspecs *specs,
 	      break;
 	    case RID_COMPLEX:
 	      dupe = specs->complex_p;
-	      if (!flag_isoc99 && !in_system_header_at (loc))
-		pedwarn (loc, OPT_Wpedantic,
-			 "ISO C90 does not support complex types");
+	      if (!in_system_header_at (loc))
+		pedwarn_c90 (loc, OPT_Wpedantic,
+			     "ISO C90 does not support complex types");
 	      if (specs->typespec_word == cts_auto_type)
 		error_at (loc,
 			  ("both %<complex%> and %<__auto_type%> in "
@@ -9603,9 +9571,9 @@ declspecs_add_type (location_t loc, struct c_declspecs *specs,
 		}
 	      return specs;
 	    case RID_BOOL:
-	      if (!flag_isoc99 && !in_system_header_at (loc))
-		pedwarn (loc, OPT_Wpedantic,
-			 "ISO C90 does not support boolean types");
+	      if (!in_system_header_at (loc))
+		pedwarn_c90 (loc, OPT_Wpedantic,
+			     "ISO C90 does not support boolean types");
 	      if (specs->long_p)
 		error_at (loc,
 			  ("both %<long%> and %<_Bool%> in "
@@ -9935,14 +9903,14 @@ declspecs_add_scspec (source_location loc,
 	     identifier in the implementation namespace; only diagnose
 	     it for the C11 spelling because of existing code using
 	     the other spelling.  */
-	  if (!flag_isoc11 && !specs->thread_gnu_p)
+	  if (!specs->thread_gnu_p)
 	    {
 	      if (flag_isoc99)
-		pedwarn (loc, OPT_Wpedantic,
-			 "ISO C99 does not support %qE", scspec);
+		pedwarn_c99 (loc, OPT_Wpedantic,
+			     "ISO C99 does not support %qE", scspec);
 	      else
-		pedwarn (loc, OPT_Wpedantic,
-			 "ISO C90 does not support %qE", scspec);
+		pedwarn_c99 (loc, OPT_Wpedantic,
+			     "ISO C90 does not support %qE", scspec);
 	    }
 	  specs->locations[cdw_thread] = loc;
 	}

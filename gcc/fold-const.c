@@ -69,6 +69,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-dfa.h"
 #include "hash-table.h"  /* Required for ENABLE_FOLD_CHECKING.  */
 #include "builtins.h"
+#include "cgraph.h"
 
 /* Nonzero if we are folding constants inside an initializer; zero
    otherwise.  */
@@ -6641,36 +6642,18 @@ reorder_operands_p (const_tree arg0, const_tree arg1)
 bool
 tree_swap_operands_p (const_tree arg0, const_tree arg1, bool reorder)
 {
-  STRIP_SIGN_NOPS (arg0);
-  STRIP_SIGN_NOPS (arg1);
-
-  if (TREE_CODE (arg1) == INTEGER_CST)
+  if (CONSTANT_CLASS_P (arg1))
     return 0;
-  if (TREE_CODE (arg0) == INTEGER_CST)
+  if (CONSTANT_CLASS_P (arg0))
     return 1;
 
-  if (TREE_CODE (arg1) == REAL_CST)
-    return 0;
-  if (TREE_CODE (arg0) == REAL_CST)
-    return 1;
-
-  if (TREE_CODE (arg1) == FIXED_CST)
-    return 0;
-  if (TREE_CODE (arg0) == FIXED_CST)
-    return 1;
-
-  if (TREE_CODE (arg1) == COMPLEX_CST)
-    return 0;
-  if (TREE_CODE (arg0) == COMPLEX_CST)
-    return 1;
+  STRIP_NOPS (arg0);
+  STRIP_NOPS (arg1);
 
   if (TREE_CONSTANT (arg1))
     return 0;
   if (TREE_CONSTANT (arg0))
     return 1;
-
-  if (optimize_function_for_size_p (cfun))
-    return 0;
 
   if (reorder && flag_evaluation_order
       && (TREE_SIDE_EFFECTS (arg0) || TREE_SIDE_EFFECTS (arg1)))
@@ -7239,15 +7222,18 @@ fold_plusminus_mult_expr (location_t loc, enum tree_code code, tree type,
    upon failure.  */
 
 static int
-native_encode_int (const_tree expr, unsigned char *ptr, int len)
+native_encode_int (const_tree expr, unsigned char *ptr, int len, int off)
 {
   tree type = TREE_TYPE (expr);
   int total_bytes = GET_MODE_SIZE (TYPE_MODE (type));
   int byte, offset, word, words;
   unsigned char value;
 
-  if (total_bytes > len)
+  if ((off == -1 && total_bytes > len)
+      || off >= total_bytes)
     return 0;
+  if (off == -1)
+    off = 0;
   words = total_bytes / UNITS_PER_WORD;
 
   for (byte = 0; byte < total_bytes; byte++)
@@ -7270,9 +7256,11 @@ native_encode_int (const_tree expr, unsigned char *ptr, int len)
 	}
       else
 	offset = BYTES_BIG_ENDIAN ? (total_bytes - 1) - byte : byte;
-      ptr[offset] = value;
+      if (offset >= off
+	  && offset - off < len)
+	ptr[offset - off] = value;
     }
-  return total_bytes;
+  return MIN (len, total_bytes - off);
 }
 
 
@@ -7282,7 +7270,7 @@ native_encode_int (const_tree expr, unsigned char *ptr, int len)
    upon failure.  */
 
 static int
-native_encode_fixed (const_tree expr, unsigned char *ptr, int len)
+native_encode_fixed (const_tree expr, unsigned char *ptr, int len, int off)
 {
   tree type = TREE_TYPE (expr);
   enum machine_mode mode = TYPE_MODE (type);
@@ -7302,7 +7290,7 @@ native_encode_fixed (const_tree expr, unsigned char *ptr, int len)
   value = TREE_FIXED_CST (expr);
   i_value = double_int_to_tree (i_type, value.data);
 
-  return native_encode_int (i_value, ptr, len);
+  return native_encode_int (i_value, ptr, len, off);
 }
 
 
@@ -7312,7 +7300,7 @@ native_encode_fixed (const_tree expr, unsigned char *ptr, int len)
    upon failure.  */
 
 static int
-native_encode_real (const_tree expr, unsigned char *ptr, int len)
+native_encode_real (const_tree expr, unsigned char *ptr, int len, int off)
 {
   tree type = TREE_TYPE (expr);
   int total_bytes = GET_MODE_SIZE (TYPE_MODE (type));
@@ -7324,8 +7312,11 @@ native_encode_real (const_tree expr, unsigned char *ptr, int len)
      up to 192 bits.  */
   long tmp[6];
 
-  if (total_bytes > len)
+  if ((off == -1 && total_bytes > len)
+      || off >= total_bytes)
     return 0;
+  if (off == -1)
+    off = 0;
   words = (32 / BITS_PER_UNIT) / UNITS_PER_WORD;
 
   real_to_target (tmp, TREE_REAL_CST_PTR (expr), TYPE_MODE (type));
@@ -7349,9 +7340,12 @@ native_encode_real (const_tree expr, unsigned char *ptr, int len)
 	}
       else
 	offset = BYTES_BIG_ENDIAN ? 3 - byte : byte;
-      ptr[offset + ((bitpos / BITS_PER_UNIT) & ~3)] = value;
+      offset = offset + ((bitpos / BITS_PER_UNIT) & ~3);
+      if (offset >= off
+	  && offset - off < len)
+	ptr[offset - off] = value;
     }
-  return total_bytes;
+  return MIN (len, total_bytes - off);
 }
 
 /* Subroutine of native_encode_expr.  Encode the COMPLEX_CST
@@ -7360,18 +7354,22 @@ native_encode_real (const_tree expr, unsigned char *ptr, int len)
    upon failure.  */
 
 static int
-native_encode_complex (const_tree expr, unsigned char *ptr, int len)
+native_encode_complex (const_tree expr, unsigned char *ptr, int len, int off)
 {
   int rsize, isize;
   tree part;
 
   part = TREE_REALPART (expr);
-  rsize = native_encode_expr (part, ptr, len);
-  if (rsize == 0)
+  rsize = native_encode_expr (part, ptr, len, off);
+  if (off == -1
+      && rsize == 0)
     return 0;
   part = TREE_IMAGPART (expr);
-  isize = native_encode_expr (part, ptr+rsize, len-rsize);
-  if (isize != rsize)
+  if (off != -1)
+    off = MAX (0, off - GET_MODE_SIZE (TYPE_MODE (TREE_TYPE (part))));
+  isize = native_encode_expr (part, ptr+rsize, len-rsize, off);
+  if (off == -1
+      && isize != rsize)
     return 0;
   return rsize + isize;
 }
@@ -7383,7 +7381,7 @@ native_encode_complex (const_tree expr, unsigned char *ptr, int len)
    upon failure.  */
 
 static int
-native_encode_vector (const_tree expr, unsigned char *ptr, int len)
+native_encode_vector (const_tree expr, unsigned char *ptr, int len, int off)
 {
   unsigned i, count;
   int size, offset;
@@ -7395,10 +7393,21 @@ native_encode_vector (const_tree expr, unsigned char *ptr, int len)
   size = GET_MODE_SIZE (TYPE_MODE (itype));
   for (i = 0; i < count; i++)
     {
+      if (off >= size)
+	{
+	  off -= size;
+	  continue;
+	}
       elem = VECTOR_CST_ELT (expr, i);
-      if (native_encode_expr (elem, ptr+offset, len-offset) != size)
+      int res = native_encode_expr (elem, ptr+offset, len-offset, off);
+      if ((off == -1 && res != size)
+	  || res == 0)
 	return 0;
-      offset += size;
+      offset += res;
+      if (offset >= len)
+	return offset;
+      if (off != -1)
+	off = 0;
     }
   return offset;
 }
@@ -7410,7 +7419,7 @@ native_encode_vector (const_tree expr, unsigned char *ptr, int len)
    upon failure.  */
 
 static int
-native_encode_string (const_tree expr, unsigned char *ptr, int len)
+native_encode_string (const_tree expr, unsigned char *ptr, int len, int off)
 {
   tree type = TREE_TYPE (expr);
   HOST_WIDE_INT total_bytes;
@@ -7421,47 +7430,56 @@ native_encode_string (const_tree expr, unsigned char *ptr, int len)
       || !tree_fits_shwi_p (TYPE_SIZE_UNIT (type)))
     return 0;
   total_bytes = tree_to_shwi (TYPE_SIZE_UNIT (type));
-  if (total_bytes > len)
+  if ((off == -1 && total_bytes > len)
+      || off >= total_bytes)
     return 0;
-  if (TREE_STRING_LENGTH (expr) < total_bytes)
+  if (off == -1)
+    off = 0;
+  if (TREE_STRING_LENGTH (expr) - off < MIN (total_bytes, len))
     {
-      memcpy (ptr, TREE_STRING_POINTER (expr), TREE_STRING_LENGTH (expr));
-      memset (ptr + TREE_STRING_LENGTH (expr), 0,
-	      total_bytes - TREE_STRING_LENGTH (expr));
+      int written = 0;
+      if (off < TREE_STRING_LENGTH (expr))
+	{
+	  written = MIN (len, TREE_STRING_LENGTH (expr) - off);
+	  memcpy (ptr, TREE_STRING_POINTER (expr) + off, written);
+	}
+      memset (ptr + written, 0,
+	      MIN (total_bytes - written, len - written));
     }
   else
-    memcpy (ptr, TREE_STRING_POINTER (expr), total_bytes);
-  return total_bytes;
+    memcpy (ptr, TREE_STRING_POINTER (expr) + off, MIN (total_bytes, len));
+  return MIN (total_bytes - off, len);
 }
 
 
 /* Subroutine of fold_view_convert_expr.  Encode the INTEGER_CST,
    REAL_CST, COMPLEX_CST or VECTOR_CST specified by EXPR into the
-   buffer PTR of length LEN bytes.  Return the number of bytes
-   placed in the buffer, or zero upon failure.  */
+   buffer PTR of length LEN bytes.  If OFF is not -1 then start
+   the encoding at byte offset OFF and encode at most LEN bytes.
+   Return the number of bytes placed in the buffer, or zero upon failure.  */
 
 int
-native_encode_expr (const_tree expr, unsigned char *ptr, int len)
+native_encode_expr (const_tree expr, unsigned char *ptr, int len, int off)
 {
   switch (TREE_CODE (expr))
     {
     case INTEGER_CST:
-      return native_encode_int (expr, ptr, len);
+      return native_encode_int (expr, ptr, len, off);
 
     case REAL_CST:
-      return native_encode_real (expr, ptr, len);
+      return native_encode_real (expr, ptr, len, off);
 
     case FIXED_CST:
-      return native_encode_fixed (expr, ptr, len);
+      return native_encode_fixed (expr, ptr, len, off);
 
     case COMPLEX_CST:
-      return native_encode_complex (expr, ptr, len);
+      return native_encode_complex (expr, ptr, len, off);
 
     case VECTOR_CST:
-      return native_encode_vector (expr, ptr, len);
+      return native_encode_vector (expr, ptr, len, off);
 
     case STRING_CST:
-      return native_encode_string (expr, ptr, len);
+      return native_encode_string (expr, ptr, len, off);
 
     default:
       return 0;
@@ -8990,9 +9008,13 @@ fold_comparison (location_t loc, enum tree_code code, tree type,
 
   /* Transform comparisons of the form X - Y CMP 0 to X CMP Y.  */
   if (TREE_CODE (arg0) == MINUS_EXPR
-      && (equality_code || TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (arg0)))
+      && equality_code
       && integer_zerop (arg1))
     {
+      /* ??? The transformation is valid for the other operators if overflow
+	 is undefined for the type, but performing it here badly interacts
+	 with the transformation in fold_cond_expr_with_comparison which
+	 attempts to synthetize ABS_EXPR.  */
       if (!equality_code)
 	fold_overflow_warning ("assuming signed overflow does not occur "
 			       "when changing X - Y cmp 0 to X cmp Y",
@@ -10790,6 +10812,19 @@ fold_binary_loc (location_t loc,
 				      fold_convert_loc (loc, type, arg1));
 	      if (tmp)
 	        return fold_build2_loc (loc, PLUS_EXPR, type, tmp, arg01);
+	    }
+	  /* PTR0 - (PTR1 p+ A) -> (PTR0 - PTR1) - A, assuming PTR0 - PTR1
+	     simplifies. */
+	  else if (TREE_CODE (arg1) == POINTER_PLUS_EXPR)
+	    {
+	      tree arg10 = fold_convert_loc (loc, type,
+					     TREE_OPERAND (arg1, 0));
+	      tree arg11 = fold_convert_loc (loc, type,
+					     TREE_OPERAND (arg1, 1));
+	      tree tmp = fold_binary_loc (loc, MINUS_EXPR, type, arg0,
+					  fold_convert_loc (loc, type, arg10));
+	      if (tmp)
+		return fold_build2_loc (loc, MINUS_EXPR, type, tmp, arg11);
 	    }
 	}
       /* A - (-B) -> A + B */
@@ -14859,9 +14894,11 @@ fold_checksum_tree (const_tree expr, struct md5_ctx *ctx,
       if (CODE_CONTAINS_STRUCT (TREE_CODE (expr), TS_DECL_NON_COMMON))
 	{
 	  if (TREE_CODE (expr) == FUNCTION_DECL)
-	    fold_checksum_tree (DECL_VINDEX (expr), ctx, ht);
+	    {
+	      fold_checksum_tree (DECL_VINDEX (expr), ctx, ht);
+	      fold_checksum_tree (DECL_ARGUMENTS (expr), ctx, ht);
+	    }
 	  fold_checksum_tree (DECL_RESULT_FLD (expr), ctx, ht);
-	  fold_checksum_tree (DECL_ARGUMENT_FLD (expr), ctx, ht);
 	}
       break;
     case tcc_type:
@@ -16020,21 +16057,33 @@ tree_single_nonzero_warnv_p (tree t, bool *strict_overflow_p)
     case ADDR_EXPR:
       {
 	tree base = TREE_OPERAND (t, 0);
+
 	if (!DECL_P (base))
 	  base = get_base_address (base);
 
 	if (!base)
 	  return false;
 
-	/* Weak declarations may link to NULL.  Other things may also be NULL
-	   so protect with -fdelete-null-pointer-checks; but not variables
-	   allocated on the stack.  */
+	/* For objects in symbol table check if we know they are non-zero.
+	   Don't do anything for variables and functions before symtab is built;
+	   it is quite possible that they will be declared weak later.  */
+	if (DECL_P (base) && decl_in_symtab_p (base))
+	  {
+	    struct symtab_node *symbol;
+
+	    symbol = symtab_node::get (base);
+	    if (symbol)
+	      return symbol->nonzero_address ();
+	    else
+	      return false;
+	  }
+
+	/* Function local objects are never NULL.  */
 	if (DECL_P (base)
-	    && (flag_delete_null_pointer_checks
-		|| (DECL_CONTEXT (base)
-		    && TREE_CODE (DECL_CONTEXT (base)) == FUNCTION_DECL
-		    && auto_var_in_fn_p (base, DECL_CONTEXT (base)))))
-	  return !VAR_OR_FUNCTION_DECL_P (base) || !DECL_WEAK (base);
+	    && (DECL_CONTEXT (base)
+		&& TREE_CODE (DECL_CONTEXT (base)) == FUNCTION_DECL
+		&& auto_var_in_fn_p (base, DECL_CONTEXT (base))))
+	  return true;
 
 	/* Constants are never weak.  */
 	if (CONSTANT_CLASS_P (base))

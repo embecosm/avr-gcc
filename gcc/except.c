@@ -139,7 +139,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic.h"
 #include "tree-pretty-print.h"
 #include "tree-pass.h"
-#include "pointer-set.h"
 #include "cfgloop.h"
 #include "builtins.h"
 
@@ -527,7 +526,7 @@ struct duplicate_eh_regions_data
 {
   duplicate_eh_regions_map label_map;
   void *label_map_data;
-  struct pointer_map_t *eh_map;
+  hash_map<void *, void *> *eh_map;
 };
 
 static void
@@ -536,12 +535,9 @@ duplicate_eh_regions_1 (struct duplicate_eh_regions_data *data,
 {
   eh_landing_pad old_lp, new_lp;
   eh_region new_r;
-  void **slot;
 
   new_r = gen_eh_region (old_r->type, outer);
-  slot = pointer_map_insert (data->eh_map, (void *)old_r);
-  gcc_assert (*slot == NULL);
-  *slot = (void *)new_r;
+  gcc_assert (!data->eh_map->put (old_r, new_r));
 
   switch (old_r->type)
     {
@@ -586,9 +582,7 @@ duplicate_eh_regions_1 (struct duplicate_eh_regions_data *data,
 	continue;
 
       new_lp = gen_eh_landing_pad (new_r);
-      slot = pointer_map_insert (data->eh_map, (void *)old_lp);
-      gcc_assert (*slot == NULL);
-      *slot = (void *)new_lp;
+      gcc_assert (!data->eh_map->put (old_lp, new_lp));
 
       new_lp->post_landing_pad
 	= data->label_map (old_lp->post_landing_pad, data->label_map_data);
@@ -609,7 +603,7 @@ duplicate_eh_regions_1 (struct duplicate_eh_regions_data *data,
    that allows the caller to remap uses of both EH regions and
    EH landing pads.  */
 
-struct pointer_map_t *
+hash_map<void *, void *> *
 duplicate_eh_regions (struct function *ifun,
 		      eh_region copy_region, int outer_lp,
 		      duplicate_eh_regions_map map, void *map_data)
@@ -623,7 +617,7 @@ duplicate_eh_regions (struct function *ifun,
 
   data.label_map = map;
   data.label_map_data = map_data;
-  data.eh_map = pointer_map_create ();
+  data.eh_map = new hash_map<void *, void *>;
 
   outer_region = get_eh_region_from_lp_number (outer_lp);
 
@@ -956,9 +950,9 @@ assign_filter_values (void)
    first instruction of some existing BB and return the newly
    produced block.  */
 static basic_block
-emit_to_new_bb_before (rtx seq, rtx insn)
+emit_to_new_bb_before (rtx_insn *seq, rtx insn)
 {
-  rtx last;
+  rtx_insn *last;
   basic_block bb;
   edge e;
   edge_iterator ei;
@@ -1027,7 +1021,7 @@ dw2_build_landing_pads (void)
   for (i = 1; vec_safe_iterate (cfun->eh->lp_array, i, &lp); ++i)
     {
       basic_block bb;
-      rtx seq;
+      rtx_insn *seq;
       edge e;
 
       if (lp == NULL || lp->post_landing_pad == NULL)
@@ -1113,7 +1107,8 @@ static void
 sjlj_mark_call_sites (void)
 {
   int last_call_site = -2;
-  rtx insn, mem;
+  rtx_insn *insn;
+  rtx mem;
 
   for (insn = get_insns (); insn ; insn = NEXT_INSN (insn))
     {
@@ -1121,7 +1116,7 @@ sjlj_mark_call_sites (void)
       eh_region r;
       bool nothrow;
       int this_call_site;
-      rtx before, p;
+      rtx_insn *before, *p;
 
       /* Reset value tracking at extended basic block boundaries.  */
       if (LABEL_P (insn))
@@ -1174,9 +1169,10 @@ sjlj_mark_call_sites (void)
 /* Construct the SjLj_Function_Context.  */
 
 static void
-sjlj_emit_function_enter (rtx dispatch_label)
+sjlj_emit_function_enter (rtx_code_label *dispatch_label)
 {
-  rtx fn_begin, fc, mem, seq;
+  rtx_insn *fn_begin, *seq;
+  rtx fc, mem;
   bool fn_begin_outside_block;
   rtx personality = get_personality_function (current_function_decl);
 
@@ -1254,7 +1250,7 @@ sjlj_emit_function_enter (rtx dispatch_label)
    the call to unwind_sjlj_unregister_libfunc if needed.  */
 
 void
-sjlj_emit_function_exit_after (rtx after)
+sjlj_emit_function_exit_after (rtx_insn *after)
 {
   crtl->eh.sjlj_exit_after = after;
 }
@@ -1262,7 +1258,7 @@ sjlj_emit_function_exit_after (rtx after)
 static void
 sjlj_emit_function_exit (void)
 {
-  rtx seq, insn;
+  rtx_insn *seq, *insn;
 
   start_sequence ();
 
@@ -1289,7 +1285,8 @@ sjlj_emit_dispatch_table (rtx dispatch_label, int num_dispatch)
   enum machine_mode unwind_word_mode = targetm.unwind_word_mode ();
   enum machine_mode filter_mode = targetm.eh_return_filter_mode ();
   eh_landing_pad lp;
-  rtx mem, seq, fc, before, exc_ptr_reg, filter_reg;
+  rtx mem, fc, before, exc_ptr_reg, filter_reg;
+  rtx_insn *seq;
   rtx first_reachable_label;
   basic_block bb;
   eh_region r;
@@ -1347,7 +1344,8 @@ sjlj_emit_dispatch_table (rtx dispatch_label, int num_dispatch)
   for (i = 1; vec_safe_iterate (cfun->eh->lp_array, i, &lp); ++i)
     if (lp && lp->post_landing_pad)
       {
-	rtx seq2, label;
+	rtx_insn *seq2;
+	rtx label;
 
 	start_sequence ();
 
@@ -1461,7 +1459,7 @@ sjlj_build_landing_pads (void)
   num_dispatch = sjlj_assign_call_site_values ();
   if (num_dispatch > 0)
     {
-      rtx dispatch_label = gen_label_rtx ();
+      rtx_code_label *dispatch_label = gen_label_rtx ();
       int align = STACK_SLOT_ALIGNMENT (sjlj_fc_type_node,
 					TYPE_MODE (sjlj_fc_type_node),
 					TYPE_ALIGN (sjlj_fc_type_node));
@@ -1489,7 +1487,7 @@ sjlj_build_landing_pads (void)
 			      align);
 
       sjlj_mark_call_sites ();
-      sjlj_emit_function_enter (NULL_RTX);
+      sjlj_emit_function_enter (NULL);
       sjlj_emit_function_exit ();
     }
 
@@ -1956,7 +1954,7 @@ can_nonlocal_goto (const_rtx insn)
 static unsigned int
 set_nothrow_function_flags (void)
 {
-  rtx insn;
+  rtx_insn *insn;
 
   crtl->nothrow = 1;
 
@@ -1990,15 +1988,14 @@ set_nothrow_function_flags (void)
       }
 
   if (crtl->nothrow
-      && (cgraph_function_body_availability (cgraph_get_node
-					     (current_function_decl))
+      && (cgraph_node::get (current_function_decl)->get_availability ()
           >= AVAIL_AVAILABLE))
     {
-      struct cgraph_node *node = cgraph_get_node (current_function_decl);
+      struct cgraph_node *node = cgraph_node::get (current_function_decl);
       struct cgraph_edge *e;
       for (e = node->callers; e; e = e->next_caller)
         e->can_throw_external = false;
-      cgraph_set_nothrow_flag (node, true);
+      node->set_nothrow_flag (true);
 
       if (dump_file)
 	fprintf (dump_file, "Marking function nothrow: %s\n\n",
@@ -2255,7 +2252,7 @@ expand_builtin_eh_return (tree stackadj_tree ATTRIBUTE_UNUSED,
 void
 expand_eh_return (void)
 {
-  rtx around_label;
+  rtx_code_label *around_label;
 
   if (! crtl->eh.ehr_label)
     return;
@@ -2465,10 +2462,10 @@ add_call_site (rtx landing_pad, int action, int section)
   return call_site_base + crtl->eh.call_site_record_v[section]->length () - 1;
 }
 
-static rtx
+static rtx_note *
 emit_note_eh_region_end (rtx insn)
 {
-  rtx next = NEXT_INSN (insn);
+  rtx_insn *next = NEXT_INSN (insn);
 
   /* Make sure we do not split a call and its corresponding
      CALL_ARG_LOCATION note.  */
@@ -2486,17 +2483,19 @@ emit_note_eh_region_end (rtx insn)
 static unsigned int
 convert_to_eh_region_ranges (void)
 {
-  rtx insn, iter, note;
+  rtx insn;
+  rtx_insn *iter;
+  rtx_note *note;
   action_hash_type ar_hash (31);
   int last_action = -3;
-  rtx last_action_insn = NULL_RTX;
+  rtx_insn *last_action_insn = NULL;
   rtx last_landing_pad = NULL_RTX;
-  rtx first_no_action_insn = NULL_RTX;
+  rtx_insn *first_no_action_insn = NULL;
   int call_site = 0;
   int cur_sec = 0;
   rtx section_switch_note = NULL_RTX;
-  rtx first_no_action_insn_before_switch = NULL_RTX;
-  rtx last_no_action_insn_before_switch = NULL_RTX;
+  rtx_insn *first_no_action_insn_before_switch = NULL;
+  rtx_insn *last_no_action_insn_before_switch = NULL;
   int saved_call_site_base = call_site_base;
 
   vec_alloc (crtl->eh.action_record_data, 64);
@@ -2563,8 +2562,8 @@ convert_to_eh_region_ranges (void)
 		gcc_assert (last_action != -3
 			    || (last_action_insn
 				== last_no_action_insn_before_switch));
-		first_no_action_insn_before_switch = NULL_RTX;
-		last_no_action_insn_before_switch = NULL_RTX;
+		first_no_action_insn_before_switch = NULL;
+		last_no_action_insn_before_switch = NULL;
 		call_site_base++;
 	      }
 	    /* If we'd not seen a previous action (-3) or the previous
@@ -2579,7 +2578,7 @@ convert_to_eh_region_ranges (void)
 		    note = emit_note_before (NOTE_INSN_EH_REGION_BEG,
 					     first_no_action_insn);
 		    NOTE_EH_HANDLER (note) = call_site;
-		    first_no_action_insn = NULL_RTX;
+		    first_no_action_insn = NULL;
 		  }
 
 		note = emit_note_eh_region_end (last_action_insn);
@@ -2612,7 +2611,7 @@ convert_to_eh_region_ranges (void)
 	  {
 	    first_no_action_insn_before_switch = first_no_action_insn;
 	    last_no_action_insn_before_switch = last_action_insn;
-	    first_no_action_insn = NULL_RTX;
+	    first_no_action_insn = NULL;
 	    gcc_assert (last_action == -1);
 	    last_action = -3;
 	  }

@@ -2123,6 +2123,12 @@ Gcc_backend::compound_statement(Bstatement* s1, Bstatement* s2)
   if (t == error_mark_node)
     return this->error_statement();
   append_to_statement_list(t, &stmt_list);
+
+  // If neither statement has any side effects, stmt_list can be NULL
+  // at this point.
+  if (stmt_list == NULL_TREE)
+    stmt_list = integer_zero_node;
+
   return this->make_statement(stmt_list);
 }
 
@@ -2374,8 +2380,8 @@ Gcc_backend::global_variable_set_init(Bvariable* var, Bexpression* expr)
 
   // If this variable goes in a unique section, it may need to go into
   // a different one now that DECL_INITIAL is set.
-  if (symtab_get_node(var_decl)
-      && symtab_get_node(var_decl)->implicit_section)
+  if (symtab_node::get(var_decl)
+      && symtab_node::get(var_decl)->implicit_section)
     {
       set_decl_section_name (var_decl, NULL);
       resolve_unique_section (var_decl,

@@ -1352,7 +1352,7 @@ simplify_unary_operation_1 (enum rtx_code code, enum machine_mode mode, rtx op)
 	 target mode is the same as the variable's promotion.  */
       if (GET_CODE (op) == SUBREG
 	  && SUBREG_PROMOTED_VAR_P (op)
-	  && ! SUBREG_PROMOTED_UNSIGNED_P (op)
+	  && SUBREG_PROMOTED_SIGNED_P (op)
 	  && GET_MODE_SIZE (mode) <= GET_MODE_SIZE (GET_MODE (XEXP (op, 0))))
 	{
 	  temp = rtl_hooks.gen_lowpart_no_emit (mode, op);
@@ -1419,7 +1419,7 @@ simplify_unary_operation_1 (enum rtx_code code, enum machine_mode mode, rtx op)
 	 target mode is the same as the variable's promotion.  */
       if (GET_CODE (op) == SUBREG
 	  && SUBREG_PROMOTED_VAR_P (op)
-	  && SUBREG_PROMOTED_UNSIGNED_P (op) > 0
+	  && SUBREG_PROMOTED_UNSIGNED_P (op)
 	  && GET_MODE_SIZE (mode) <= GET_MODE_SIZE (GET_MODE (XEXP (op, 0))))
 	{
 	  temp = rtl_hooks.gen_lowpart_no_emit (mode, op);
@@ -3367,6 +3367,50 @@ simplify_binary_operation_1 (enum rtx_code code, enum machine_mode mode,
 	      subop1 = XEXP (trueop0, i1);
 
 	      return simplify_gen_binary (VEC_CONCAT, mode, subop0, subop1);
+	    }
+
+	  /* If we select one half of a vec_concat, return that.  */
+	  if (GET_CODE (trueop0) == VEC_CONCAT
+	      && CONST_INT_P (XVECEXP (trueop1, 0, 0)))
+	    {
+	      rtx subop0 = XEXP (trueop0, 0);
+	      rtx subop1 = XEXP (trueop0, 1);
+	      enum machine_mode mode0 = GET_MODE (subop0);
+	      enum machine_mode mode1 = GET_MODE (subop1);
+	      int li = GET_MODE_SIZE (GET_MODE_INNER (mode0));
+	      int l0 = GET_MODE_SIZE (mode0) / li;
+	      int l1 = GET_MODE_SIZE (mode1) / li;
+	      int i0 = INTVAL (XVECEXP (trueop1, 0, 0));
+	      if (i0 == 0 && !side_effects_p (op1) && mode == mode0)
+		{
+		  bool success = true;
+		  for (int i = 1; i < l0; ++i)
+		    {
+		      rtx j = XVECEXP (trueop1, 0, i);
+		      if (!CONST_INT_P (j) || INTVAL (j) != i)
+			{
+			  success = false;
+			  break;
+			}
+		    }
+		  if (success)
+		    return subop0;
+		}
+	      if (i0 == l0 && !side_effects_p (op0) && mode == mode1)
+		{
+		  bool success = true;
+		  for (int i = 1; i < l1; ++i)
+		    {
+		      rtx j = XVECEXP (trueop1, 0, i);
+		      if (!CONST_INT_P (j) || INTVAL (j) != i0 + i)
+			{
+			  success = false;
+			  break;
+			}
+		    }
+		  if (success)
+		    return subop1;
+		}
 	    }
 	}
 
@@ -5589,7 +5633,7 @@ simplify_subreg (enum machine_mode outermode, rtx op,
 	{
 	  newx = gen_rtx_SUBREG (outermode, SUBREG_REG (op), final_offset);
 	  if (SUBREG_PROMOTED_VAR_P (op)
-	      && SUBREG_PROMOTED_UNSIGNED_P (op) >= 0
+	      && SUBREG_PROMOTED_SIGN (op) >= 0
 	      && GET_MODE_CLASS (outermode) == MODE_INT
 	      && IN_RANGE (GET_MODE_SIZE (outermode),
 			   GET_MODE_SIZE (innermode),
@@ -5597,8 +5641,7 @@ simplify_subreg (enum machine_mode outermode, rtx op,
 	      && subreg_lowpart_p (newx))
 	    {
 	      SUBREG_PROMOTED_VAR_P (newx) = 1;
-	      SUBREG_PROMOTED_UNSIGNED_SET
-		(newx, SUBREG_PROMOTED_UNSIGNED_P (op));
+	      SUBREG_PROMOTED_SET (newx, SUBREG_PROMOTED_GET (op));
 	    }
 	  return newx;
 	}

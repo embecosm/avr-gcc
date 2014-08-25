@@ -40,7 +40,6 @@
 #include "dwarf2.h"
 #include "timevar.h"
 #include "tree.h"
-#include "pointer-set.h"
 #include "hash-table.h"
 #include "vec.h"
 #include "ggc.h"
@@ -4828,10 +4827,10 @@ reorder_var_tracking_notes (void)
 		while (queue)
 		  {
 		    rtx next_queue = PREV_INSN (queue);
-		    PREV_INSN (NEXT_INSN (insn)) = queue;
-		    NEXT_INSN (queue) = NEXT_INSN (insn);
-		    NEXT_INSN (insn) = queue;
-		    PREV_INSN (queue) = insn;
+		    SET_PREV_INSN (NEXT_INSN (insn)) = queue;
+		    SET_NEXT_INSN (queue) = NEXT_INSN (insn);
+		    SET_NEXT_INSN (insn) = queue;
+		    SET_PREV_INSN (queue) = insn;
 		    queue = next_queue;
 		  }
 		in_bundle = false;
@@ -4844,10 +4843,10 @@ reorder_var_tracking_notes (void)
 	    if (in_bundle)
 	      {
 		rtx prev = PREV_INSN (insn);
-		PREV_INSN (next) = prev;
-		NEXT_INSN (prev) = next;
+		SET_PREV_INSN (next) = prev;
+		SET_NEXT_INSN (prev) = next;
 
-		PREV_INSN (insn) = queue;
+		SET_PREV_INSN (insn) = queue;
 		queue = insn;
 	      }
 	  }

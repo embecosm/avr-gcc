@@ -83,6 +83,24 @@ typedef unsigned gcov_type_unsigned __attribute__ ((mode (QI)));
 #define GCOV_LOCKED 0
 #endif
 
+/* In libgcov we need these functions to be extern, so prefix them with
+   __gcov.  In libgcov they must also be hidden so that the instance in
+   the executable is not also used in a DSO.  */
+#define gcov_var __gcov_var
+#define gcov_open __gcov_open
+#define gcov_close __gcov_close
+#define gcov_write_tag_length __gcov_write_tag_length
+#define gcov_position __gcov_position
+#define gcov_seek __gcov_seek
+#define gcov_rewrite __gcov_rewrite
+#define gcov_is_error __gcov_is_error
+#define gcov_write_unsigned __gcov_write_unsigned
+#define gcov_write_counter __gcov_write_counter
+#define gcov_write_summary __gcov_write_summary
+#define gcov_read_unsigned __gcov_read_unsigned
+#define gcov_read_counter __gcov_read_counter
+#define gcov_read_summary __gcov_read_summary
+
 #else /* IN_GCOV_TOOL */
 /* About the host.  */
 /* This path will be compiled for the host and linked into
@@ -111,12 +129,9 @@ typedef unsigned gcov_position_t;
 #define L_gcov_merge_ior 1
 #define L_gcov_merge_time_profile 1
 
-/* Make certian internal functions/variables in libgcov available for
-   gcov-tool access.  */
-#define GCOV_TOOL_LINKAGE 
-
 extern gcov_type gcov_read_counter_mem ();
 extern unsigned gcov_get_merge_weight ();
+extern struct gcov_info *gcov_list;
 
 #endif /* !IN_GCOV_TOOL */
 
@@ -128,24 +143,6 @@ extern unsigned gcov_get_merge_weight ();
 #define GCOV_LINKAGE /* nothing */
 #endif
 #endif
-
-/* In libgcov we need these functions to be extern, so prefix them with
-   __gcov.  In libgcov they must also be hidden so that the instance in
-   the executable is not also used in a DSO.  */
-#define gcov_var __gcov_var
-#define gcov_open __gcov_open
-#define gcov_close __gcov_close
-#define gcov_write_tag_length __gcov_write_tag_length
-#define gcov_position __gcov_position
-#define gcov_seek __gcov_seek
-#define gcov_rewrite __gcov_rewrite
-#define gcov_is_error __gcov_is_error
-#define gcov_write_unsigned __gcov_write_unsigned
-#define gcov_write_counter __gcov_write_counter
-#define gcov_write_summary __gcov_write_summary
-#define gcov_read_unsigned __gcov_read_unsigned
-#define gcov_read_counter __gcov_read_counter
-#define gcov_read_summary __gcov_read_summary
 
 /* Poison these, so they don't accidentally slip in.  */
 #pragma GCC poison gcov_write_string gcov_write_tag gcov_write_length
@@ -181,7 +178,7 @@ struct gcov_fn_info
   gcov_unsigned_t ident;		/* unique ident of function */
   gcov_unsigned_t lineno_checksum;	/* function lineo_checksum */
   gcov_unsigned_t cfg_checksum;		/* function cfg checksum */
-  struct gcov_ctr_info ctrs[0];		/* instrumented counters */
+  struct gcov_ctr_info ctrs[1];		/* instrumented counters */
 };
 
 /* Type of function used to merge counters.  */
@@ -208,6 +205,19 @@ struct gcov_info
   const struct gcov_fn_info **functions;
 #endif /* !IN_GCOV_TOOL */
 };
+
+/* Root of a program/shared-object state */
+struct gcov_root
+{
+  struct gcov_info *list;
+  unsigned dumped : 1;	/* counts have been dumped.  */
+  unsigned run_counted : 1;  /* run has been accounted for.  */
+};
+
+extern struct gcov_root __gcov_root ATTRIBUTE_HIDDEN;
+
+/* Dump a set of gcov objects.  */
+extern void __gcov_dump_one (struct gcov_root *) ATTRIBUTE_HIDDEN;
 
 /* Register a new object file module.  */
 extern void __gcov_init (struct gcov_info *) ATTRIBUTE_HIDDEN;
@@ -268,7 +278,7 @@ GCOV_LINKAGE void gcov_write_summary (gcov_unsigned_t /*tag*/,
                                       const struct gcov_summary *)
     ATTRIBUTE_HIDDEN;
 GCOV_LINKAGE void gcov_seek (gcov_position_t /*position*/) ATTRIBUTE_HIDDEN;
-GCOV_LINKAGE inline void gcov_rewrite (void);
+GCOV_LINKAGE void gcov_rewrite (void) ATTRIBUTE_HIDDEN;
 
 /* "Counts" stored in gcda files can be a real counter value, or
    an target address. When differentiate these two types because

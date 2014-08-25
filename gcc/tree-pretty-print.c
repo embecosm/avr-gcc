@@ -27,7 +27,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "expr.h"
 #include "tree-pretty-print.h"
 #include "hashtab.h"
-#include "pointer-set.h"
+#include "hash-set.h"
 #include "gimple-expr.h"
 #include "cgraph.h"
 #include "langhooks.h"
@@ -103,14 +103,14 @@ debug_generic_stmt (tree t)
 DEBUG_FUNCTION void
 debug_tree_chain (tree t)
 {
-  struct pointer_set_t *seen = pointer_set_create ();
+  hash_set<tree> seen;
 
   while (t)
     {
       print_generic_expr (stderr, t, TDF_VOPS|TDF_MEMSYMS|TDF_UID);
       fprintf (stderr, " ");
       t = TREE_CHAIN (t);
-      if (pointer_set_insert (seen, t))
+      if (seen.add (t))
 	{
 	  fprintf (stderr, "... [cycled back to ");
 	  print_generic_expr (stderr, t, TDF_VOPS|TDF_MEMSYMS|TDF_UID);
@@ -119,8 +119,6 @@ debug_tree_chain (tree t)
 	}
     }
   fprintf (stderr, "\n");
-
-  pointer_set_destroy (seen);
 }
 
 /* Prints declaration DECL to the FILE with details specified by FLAGS.  */
@@ -3456,7 +3454,7 @@ void
 dump_function_header (FILE *dump_file, tree fdecl, int flags)
 {
   const char *dname, *aname;
-  struct cgraph_node *node = cgraph_get_node (fdecl);
+  struct cgraph_node *node = cgraph_node::get (fdecl);
   struct function *fun = DECL_STRUCT_FUNCTION (fdecl);
 
   dname = lang_hooks.decl_printable_name (fdecl, 2);

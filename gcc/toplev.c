@@ -282,16 +282,7 @@ init_local_tick (void)
 static void
 init_random_seed (void)
 {
-  if (flag_random_seed)
-    {
-      char *endp;
-
-      /* When the driver passed in a hex number don't crc it again */
-      random_seed = strtoul (flag_random_seed, &endp, 0);
-      if (!(endp > flag_random_seed && *endp == 0))
-        random_seed = crc32_string (0, flag_random_seed);
-    }
-  else if (!random_seed)
+  if (!random_seed)
     random_seed = local_tick ^ getpid ();  /* Old racey fallback method */
 }
 
@@ -314,6 +305,15 @@ set_random_seed (const char *val)
 {
   const char *old = flag_random_seed;
   flag_random_seed = val;
+  if (flag_random_seed)
+    {
+      char *endp;
+
+      /* When the driver passed in a hex number don't crc it again */
+      random_seed = strtoul (flag_random_seed, &endp, 0);
+      if (!(endp > flag_random_seed && *endp == 0))
+        random_seed = crc32_string (0, flag_random_seed);
+    }
   return old;
 }
 
@@ -393,7 +393,7 @@ wrapup_global_declaration_2 (tree decl)
     {
       varpool_node *node;
       bool needed = true;
-      node = varpool_get_node (decl);
+      node = varpool_node::get (decl);
 
       if (!node && flag_ltrans)
 	needed = false;
@@ -1052,16 +1052,19 @@ output_stack_usage (void)
 
   if (warn_stack_usage >= 0)
     {
+      const location_t loc = DECL_SOURCE_LOCATION (current_function_decl);
+
       if (stack_usage_kind == DYNAMIC)
-	warning (OPT_Wstack_usage_, "stack usage might be unbounded");
+	warning_at (loc, OPT_Wstack_usage_, "stack usage might be unbounded");
       else if (stack_usage > warn_stack_usage)
 	{
 	  if (stack_usage_kind == DYNAMIC_BOUNDED)
-	    warning (OPT_Wstack_usage_, "stack usage might be %wd bytes",
-		     stack_usage);
+	    warning_at (loc,
+			OPT_Wstack_usage_, "stack usage might be %wd bytes",
+			stack_usage);
 	  else
-	    warning (OPT_Wstack_usage_, "stack usage is %wd bytes",
-		     stack_usage);
+	    warning_at (loc, OPT_Wstack_usage_, "stack usage is %wd bytes",
+			stack_usage);
 	}
     }
 }
@@ -1112,11 +1115,6 @@ general_init (const char *argv0)
   /* Set a default printer.  Language specific initializations will
      override it later.  */
   tree_diagnostics_defaults (global_dc);
-  /* FIXME: This should probably be moved to C-family
-     language-specific initializations.  */
-  /* By default print macro expansion contexts in the diagnostic
-     finalizer -- for tokens resulting from macro expansion.  */
-  diagnostic_finalizer (global_dc) = virt_loc_aware_diagnostic_finalizer;
 
   global_dc->show_caret
     = global_options_init.x_flag_diagnostics_show_caret;
@@ -1157,7 +1155,7 @@ general_init (const char *argv0)
   init_ggc ();
   init_stringpool ();
   line_table = ggc_alloc<line_maps> ();
-  linemap_init (line_table);
+  linemap_init (line_table, BUILTINS_LOCATION);
   line_table->reallocator = realloc_for_line_map;
   line_table->round_alloc_size = ggc_round_alloc_size;
   init_ttree ();
@@ -1272,15 +1270,15 @@ process_options (void)
   else
     aux_base_name = "gccaux";
 
-#ifndef HAVE_cloog
+#ifndef HAVE_isl
   if (flag_graphite
       || flag_graphite_identity
       || flag_loop_block
       || flag_loop_interchange
       || flag_loop_strip_mine
       || flag_loop_parallelize_all)
-    sorry ("Graphite loop optimizations cannot be used (-fgraphite, "
-	   "-fgraphite-identity, -floop-block, "
+    sorry ("Graphite loop optimizations cannot be used (ISL is not available)" 
+	   "(-fgraphite, -fgraphite-identity, -floop-block, "
 	   "-floop-interchange, -floop-strip-mine, -floop-parallelize-all, "
 	   "and -ftree-loop-linear)");
 #endif
@@ -1552,9 +1550,18 @@ process_options (void)
     warn_stack_protect = 0;
 
   /* Address Sanitizer needs porting to each target architecture.  */
+
   if ((flag_sanitize & SANITIZE_ADDRESS)
-      && (targetm.asan_shadow_offset == NULL
-	  || !FRAME_GROWS_DOWNWARD))
+      && !FRAME_GROWS_DOWNWARD)
+    {
+      warning (0,
+	       "-fsanitize=address and -fsanitize=kernel-address "
+	       "are not supported for this target");
+      flag_sanitize &= ~SANITIZE_ADDRESS;
+    }
+
+  if ((flag_sanitize & SANITIZE_USER_ADDRESS)
+      && targetm.asan_shadow_offset == NULL)
     {
       warning (0, "-fsanitize=address not supported for this target");
       flag_sanitize &= ~SANITIZE_ADDRESS;
@@ -1604,6 +1611,10 @@ backend_init_target (void)
      on a mode change.  */
   init_expmed ();
   init_lower_subreg ();
+  init_set_costs ();
+
+  init_expr_target ();
+  ira_init ();
 
   /* We may need to recompute regno_save_code[] and regno_restore_code[]
      after a mode change as well.  */
@@ -1682,7 +1693,8 @@ lang_dependent_init_target (void)
      front end is initialized.  It also depends on the HAVE_xxx macros
      generated from the target machine description.  */
   init_optabs ();
-  this_target_rtl->lang_dependent_initialized = false;
+
+  gcc_assert (!this_target_rtl->target_specific_initialized);
 }
 
 /* Perform initializations that are lang-dependent or target-dependent.
@@ -1701,26 +1713,10 @@ initialize_rtl (void)
 
   /* Target specific RTL backend initialization.  */
   if (!this_target_rtl->target_specific_initialized)
-    backend_init_target ();
-  this_target_rtl->target_specific_initialized = true;
-
-  if (this_target_rtl->lang_dependent_initialized)
-    return;
-  this_target_rtl->lang_dependent_initialized = true;
-
-  /* The following initialization functions need to generate rtl, so
-     provide a dummy function context for them.  */
-  init_dummy_function_start ();
-
-  /* Do the target-specific parts of expr initialization.  */
-  init_expr_target ();
-
-  /* Although the actions of these functions are language-independent,
-     they use optabs, so we cannot call them from backend_init.  */
-  init_set_costs ();
-  ira_init ();
-
-  expand_dummy_function_end ();
+    {
+      backend_init_target ();
+      this_target_rtl->target_specific_initialized = true;
+    }
 }
 
 /* Language-dependent initialization.  Returns nonzero on success.  */

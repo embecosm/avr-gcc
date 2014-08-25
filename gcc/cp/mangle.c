@@ -667,6 +667,8 @@ write_mangled_name (const tree decl, bool top_level)
 	}
     }
   else if (VAR_P (decl)
+	   /* Variable template instantiations are mangled.  */
+	   && !(DECL_LANG_SPECIFIC (decl) && DECL_TEMPLATE_INFO (decl))
 	   /* The names of non-static global variables aren't mangled.  */
 	   && DECL_EXTERNAL_LINKAGE_P (decl)
 	   && (CP_DECL_CONTEXT (decl) == global_namespace
@@ -3487,11 +3489,11 @@ mangle_decl (const tree decl)
       if (TREE_CODE (decl) == FUNCTION_DECL)
 	{
 	  /* Don't create an alias to an unreferenced function.  */
-	  if (struct cgraph_node *n = cgraph_get_node (decl))
-	    cgraph_same_body_alias (n, alias, decl);
+	  if (struct cgraph_node *n = cgraph_node::get (decl))
+	    n->create_same_body_alias (alias, decl);
 	}
       else
-	varpool_extra_name_alias (alias, decl);
+	varpool_node::create_extra_name_alias (alias, decl);
 #endif
     }
 }

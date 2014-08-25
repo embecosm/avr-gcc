@@ -89,7 +89,7 @@ struct param_aa_status
 struct ipa_bb_info
 {
   /* Call graph edges going out of this BB.  */
-  vec<cgraph_edge_p> cg_edges;
+  vec<cgraph_edge *> cg_edges;
   /* Alias analysis statuses of each formal parameter at this bb.  */
   vec<param_aa_status> param_aa_statuses;
 };
@@ -204,14 +204,15 @@ ipa_populate_param_decls (struct cgraph_node *node,
   for (parm = fnargs; parm; parm = DECL_CHAIN (parm))
     {
       descriptors[param_num].decl = parm;
-      descriptors[param_num].move_cost = estimate_move_cost (TREE_TYPE (parm));
+      descriptors[param_num].move_cost = estimate_move_cost (TREE_TYPE (parm),
+							     true);
       param_num++;
     }
 }
 
 /* Return how many formal parameters FNDECL has.  */
 
-static inline int
+int
 count_formal_params (tree fndecl)
 {
   tree parm;
@@ -560,6 +561,19 @@ ipa_binfo_from_known_type_jfunc (struct ipa_jump_func *jfunc)
 
   if (!base_binfo)
     return NULL_TREE;
+  /* FIXME: At LTO we can't propagate to non-polymorphic type, because
+     we have no ODR equivalency on those.  This should be fixed by
+     propagating on types rather than binfos that would make type
+     matching here unnecesary.  */
+  if (in_lto_p
+      && (TREE_CODE (jfunc->value.known_type.component_type) != RECORD_TYPE
+	  || !TYPE_BINFO (jfunc->value.known_type.component_type)
+	  || !BINFO_VTABLE (TYPE_BINFO (jfunc->value.known_type.component_type))))
+    {
+      if (!jfunc->value.known_type.offset)
+	return base_binfo;
+      return NULL;
+    }
   return get_binfo_at_offset (base_binfo,
 			      jfunc->value.known_type.offset,
 			      jfunc->value.known_type.component_type);
@@ -1965,7 +1979,7 @@ ipa_compute_jump_functions_for_bb (struct func_body_info *fbi, basic_block bb)
 
       if (callee)
 	{
-	  cgraph_function_or_thunk_node (callee, NULL);
+	  callee->ultimate_alias_target ();
 	  /* We do not need to bother analyzing calls to unknown functions
 	     unless they may become known during lto/whopr.  */
 	  if (!callee->definition && !flag_lto)
@@ -2048,7 +2062,7 @@ ipa_note_param_call (struct cgraph_node *node, int param_index, gimple stmt)
 {
   struct cgraph_edge *cs;
 
-  cs = cgraph_edge (node, stmt);
+  cs = node->get_edge (stmt);
   cs->indirect_info->param_index = param_index;
   cs->indirect_info->agg_contents = 0;
   cs->indirect_info->member_ptr = 0;
@@ -2323,11 +2337,46 @@ ipa_analyze_call_uses (struct func_body_info *fbi, gimple call)
           && !virtual_method_call_p (target)))
     return;
 
+  struct cgraph_edge *cs = fbi->node->get_edge (call);
   /* If we previously turned the call into a direct call, there is
      no need to analyze.  */
-  struct cgraph_edge *cs = cgraph_edge (fbi->node, call);
   if (cs && !cs->indirect_unknown_callee)
     return;
+
+  if (cs->indirect_info->polymorphic)
+    {
+      tree otr_type;
+      HOST_WIDE_INT otr_token;
+      ipa_polymorphic_call_context context;
+      tree instance;
+      tree target = gimple_call_fn (call);
+
+      instance = get_polymorphic_call_info (current_function_decl,
+					    target,
+					    &otr_type, &otr_token,
+					    &context, call);
+
+      if (context.get_dynamic_type (instance,
+				    OBJ_TYPE_REF_OBJECT (target),
+				    otr_type, call))
+	{
+	  gcc_assert (TREE_CODE (otr_type) == RECORD_TYPE);
+	  cs->indirect_info->polymorphic = true;
+	  cs->indirect_info->param_index = -1;
+	  cs->indirect_info->otr_token = otr_token;
+	  cs->indirect_info->otr_type = otr_type;
+	  cs->indirect_info->outer_type = context.outer_type;
+	  cs->indirect_info->speculative_outer_type = context.speculative_outer_type;
+	  cs->indirect_info->offset = context.offset;
+	  cs->indirect_info->speculative_offset = context.speculative_offset;
+	  cs->indirect_info->maybe_in_construction
+	     = context.maybe_in_construction;
+	  cs->indirect_info->maybe_derived_type = context.maybe_derived_type;
+	  cs->indirect_info->speculative_maybe_derived_type
+	     = context.speculative_maybe_derived_type;
+	}
+    }
+
   if (TREE_CODE (target) == SSA_NAME)
     ipa_analyze_indirect_call_uses (fbi, call, target);
   else if (virtual_method_call_p (target))
@@ -2560,7 +2609,7 @@ ipa_intraprocedural_devirtualization (gimple call)
 #ifdef ENABLE_CHECKING
   if (fndecl)
     gcc_assert (possible_polymorphic_call_target_p
-		  (otr, cgraph_get_node (fndecl)));
+		  (otr, cgraph_node::get (fndecl)));
 #endif
   return fndecl;
 }
@@ -2784,14 +2833,14 @@ ipa_make_edge_direct_to_target (struct cgraph_edge *ie, tree target)
 	    }
 
 	  target = builtin_decl_implicit (BUILT_IN_UNREACHABLE);
-	  callee = cgraph_get_create_node (target);
+	  callee = cgraph_node::get_create (target);
 	  unreachable = true;
 	}
       else
-	callee = cgraph_get_node (target);
+	callee = cgraph_node::get (target);
     }
   else
-    callee = cgraph_get_node (target);
+    callee = cgraph_node::get (target);
 
   /* Because may-edges are not explicitely represented and vtable may be external,
      we may create the first reference to the object in the unit.  */
@@ -2814,7 +2863,7 @@ ipa_make_edge_direct_to_target (struct cgraph_edge *ie, tree target)
 		     ie->callee->order);
 	  return NULL;
 	}
-      callee = cgraph_get_create_node (target);
+      callee = cgraph_node::get_create (target);
     }
 
   if (!dbg_cnt (devirt))
@@ -2936,7 +2985,7 @@ cgraph_node_for_jfunc (struct ipa_jump_func *jfunc)
       || TREE_CODE (TREE_OPERAND (cst, 0)) != FUNCTION_DECL)
     return NULL;
 
-  return cgraph_get_node (TREE_OPERAND (cst, 0));
+  return cgraph_node::get (TREE_OPERAND (cst, 0));
 }
 
 
@@ -3021,7 +3070,7 @@ ipa_impossible_devirt_target (struct cgraph_edge *ie, tree target)
 		 ie->caller->name (), ie->caller->order);
     }
   tree new_target = builtin_decl_implicit (BUILT_IN_UNREACHABLE);
-  cgraph_get_create_node (new_target);
+  cgraph_node::get_create (new_target);
   return new_target;
 }
 
@@ -3058,7 +3107,7 @@ try_make_edge_direct_virtual_call (struct cgraph_edge *ie,
 	      if ((TREE_CODE (TREE_TYPE (target)) == FUNCTION_TYPE
 		   && DECL_FUNCTION_CODE (target) == BUILT_IN_UNREACHABLE)
 		  || !possible_polymorphic_call_target_p
-		       (ie, cgraph_get_node (target)))
+		       (ie, cgraph_node::get (target)))
 		target = ipa_impossible_devirt_target (ie, target);
 	      return ipa_make_edge_direct_to_target (ie, target);
 	    }
@@ -3104,7 +3153,7 @@ try_make_edge_direct_virtual_call (struct cgraph_edge *ie,
 
   if (target)
     {
-      if (!possible_polymorphic_call_target_p (ie, cgraph_get_node (target)))
+      if (!possible_polymorphic_call_target_p (ie, cgraph_node::get (target)))
 	target = ipa_impossible_devirt_target (ie, target);
       return ipa_make_edge_direct_to_target (ie, target);
     }
@@ -3121,7 +3170,7 @@ try_make_edge_direct_virtual_call (struct cgraph_edge *ie,
 static bool
 update_indirect_edges_after_inlining (struct cgraph_edge *cs,
 				      struct cgraph_node *node,
-				      vec<cgraph_edge_p> *new_edges)
+				      vec<cgraph_edge *> *new_edges)
 {
   struct ipa_edge_args *top;
   struct cgraph_edge *ie, *next_ie, *new_direct_edge;
@@ -3230,7 +3279,7 @@ update_indirect_edges_after_inlining (struct cgraph_edge *cs,
 static bool
 propagate_info_to_inlined_callees (struct cgraph_edge *cs,
 				   struct cgraph_node *node,
-				   vec<cgraph_edge_p> *new_edges)
+				   vec<cgraph_edge *> *new_edges)
 {
   struct cgraph_edge *e;
   bool res;
@@ -3298,7 +3347,7 @@ propagate_controlled_uses (struct cgraph_edge *cs)
 
 	      if (t && TREE_CODE (t) == ADDR_EXPR
 		  && TREE_CODE (TREE_OPERAND (t, 0)) == FUNCTION_DECL
-		  && (n = cgraph_get_node (TREE_OPERAND (t, 0)))
+		  && (n = cgraph_node::get (TREE_OPERAND (t, 0)))
 		  && (ref = new_root->find_reference (n, NULL, 0)))
 		{
 		  if (dump_file)
@@ -3324,7 +3373,7 @@ propagate_controlled_uses (struct cgraph_edge *cs)
 	      gcc_checking_assert (TREE_CODE (cst) == ADDR_EXPR
 				   && TREE_CODE (TREE_OPERAND (cst, 0))
 				   == FUNCTION_DECL);
-	      n = cgraph_get_node (TREE_OPERAND (cst, 0));
+	      n = cgraph_node::get (TREE_OPERAND (cst, 0));
 	      if (n)
 		{
 		  struct cgraph_node *clone;
@@ -3385,7 +3434,7 @@ propagate_controlled_uses (struct cgraph_edge *cs)
 
 bool
 ipa_propagate_indirect_call_infos (struct cgraph_edge *cs,
-				   vec<cgraph_edge_p> *new_edges)
+				   vec<cgraph_edge *> *new_edges)
 {
   bool changed;
   /* Do nothing if the preparation phase has not been carried out yet
@@ -3639,7 +3688,7 @@ ipa_node_duplication_hook (struct cgraph_node *src, struct cgraph_node *dst,
 static void
 ipa_add_new_function (struct cgraph_node *node, void *data ATTRIBUTE_UNUSED)
 {
-  if (cgraph_function_with_gimple_body_p (node))
+  if (node->has_gimple_body_p ())
     ipa_analyze_node (node);
 }
 
@@ -3976,7 +4025,7 @@ void
 ipa_modify_call_arguments (struct cgraph_edge *cs, gimple stmt,
 			   ipa_parm_adjustment_vec adjustments)
 {
-  struct cgraph_node *current_node = cgraph_get_node (current_function_decl);
+  struct cgraph_node *current_node = cgraph_node::get (current_function_decl);
   vec<tree> vargs;
   vec<tree, va_gc> **debug_args = NULL;
   gimple new_stmt;
@@ -4210,7 +4259,7 @@ ipa_modify_call_arguments (struct cgraph_edge *cs, gimple stmt,
     cgraph_set_call_stmt (cs, new_stmt);
   do
     {
-      ipa_record_stmt_references (current_node, gsi_stmt (gsi));
+      current_node->record_stmt_references (gsi_stmt (gsi));
       gsi_prev (&gsi);
     }
   while (gsi_stmt (gsi) != gsi_stmt (prev_gsi));
@@ -4679,6 +4728,7 @@ ipa_write_indirect_edge_info (struct output_block *ob,
   bp_pack_value (&bp, ii->by_ref, 1);
   bp_pack_value (&bp, ii->maybe_in_construction, 1);
   bp_pack_value (&bp, ii->maybe_derived_type, 1);
+  bp_pack_value (&bp, ii->speculative_maybe_derived_type, 1);
   streamer_write_bitpack (&bp);
 
   if (ii->polymorphic)
@@ -4686,6 +4736,9 @@ ipa_write_indirect_edge_info (struct output_block *ob,
       streamer_write_hwi (ob, ii->otr_token);
       stream_write_tree (ob, ii->otr_type, true);
       stream_write_tree (ob, ii->outer_type, true);
+      stream_write_tree (ob, ii->speculative_outer_type, true);
+      if (ii->speculative_outer_type)
+        streamer_write_hwi (ob, ii->speculative_offset);
     }
 }
 
@@ -4709,11 +4762,15 @@ ipa_read_indirect_edge_info (struct lto_input_block *ib,
   ii->by_ref = bp_unpack_value (&bp, 1);
   ii->maybe_in_construction = bp_unpack_value (&bp, 1);
   ii->maybe_derived_type = bp_unpack_value (&bp, 1);
+  ii->speculative_maybe_derived_type = bp_unpack_value (&bp, 1);
   if (ii->polymorphic)
     {
       ii->otr_token = (HOST_WIDE_INT) streamer_read_hwi (ib);
       ii->otr_type = stream_read_tree (ib, data_in);
       ii->outer_type = stream_read_tree (ib, data_in);
+      ii->speculative_outer_type = stream_read_tree (ib, data_in);
+      if (ii->speculative_outer_type)
+        ii->speculative_offset = (HOST_WIDE_INT) streamer_read_hwi (ib);
     }
 }
 
@@ -4835,12 +4892,12 @@ ipa_prop_write_jump_functions (void)
 
   ob = create_output_block (LTO_section_jump_functions);
   encoder = ob->decl_state->symtab_node_encoder;
-  ob->cgraph_node = NULL;
+  ob->symbol = NULL;
   for (lsei = lsei_start_function_in_partition (encoder); !lsei_end_p (lsei);
        lsei_next_function_in_partition (&lsei))
     {
       node = lsei_cgraph_node (lsei);
-      if (cgraph_function_with_gimple_body_p (node)
+      if (node->has_gimple_body_p ()
 	  && IPA_NODE_REF (node) != NULL)
 	count++;
     }
@@ -4852,7 +4909,7 @@ ipa_prop_write_jump_functions (void)
        lsei_next_function_in_partition (&lsei))
     {
       node = lsei_cgraph_node (lsei);
-      if (cgraph_function_with_gimple_body_p (node)
+      if (node->has_gimple_body_p ()
 	  && IPA_NODE_REF (node) != NULL)
         ipa_write_node_info (ob, node);
     }
@@ -4873,12 +4930,11 @@ ipa_prop_read_section (struct lto_file_decl_data *file_data, const char *data,
   const int main_offset = cfg_offset + header->cfg_size;
   const int string_offset = main_offset + header->main_size;
   struct data_in *data_in;
-  struct lto_input_block ib_main;
   unsigned int i;
   unsigned int count;
 
-  LTO_INIT_INPUT_BLOCK (ib_main, (const char *) data + main_offset, 0,
-			header->main_size);
+  lto_input_block ib_main ((const char *) data + main_offset,
+			   header->main_size);
 
   data_in =
     lto_data_in_create (file_data, (const char *) data + string_offset,
@@ -4893,7 +4949,8 @@ ipa_prop_read_section (struct lto_file_decl_data *file_data, const char *data,
 
       index = streamer_read_uhwi (&ib_main);
       encoder = file_data->symtab_node_encoder;
-      node = cgraph (lto_symtab_encoder_deref (encoder, index));
+      node = dyn_cast<cgraph_node *> (lto_symtab_encoder_deref (encoder,
+								index));
       gcc_assert (node->definition);
       ipa_read_node_info (&ib_main, node, data_in);
     }
@@ -5011,12 +5068,12 @@ ipa_prop_write_all_agg_replacement (void)
 
   ob = create_output_block (LTO_section_ipcp_transform);
   encoder = ob->decl_state->symtab_node_encoder;
-  ob->cgraph_node = NULL;
+  ob->symbol = NULL;
   for (lsei = lsei_start_function_in_partition (encoder); !lsei_end_p (lsei);
        lsei_next_function_in_partition (&lsei))
     {
       node = lsei_cgraph_node (lsei);
-      if (cgraph_function_with_gimple_body_p (node)
+      if (node->has_gimple_body_p ()
 	  && ipa_get_agg_replacements_for_node (node) != NULL)
 	count++;
     }
@@ -5027,7 +5084,7 @@ ipa_prop_write_all_agg_replacement (void)
        lsei_next_function_in_partition (&lsei))
     {
       node = lsei_cgraph_node (lsei);
-      if (cgraph_function_with_gimple_body_p (node)
+      if (node->has_gimple_body_p ()
 	  && ipa_get_agg_replacements_for_node (node) != NULL)
 	write_agg_replacement_chain (ob, node);
     }
@@ -5050,12 +5107,11 @@ read_replacements_section (struct lto_file_decl_data *file_data,
   const int main_offset = cfg_offset + header->cfg_size;
   const int string_offset = main_offset + header->main_size;
   struct data_in *data_in;
-  struct lto_input_block ib_main;
   unsigned int i;
   unsigned int count;
 
-  LTO_INIT_INPUT_BLOCK (ib_main, (const char *) data + main_offset, 0,
-			header->main_size);
+  lto_input_block ib_main ((const char *) data + main_offset,
+			   header->main_size);
 
   data_in = lto_data_in_create (file_data, (const char *) data + string_offset,
 				header->string_size, vNULL);
@@ -5069,7 +5125,8 @@ read_replacements_section (struct lto_file_decl_data *file_data,
 
       index = streamer_read_uhwi (&ib_main);
       encoder = file_data->symtab_node_encoder;
-      node = cgraph (lto_symtab_encoder_deref (encoder, index));
+      node = dyn_cast<cgraph_node *> (lto_symtab_encoder_deref (encoder,
+								index));
       gcc_assert (node->definition);
       read_agg_replacement_chain (&ib_main, node, data_in);
     }

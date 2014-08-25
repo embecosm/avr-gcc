@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2012, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -151,25 +151,20 @@ package Exp_Ch7 is
    --  when pragma Restrictions (No_Finalization) applies, in which case we
    --  know that class-wide objects do not contain controlled parts.
 
-   function Get_Global_Pool_For_Access_Type (T : Entity_Id) return Entity_Id;
-   --  Return the pool id for access type T.  This is generally the node
-   --  corresponding to System.Global_Pool.Global_Pool_Object except on
-   --  VMS if the access size is 32.
-
    function Has_New_Controlled_Component (E : Entity_Id) return Boolean;
    --  E is a type entity. Give the same result as Has_Controlled_Component
    --  except for tagged extensions where the result is True only if the
    --  latest extension contains a controlled component.
 
    function Make_Adjust_Call
-     (Obj_Ref    : Node_Id;
-      Typ        : Entity_Id;
-      For_Parent : Boolean := False) return Node_Id;
+     (Obj_Ref   : Node_Id;
+      Typ       : Entity_Id;
+      Skip_Self : Boolean := False) return Node_Id;
    --  Create a call to either Adjust or Deep_Adjust depending on the structure
    --  of type Typ. Obj_Ref is an expression with no-side effect (not required
    --  to have been previously analyzed) that references the object to be
-   --  adjusted. Typ is the expected type of Obj_Ref. Flag For_Parent must be
-   --  set when an adjustment call is being created for field _parent.
+   --  adjusted. Typ is the expected type of Obj_Ref. When Skip_Self is set,
+   --  only the components (if any) are adjusted.
 
    function Make_Attach_Call
      (Obj_Ref : Node_Id;
@@ -191,15 +186,14 @@ package Exp_Ch7 is
    --      (System.Finalization_Root.Root_Controlled_Ptr (Obj_Ref));
 
    function Make_Final_Call
-     (Obj_Ref    : Node_Id;
-      Typ        : Entity_Id;
-      For_Parent : Boolean := False) return Node_Id;
+     (Obj_Ref   : Node_Id;
+      Typ       : Entity_Id;
+      Skip_Self : Boolean := False) return Node_Id;
    --  Create a call to either Finalize or Deep_Finalize depending on the
-   --  structure of type Typ. Obj_Ref is an expression (with no-side effect and
-   --  is not required to have been previously analyzed) that references the
-   --  object to be finalized. Typ is the expected type of Obj_Ref. Flag For_
-   --  Parent must be set when a finalization call is being created for field
-   --  _parent.
+   --  structure of type Typ. Obj_Ref is an expression (with no-side effect
+   --  and is not required to have been previously analyzed) that references
+   --  the object to be finalized. Typ is the expected type of Obj_Ref. When
+   --  Skip_Self is set, only the components (if any) are finalized.
 
    procedure Make_Finalize_Address_Body (Typ : Entity_Id);
    --  Create the body of TSS routine Finalize_Address if Typ is controlled and
@@ -295,11 +289,21 @@ package Exp_Ch7 is
 
    procedure Store_Before_Actions_In_Scope (L : List_Id);
    --  Append the list L of actions to the end of the before-actions store in
-   --  the top of the scope stack.
+   --  the top of the scope stack (also analyzes these actions).
 
    procedure Store_After_Actions_In_Scope (L : List_Id);
-   --  Append the list L of actions to the beginning of the after-actions store
-   --  in the top of the scope stack.
+   --  Prepend the list L of actions to the beginning of the after-actions
+   --  stored in the top of the scope stack (also analyzes these actions).
+   --
+   --  Note that we are prepending here rather than appending. This means that
+   --  if several calls are made to this procedure for the same scope, the
+   --  actions will be executed in reverse order of the calls (actions for the
+   --  last call executed first). Within the list L for a single call, the
+   --  actions are executed in the order in which they appear in this list.
+
+   procedure Store_Cleanup_Actions_In_Scope (L : List_Id);
+   --  Prepend the list L of actions to the beginning of the cleanup-actions
+   --  store in the top of the scope stack.
 
    procedure Wrap_Transient_Declaration (N : Node_Id);
    --  N is an object declaration. Expand the finalization calls after the

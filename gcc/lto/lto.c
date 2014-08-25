@@ -33,6 +33,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "langhooks.h"
 #include "bitmap.h"
 #include "hash-map.h"
+#include "inchash.h"
 #include "ipa-prop.h"
 #include "common.h"
 #include "debug.h"
@@ -205,7 +206,7 @@ lto_materialize_function (struct cgraph_node *node)
   decl = node->decl;
   /* Read in functions with body (analyzed nodes)
      and also functions that are needed to produce virtual clones.  */
-  if ((cgraph_function_with_gimple_body_p (node) && node->analyzed)
+  if ((node->has_gimple_body_p () && node->analyzed)
       || node->used_as_abstract_origin
       || has_analyzed_clone_p (node))
     {
@@ -236,7 +237,7 @@ lto_read_in_decl_state (struct data_in *data_in, const uint32_t *data,
 
   ix = *data++;
   decl = streamer_tree_cache_get_tree (data_in->reader_cache, ix);
-  if (TREE_CODE (decl) != FUNCTION_DECL)
+  if (!VAR_OR_FUNCTION_DECL_P (decl))
     {
       gcc_assert (decl == void_type_node);
       decl = NULL_TREE;
@@ -266,7 +267,7 @@ static hash_map<const_tree, hashval_t> *canonical_type_hash_cache;
 static unsigned long num_canonical_type_hash_entries;
 static unsigned long num_canonical_type_hash_queries;
 
-static hashval_t iterative_hash_canonical_type (tree type, hashval_t val);
+static void iterative_hash_canonical_type (tree type, inchash::hash &hstate);
 static hashval_t gimple_canonical_type_hash (const void *p);
 static void gimple_register_canonical_type_1 (tree t, hashval_t hash);
 
@@ -278,14 +279,14 @@ static void gimple_register_canonical_type_1 (tree t, hashval_t hash);
 static hashval_t
 hash_canonical_type (tree type)
 {
-  hashval_t v;
+  inchash::hash hstate;
 
   /* Combine a few common features of types so that types are grouped into
      smaller sets; when searching for existing matching types to merge,
      only existing types having the same features as the new type will be
      checked.  */
-  v = iterative_hash_hashval_t (TREE_CODE (type), 0);
-  v = iterative_hash_hashval_t (TYPE_MODE (type), v);
+  hstate.add_int (TREE_CODE (type));
+  hstate.add_int (TYPE_MODE (type));
 
   /* Incorporate common features of numerical types.  */
   if (INTEGRAL_TYPE_P (type)
@@ -294,48 +295,48 @@ hash_canonical_type (tree type)
       || TREE_CODE (type) == OFFSET_TYPE
       || POINTER_TYPE_P (type))
     {
-      v = iterative_hash_hashval_t (TYPE_PRECISION (type), v);
-      v = iterative_hash_hashval_t (TYPE_UNSIGNED (type), v);
+      hstate.add_int (TYPE_UNSIGNED (type));
+      hstate.add_int (TYPE_PRECISION (type));
     }
 
   if (VECTOR_TYPE_P (type))
     {
-      v = iterative_hash_hashval_t (TYPE_VECTOR_SUBPARTS (type), v);
-      v = iterative_hash_hashval_t (TYPE_UNSIGNED (type), v);
+      hstate.add_int (TYPE_VECTOR_SUBPARTS (type));
+      hstate.add_int (TYPE_UNSIGNED (type));
     }
 
   if (TREE_CODE (type) == COMPLEX_TYPE)
-    v = iterative_hash_hashval_t (TYPE_UNSIGNED (type), v);
+    hstate.add_int (TYPE_UNSIGNED (type));
 
   /* For pointer and reference types, fold in information about the type
      pointed to but do not recurse to the pointed-to type.  */
   if (POINTER_TYPE_P (type))
     {
-      v = iterative_hash_hashval_t (TYPE_ADDR_SPACE (TREE_TYPE (type)), v);
-      v = iterative_hash_hashval_t (TREE_CODE (TREE_TYPE (type)), v);
+      hstate.add_int (TYPE_ADDR_SPACE (TREE_TYPE (type)));
+      hstate.add_int (TREE_CODE (TREE_TYPE (type)));
     }
 
   /* For integer types hash only the string flag.  */
   if (TREE_CODE (type) == INTEGER_TYPE)
-    v = iterative_hash_hashval_t (TYPE_STRING_FLAG (type), v);
+    hstate.add_int (TYPE_STRING_FLAG (type));
 
   /* For array types hash the domain bounds and the string flag.  */
   if (TREE_CODE (type) == ARRAY_TYPE && TYPE_DOMAIN (type))
     {
-      v = iterative_hash_hashval_t (TYPE_STRING_FLAG (type), v);
+      hstate.add_int (TYPE_STRING_FLAG (type));
       /* OMP lowering can introduce error_mark_node in place of
 	 random local decls in types.  */
       if (TYPE_MIN_VALUE (TYPE_DOMAIN (type)) != error_mark_node)
-	v = iterative_hash_expr (TYPE_MIN_VALUE (TYPE_DOMAIN (type)), v);
+	inchash::add_expr (TYPE_MIN_VALUE (TYPE_DOMAIN (type)), hstate);
       if (TYPE_MAX_VALUE (TYPE_DOMAIN (type)) != error_mark_node)
-	v = iterative_hash_expr (TYPE_MAX_VALUE (TYPE_DOMAIN (type)), v);
+	inchash::add_expr (TYPE_MAX_VALUE (TYPE_DOMAIN (type)), hstate);
     }
 
   /* Recurse for aggregates with a single element type.  */
   if (TREE_CODE (type) == ARRAY_TYPE
       || TREE_CODE (type) == COMPLEX_TYPE
       || TREE_CODE (type) == VECTOR_TYPE)
-    v = iterative_hash_canonical_type (TREE_TYPE (type), v);
+    iterative_hash_canonical_type (TREE_TYPE (type), hstate);
 
   /* Incorporate function return and argument types.  */
   if (TREE_CODE (type) == FUNCTION_TYPE || TREE_CODE (type) == METHOD_TYPE)
@@ -345,17 +346,17 @@ hash_canonical_type (tree type)
 
       /* For method types also incorporate their parent class.  */
       if (TREE_CODE (type) == METHOD_TYPE)
-	v = iterative_hash_canonical_type (TYPE_METHOD_BASETYPE (type), v);
+	iterative_hash_canonical_type (TYPE_METHOD_BASETYPE (type), hstate);
 
-      v = iterative_hash_canonical_type (TREE_TYPE (type), v);
+      iterative_hash_canonical_type (TREE_TYPE (type), hstate);
 
       for (p = TYPE_ARG_TYPES (type), na = 0; p; p = TREE_CHAIN (p))
 	{
-	  v = iterative_hash_canonical_type (TREE_VALUE (p), v);
+	  iterative_hash_canonical_type (TREE_VALUE (p), hstate);
 	  na++;
 	}
 
-      v = iterative_hash_hashval_t (na, v);
+      hstate.add_int (na);
     }
 
   if (RECORD_OR_UNION_TYPE_P (type))
@@ -366,20 +367,20 @@ hash_canonical_type (tree type)
       for (f = TYPE_FIELDS (type), nf = 0; f; f = TREE_CHAIN (f))
 	if (TREE_CODE (f) == FIELD_DECL)
 	  {
-	    v = iterative_hash_canonical_type (TREE_TYPE (f), v);
+	    iterative_hash_canonical_type (TREE_TYPE (f), hstate);
 	    nf++;
 	  }
 
-      v = iterative_hash_hashval_t (nf, v);
+      hstate.add_int (nf);
     }
 
-  return v;
+  return hstate.end();
 }
 
 /* Returning a hash value for gimple type TYPE combined with VAL.  */
 
-static hashval_t
-iterative_hash_canonical_type (tree type, hashval_t val)
+static void
+iterative_hash_canonical_type (tree type, inchash::hash &hstate)
 {
   hashval_t v;
   /* An already processed type.  */
@@ -397,7 +398,7 @@ iterative_hash_canonical_type (tree type, hashval_t val)
       v = hash_canonical_type (type);
       gimple_register_canonical_type_1 (type, v);
     }
-  return iterative_hash_hashval_t (v, val);
+  hstate.add_int (v);
 }
 
 /* Returns the hash for a canonical type P.  */
@@ -775,7 +776,6 @@ mentions_vars_p_decl_non_common (tree t)
 {
   if (mentions_vars_p_decl_with_vis (t))
     return true;
-  CHECK_NO_VAR (DECL_ARGUMENT_FLD (t));
   CHECK_NO_VAR (DECL_RESULT_FLD (t));
   return false;
 }
@@ -787,6 +787,7 @@ mentions_vars_p_function (tree t)
 {
   if (mentions_vars_p_decl_non_common (t))
     return true;
+  CHECK_NO_VAR (DECL_ARGUMENTS (t));
   CHECK_NO_VAR (DECL_VINDEX (t));
   CHECK_VAR (DECL_FUNCTION_PERSONALITY (t));
   return false;
@@ -1006,8 +1007,9 @@ register_resolution (struct lto_file_decl_data *file_data, tree decl,
   if (resolution == LDPR_UNKNOWN)
     return;
   if (!file_data->resolution_map)
-    file_data->resolution_map = pointer_map_create ();
-  *pointer_map_insert (file_data->resolution_map, decl) = (void *)(size_t)resolution;
+    file_data->resolution_map
+      = new hash_map<tree, ld_plugin_symbol_resolution>;
+  file_data->resolution_map->put (decl, resolution);
 }
 
 /* Register DECL with the global symbol table and change its
@@ -1842,14 +1844,13 @@ lto_read_decls (struct lto_file_decl_data *decl_data, const void *data,
   const int decl_offset = sizeof (struct lto_decl_header);
   const int main_offset = decl_offset + header->decl_state_size;
   const int string_offset = main_offset + header->main_size;
-  struct lto_input_block ib_main;
   struct data_in *data_in;
   unsigned int i;
   const uint32_t *data_ptr, *data_end;
   uint32_t num_decl_states;
 
-  LTO_INIT_INPUT_BLOCK (ib_main, (const char *) data + main_offset, 0,
-			header->main_size);
+  lto_input_block ib_main ((const char *) data + main_offset,
+			   header->main_size);
 
   data_in = lto_data_in_create (decl_data, (const char *) data + string_offset,
 				header->string_size, resolutions);
@@ -2711,11 +2712,11 @@ lto_fixup_prevailing_decls (tree t)
 	}
       if (CODE_CONTAINS_STRUCT (code, TS_DECL_NON_COMMON))
 	{
-	  LTO_NO_PREVAIL (DECL_ARGUMENT_FLD (t));
 	  LTO_NO_PREVAIL (DECL_RESULT_FLD (t));
 	}
       if (CODE_CONTAINS_STRUCT (code, TS_FUNCTION_DECL))
 	{
+	  LTO_NO_PREVAIL (DECL_ARGUMENTS (t));
 	  LTO_SET_PREVAIL (DECL_FUNCTION_PERSONALITY (t));
 	  LTO_NO_PREVAIL (DECL_VINDEX (t));
 	}
@@ -2886,7 +2887,6 @@ read_cgraph_and_symbols (unsigned nfiles, const char **fnames)
   FILE *resolution;
   int count = 0;
   struct lto_file_decl_data **decl_data;
-  void **res;
   symtab_node *snode;
 
   init_cgraph ();
@@ -3013,18 +3013,17 @@ read_cgraph_and_symbols (unsigned nfiles, const char **fnames)
 
   /* Store resolutions into the symbol table.  */
 
+  ld_plugin_symbol_resolution_t *res;
   FOR_EACH_SYMBOL (snode)
-    if (symtab_real_symbol_p (snode)
+    if (snode->real_symbol_p ()
 	&& snode->lto_file_data
 	&& snode->lto_file_data->resolution_map
-	&& (res = pointer_map_contains (snode->lto_file_data->resolution_map,
-					snode->decl)))
-      snode->resolution
-	= (enum ld_plugin_symbol_resolution)(size_t)*res;
+	&& (res = snode->lto_file_data->resolution_map->get (snode->decl)))
+      snode->resolution = *res;
   for (i = 0; all_file_decl_data[i]; i++)
     if (all_file_decl_data[i]->resolution_map)
       {
-        pointer_map_destroy (all_file_decl_data[i]->resolution_map);
+        delete all_file_decl_data[i]->resolution_map;
         all_file_decl_data[i]->resolution_map = NULL;
       }
   
@@ -3082,24 +3081,21 @@ read_cgraph_and_symbols (unsigned nfiles, const char **fnames)
   if (cgraph_dump_file)
     {
       fprintf (cgraph_dump_file, "Before merging:\n");
-      dump_symtab (cgraph_dump_file);
+      symtab_node::dump_table (cgraph_dump_file);
     }
   lto_symtab_merge_symbols ();
-  /* Removal of unreacable symbols is needed to make verify_symtab to pass;
+  /* Removal of unreachable symbols is needed to make verify_symtab to pass;
      we are still having duplicated comdat groups containing local statics.
      We could also just remove them while merging.  */
-  symtab_remove_unreachable_nodes (false, dump_file);
+  symtab_remove_unreachable_nodes (true, dump_file);
   ggc_collect ();
   cgraph_state = CGRAPH_STATE_IPA_SSA;
 
   timevar_pop (TV_IPA_LTO_CGRAPH_MERGE);
 
-  timevar_push (TV_IPA_LTO_DECL_INIT_IO);
-
   /* Indicate that the cgraph is built and ready.  */
   cgraph_function_flags_ready = true;
 
-  timevar_pop (TV_IPA_LTO_DECL_INIT_IO);
   ggc_free (all_file_decl_data);
   all_file_decl_data = NULL;
 }
@@ -3117,9 +3113,6 @@ materialize_cgraph (void)
     fprintf (stderr,
 	     flag_wpa ? "Materializing decls:" : "Reading function bodies:");
 
-  /* Now that we have input the cgraph, we need to clear all of the aux
-     nodes and read the functions if we are not running in WPA mode.  */
-  timevar_push (TV_IPA_LTO_GIMPLE_IN);
 
   FOR_EACH_FUNCTION (node)
     {
@@ -3130,7 +3123,6 @@ materialize_cgraph (void)
 	}
     }
 
-  timevar_pop (TV_IPA_LTO_GIMPLE_IN);
 
   /* Start the appropriate timer depending on the mode that we are
      operating in.  */
@@ -3247,7 +3239,7 @@ do_whole_program_analysis (void)
   cgraph_function_flags_ready = true;
 
   if (cgraph_dump_file)
-    dump_symtab (cgraph_dump_file);
+    symtab_node::dump_table (cgraph_dump_file);
   bitmap_obstack_initialize (NULL);
   cgraph_state = CGRAPH_STATE_IPA_SSA;
 
@@ -3257,10 +3249,10 @@ do_whole_program_analysis (void)
   if (cgraph_dump_file)
     {
       fprintf (cgraph_dump_file, "Optimized ");
-      dump_symtab (cgraph_dump_file);
+      symtab_node::dump_table (cgraph_dump_file);
     }
 #ifdef ENABLE_CHECKING
-  verify_symtab ();
+  symtab_node::verify_symtab_nodes ();
 #endif
   bitmap_obstack_release (NULL);
 

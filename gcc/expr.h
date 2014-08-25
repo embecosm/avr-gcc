@@ -402,13 +402,13 @@ extern rtx store_by_pieces (rtx, unsigned HOST_WIDE_INT,
 			    void *, unsigned int, bool, int);
 
 /* Emit insns to set X from Y.  */
-extern rtx emit_move_insn (rtx, rtx);
+extern rtx_insn *emit_move_insn (rtx, rtx);
 
 /* Emit insns to set X from Y, with no frills.  */
-extern rtx emit_move_insn_1 (rtx, rtx);
+extern rtx_insn *emit_move_insn_1 (rtx, rtx);
 
-extern rtx emit_move_complex_push (enum machine_mode, rtx, rtx);
-extern rtx emit_move_complex_parts (rtx, rtx);
+extern rtx_insn *emit_move_complex_push (enum machine_mode, rtx, rtx);
+extern rtx_insn *emit_move_complex_parts (rtx, rtx);
 extern rtx emit_move_resolve_push (enum machine_mode, rtx);
 
 /* Push a block of length SIZE (perhaps variable)
@@ -440,6 +440,7 @@ extern rtx expand_expr_real_1 (tree, rtx, enum machine_mode,
 			       enum expand_modifier, rtx *, bool);
 extern rtx expand_expr_real_2 (sepops, rtx, enum machine_mode,
 			       enum expand_modifier);
+extern bool promoted_for_signed_and_unsigned_p (tree, enum machine_mode);
 
 /* Generate code for computing expression EXP.
    An rtx for the computed value is returned.  The value is never null.

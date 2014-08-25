@@ -36,7 +36,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "common/common-target.h"
 #include "diagnostic.h"
 #include "cgraph.h"
-#include "pointer-set.h"
 
 /* Various flags to control the mangling process.  */
 
@@ -260,9 +259,9 @@ make_alias_for_thunk (tree function)
   if (!flag_syntax_only)
     {
       struct cgraph_node *funcn, *aliasn;
-      funcn = cgraph_get_node (function);
+      funcn = cgraph_node::get (function);
       gcc_checking_assert (funcn);
-      aliasn = cgraph_same_body_alias (funcn, alias, function);
+      aliasn = cgraph_node::create_same_body_alias (alias, function);
       DECL_ASSEMBLER_NAME (function);
       gcc_assert (aliasn != NULL);
     }
@@ -359,13 +358,13 @@ use_thunk (tree thunk_fndecl, bool emit_p)
       tree fn = function;
       struct symtab_node *symbol;
 
-      if ((symbol = symtab_get_node (function))
+      if ((symbol = symtab_node::get (function))
 	  && symbol->alias)
 	{
 	  if (symbol->analyzed)
-	    fn = symtab_alias_ultimate_target (symtab_get_node (function))->decl;
+	    fn = symtab_node::get (function)->ultimate_alias_target ()->decl;
 	  else
-	    fn = symtab_get_node (function)->alias_target;
+	    fn = symtab_node::get (function)->alias_target;
 	}
       resolve_unique_section (fn, 0, flag_function_sections);
 
@@ -375,8 +374,8 @@ use_thunk (tree thunk_fndecl, bool emit_p)
 
 	  /* Output the thunk into the same section as function.  */
 	  set_decl_section_name (thunk_fndecl, DECL_SECTION_NAME (fn));
-	  symtab_get_node (thunk_fndecl)->implicit_section
-	    = symtab_get_node (fn)->implicit_section;
+	  symtab_node::get (thunk_fndecl)->implicit_section
+	    = symtab_node::get (fn)->implicit_section;
 	}
     }
 
@@ -395,14 +394,13 @@ use_thunk (tree thunk_fndecl, bool emit_p)
   a = nreverse (t);
   DECL_ARGUMENTS (thunk_fndecl) = a;
   TREE_ASM_WRITTEN (thunk_fndecl) = 1;
-  funcn = cgraph_get_node (function);
+  funcn = cgraph_node::get (function);
   gcc_checking_assert (funcn);
-  thunk_node = cgraph_add_thunk (funcn, thunk_fndecl, function,
-				 this_adjusting, fixed_offset, virtual_value,
-				 virtual_offset, alias);
+  thunk_node = funcn->create_thunk (thunk_fndecl, function,
+				    this_adjusting, fixed_offset, virtual_value,
+				    virtual_offset, alias);
   if (DECL_ONE_ONLY (function))
-    symtab_add_to_same_comdat_group (thunk_node,
-				     funcn);
+    thunk_node->add_to_same_comdat_group (funcn);
 
   if (!this_adjusting
       || !targetm.asm_out.can_output_mi_thunk (thunk_fndecl, fixed_offset,
@@ -1481,7 +1479,7 @@ maybe_explain_implicit_delete (tree decl)
   if (DECL_DEFAULTED_FN (decl))
     {
       /* Not marked GTY; it doesn't need to be GC'd or written to PCH.  */
-      static struct pointer_set_t *explained;
+      static hash_set<tree> *explained;
 
       special_function_kind sfk;
       location_t loc;
@@ -1489,8 +1487,8 @@ maybe_explain_implicit_delete (tree decl)
       tree ctype;
 
       if (!explained)
-	explained = pointer_set_create ();
-      if (pointer_set_insert (explained, decl))
+	explained = new hash_set<tree>;
+      if (explained->add (decl))
 	return true;
 
       sfk = special_function_p (decl);
@@ -1575,7 +1573,8 @@ explain_implicit_non_constexpr (tree decl)
   synthesized_method_walk (DECL_CLASS_CONTEXT (decl),
 			   special_function_p (decl), const_p,
 			   NULL, NULL, NULL, &dummy, true,
-			   NULL_TREE, NULL_TREE);
+			   DECL_INHERITED_CTOR_BASE (decl),
+			   FUNCTION_FIRST_USER_PARMTYPE (decl));
 }
 
 /* DECL is an instantiation of an inheriting constructor template.  Deduce
@@ -1798,8 +1797,6 @@ implicitly_declare_fn (special_function_kind kind, tree type,
   DECL_ARGUMENTS (fn) = this_parm;
 
   grokclassfn (type, fn, kind == sfk_destructor ? DTOR_FLAG : NO_SPECIAL);
-  set_linkage_according_to_type (type, fn);
-  rest_of_decl_compilation (fn, toplevel_bindings_p (), at_eof);
   DECL_IN_AGGR_P (fn) = 1;
   DECL_ARTIFICIAL (fn) = 1;
   DECL_DEFAULTED_FN (fn) = 1;
@@ -1811,6 +1808,9 @@ implicitly_declare_fn (special_function_kind kind, tree type,
   DECL_EXTERNAL (fn) = true;
   DECL_NOT_REALLY_EXTERN (fn) = 1;
   DECL_DECLARED_INLINE_P (fn) = 1;
+  DECL_COMDAT (fn) = 1;
+  set_linkage_according_to_type (type, fn);
+  rest_of_decl_compilation (fn, toplevel_bindings_p (), at_eof);
   gcc_assert (!TREE_USED (fn));
 
   /* Restore PROCESSING_TEMPLATE_DECL.  */
