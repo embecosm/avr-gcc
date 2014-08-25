@@ -42,16 +42,18 @@ print_mcu (const avr_mcu_t *mcu)
 
   FILE *f = fopen (name ,"w");
 
-  const char *sp8, *errata_skip;
+  const char *sp8, *errata_skip, *rmw;
   /* Leave "avr2" and "avr25" alone.  These two architectures are
      the only ones that mix devices with 8-bit SP and 16-bit SP.  */
   if (mcu->macro == NULL
       && (mcu->arch == ARCH_AVR2 || mcu->arch == ARCH_AVR25))
     sp8 = "";
 
-  sp8 = mcu->short_sp ? " -msp8" : " %<msp8";
+  sp8 = ((mcu->dev_attribute & AVR_SHORT_SP)
+	 ? " -msp8" : " %<msp8");
 
-  errata_skip = mcu->errata_skip ? " -mskip-bug" : "";
+  errata_skip = (mcu->dev_attribute & AVR_ERRATA_SKIP) ? " -mskip-bug" : "";
+  rmw = (mcu->dev_attribute & AVR_ISA_RMW) ? "%%{!mno-rmw:-mrmw}" : "";
 
   const char *arch_name = avr_arch_types[mcu->arch].arch_name;
 
@@ -61,11 +63,11 @@ print_mcu (const avr_mcu_t *mcu)
     fprintf (f, "*cpp:\n-D__AVR_DEV_LIB_NAME__=%s -D%s\n\n",
 	     mcu->library_name, mcu->macro);
 
-  fprintf (f, "*cc1:\n%s", errata_skip);
+  fprintf (f, "*cc1:\n%s%s", errata_skip, rmw);
   if (mcu->n_flash != arch_mcu->n_flash)
     fprintf (f, " %%{!mn-flash:-mn-flash=%d}", mcu->n_flash);
   fprintf (f, "\n\n");
-  fprintf (f, "*cc1plus:\n%s ", errata_skip);
+  fprintf (f, "*cc1plus:\n%s%s ", errata_skip, rmw);
   if (mcu->n_flash != arch_mcu->n_flash)
     fprintf (f, "%%{!mn-flash:-mn-flash=%d}", mcu->n_flash);
   fprintf (f, "%%{!frtti: -fno-rtti}"
@@ -73,7 +75,7 @@ print_mcu (const avr_mcu_t *mcu)
 	   "%%{!fexceptions: -fno-exceptions}\n\n");
 
   fprintf (f, "*asm:\n%%{march=*:-mmcu=%%*}%{mrelax: --mlink-relax}%s\n\n",
-	   mcu->errata_skip ? "" : " -mno-skip-bug");
+	   *errata_skip ? "" : " -mno-skip-bug");
 
   fprintf (f, "*link:\n%%{mrelax:--relax");
   if (strncmp (mcu->name, "at90usb8", strlen ("at90usb8")) == 0)

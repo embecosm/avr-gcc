@@ -1,3 +1,11 @@
+2014-08-25  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.opt (mrmw): New option.
+	* config/avr/avr-c.c (avr_cpu_cpp_builtins):
+	Use TARGET_RMW instead of avr_current_device->dev_attributes.
+	* config/avr/gen-avr-mmcu-specs.c (print_mcu): Check
+	mcu->dev_attribute for AVR_SHORT_SP and AVR_ISA_RMW .
+
 2014-08-21  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.h (ASM_SPEC): Add -%{mrelax: --mlink-relax}.

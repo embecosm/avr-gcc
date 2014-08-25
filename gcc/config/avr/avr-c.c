@@ -355,6 +355,9 @@ avr_cpu_cpp_builtins (struct cpp_reader *pfile)
         cpp_define (pfile, "__AVR_ERRATA_SKIP_JMP_CALL__");
     }
 
+  if (TARGET_RMW)
+    cpp_define (pfile, "__AVR_ISA_RMW__");
+
   cpp_define_formatted (pfile, "__AVR_SFR_OFFSET__=0x%x",
                         avr_current_arch->sfr_offset);
 
