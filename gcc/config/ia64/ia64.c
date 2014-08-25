@@ -74,6 +74,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "reload.h"
 #include "opts.h"
 #include "dumpfile.h"
+#include "builtins.h"
 
 /* This is used for communication between ASM_OUTPUT_LABEL and
    ASM_OUTPUT_LABELREF.  */
@@ -7536,7 +7537,7 @@ ia64_first_cycle_multipass_dfa_lookahead_guard (rtx insn, int ready_index)
 
   /* Size of ALAT is 32.  As far as we perform conservative
      data speculation, we keep ALAT half-empty.  */
-  if ((TODO_SPEC (insn) & BEGIN_DATA) && pending_data_specs >= 16)
+  if (pending_data_specs >= 16 && (TODO_SPEC (insn) & BEGIN_DATA))
     return ready_index == 0 ? -1 : 1;
 
   if (ready_index == 0)

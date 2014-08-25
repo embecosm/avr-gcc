@@ -64,6 +64,7 @@
 #include "tree-vectorizer.h"
 #include "config/arm/aarch-cost-tables.h"
 #include "dumpfile.h"
+#include "builtins.h"
 
 /* Defined for convenience.  */
 #define POINTER_BYTES (POINTER_SIZE / BITS_PER_UNIT)
@@ -8466,6 +8467,9 @@ aarch64_float_const_representable_p (rtx x)
   if (!CONST_DOUBLE_P (x))
     return false;
 
+  if (GET_MODE (x) == VOIDmode)
+    return false;
+
   REAL_VALUE_FROM_CONST_DOUBLE (r, x);
 
   /* We cannot represent infinities, NaNs or +/-zero.  We won't
@@ -9014,9 +9018,6 @@ aarch64_evpc_ext (struct expand_vec_perm_d *d)
         return false;
     }
 
-  /* The mid-end handles masks that just return one of the input vectors.  */
-  gcc_assert (location != 0);
-
   switch (d->vmode)
     {
     case V16QImode: gen = gen_aarch64_extv16qi; break;
@@ -9037,7 +9038,10 @@ aarch64_evpc_ext (struct expand_vec_perm_d *d)
   if (d->testing_p)
     return true;
 
-  if (BYTES_BIG_ENDIAN)
+  /* The case where (location == 0) is a no-op for both big- and little-endian,
+     and is removed by the mid-end at optimization levels -O1 and higher.  */
+
+  if (BYTES_BIG_ENDIAN && (location != 0))
     {
       /* After setup, we want the high elements of the first vector (stored
          at the LSB end of the register), and the low elements of the second
@@ -9051,6 +9055,80 @@ aarch64_evpc_ext (struct expand_vec_perm_d *d)
 
   offset = GEN_INT (location);
   emit_insn (gen (d->target, d->op0, d->op1, offset));
+  return true;
+}
+
+/* Recognize patterns for the REV insns.  */
+
+static bool
+aarch64_evpc_rev (struct expand_vec_perm_d *d)
+{
+  unsigned int i, j, diff, nelt = d->nelt;
+  rtx (*gen) (rtx, rtx);
+
+  if (!d->one_vector_p)
+    return false;
+
+  diff = d->perm[0];
+  switch (diff)
+    {
+    case 7:
+      switch (d->vmode)
+	{
+	case V16QImode: gen = gen_aarch64_rev64v16qi; break;
+	case V8QImode: gen = gen_aarch64_rev64v8qi;  break;
+	default:
+	  return false;
+	}
+      break;
+    case 3:
+      switch (d->vmode)
+	{
+	case V16QImode: gen = gen_aarch64_rev32v16qi; break;
+	case V8QImode: gen = gen_aarch64_rev32v8qi;  break;
+	case V8HImode: gen = gen_aarch64_rev64v8hi;  break;
+	case V4HImode: gen = gen_aarch64_rev64v4hi;  break;
+	default:
+	  return false;
+	}
+      break;
+    case 1:
+      switch (d->vmode)
+	{
+	case V16QImode: gen = gen_aarch64_rev16v16qi; break;
+	case V8QImode: gen = gen_aarch64_rev16v8qi;  break;
+	case V8HImode: gen = gen_aarch64_rev32v8hi;  break;
+	case V4HImode: gen = gen_aarch64_rev32v4hi;  break;
+	case V4SImode: gen = gen_aarch64_rev64v4si;  break;
+	case V2SImode: gen = gen_aarch64_rev64v2si;  break;
+	case V4SFmode: gen = gen_aarch64_rev64v4sf;  break;
+	case V2SFmode: gen = gen_aarch64_rev64v2sf;  break;
+	default:
+	  return false;
+	}
+      break;
+    default:
+      return false;
+    }
+
+  for (i = 0; i < nelt ; i += diff + 1)
+    for (j = 0; j <= diff; j += 1)
+      {
+	/* This is guaranteed to be true as the value of diff
+	   is 7, 3, 1 and we should have enough elements in the
+	   queue to generate this.  Getting a vector mask with a
+	   value of diff other than these values implies that
+	   something is wrong by the time we get here.  */
+	gcc_assert (i + j < nelt);
+	if (d->perm[i + j] != i + diff - j)
+	  return false;
+      }
+
+  /* Success! */
+  if (d->testing_p)
+    return true;
+
+  emit_insn (gen (d->target, d->op0));
   return true;
 }
 
@@ -9158,7 +9236,9 @@ aarch64_expand_vec_perm_const_1 (struct expand_vec_perm_d *d)
 
   if (TARGET_SIMD)
     {
-      if (aarch64_evpc_ext (d))
+      if (aarch64_evpc_rev (d))
+	return true;
+      else if (aarch64_evpc_ext (d))
 	return true;
       else if (aarch64_evpc_zip (d))
 	return true;
