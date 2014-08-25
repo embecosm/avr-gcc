@@ -1177,8 +1177,7 @@ split_function (struct split_point *split_point)
       e = make_edge (new_return_bb, EXIT_BLOCK_PTR_FOR_FN (cfun), 0);
       e->probability = REG_BR_PROB_BASE;
       e->count = new_return_bb->count;
-      if (current_loops)
-	add_bb_to_loop (new_return_bb, current_loops->tree_root);
+      add_bb_to_loop (new_return_bb, current_loops->tree_root);
       bitmap_set_bit (split_point->split_bbs, new_return_bb->index);
     }
   /* When we pass around the value, use existing return block.  */
@@ -1252,7 +1251,7 @@ split_function (struct split_point *split_point)
      a warning for the non-inlinable part.  */
   DECL_NO_INLINE_WARNING_P (node->decl) = 1;
   cgraph_node_remove_callees (cur_node);
-  ipa_remove_all_references (&cur_node->ref_list);
+  cur_node->remove_all_references ();
   if (!split_part_return_p)
     TREE_THIS_VOLATILE (node->decl) = 1;
   if (dump_file)
@@ -1653,7 +1652,6 @@ const pass_data pass_data_split_functions =
   GIMPLE_PASS, /* type */
   "fnsplit", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_IPA_FNSPLIT, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */
@@ -1713,7 +1711,6 @@ const pass_data pass_data_feedback_split_functions =
   GIMPLE_PASS, /* type */
   "feedback_fnsplit", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_IPA_FNSPLIT, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */

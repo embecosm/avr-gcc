@@ -45,6 +45,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfgloop.h"
 #include "tree-scalar-evolution.h"
 #include "tree-ssa-dom.h"
+#include "tree-ssa-loop-niter.h"
+
 
 /* This file implements the copy propagation pass and provides a
    handful of interfaces for performing const/copy propagation and
@@ -398,19 +400,11 @@ copy_prop_visit_phi_node (gimple phi)
       else
 	arg_value = valueize_val (arg);
 
-      /* Avoid copy propagation from an inner into an outer loop.
-	 Otherwise, this may move loop variant variables outside of
-	 their loops and prevent coalescing opportunities.  If the
-	 value was loop invariant, it will be hoisted by LICM and
-	 exposed for copy propagation.
-	 ???  The value will be always loop invariant.
-	 In loop-closed SSA form do not copy-propagate through
-	 PHI nodes in blocks with a loop exit edge predecessor.  */
-      if (current_loops
+      /* In loop-closed SSA form do not copy-propagate SSA-names across
+	 loop exit edges.  */
+      if (loops_state_satisfies_p (LOOP_CLOSED_SSA)
 	  && TREE_CODE (arg_value) == SSA_NAME
-	  && (loop_depth_of_name (arg_value) > loop_depth_of_name (lhs)
-	      || (loops_state_satisfies_p (LOOP_CLOSED_SSA)
-		  && loop_exit_edge_p (e->src->loop_father, e))))
+	  && loop_exit_edge_p (e->src->loop_father, e))
 	{
 	  phi_val.value = lhs;
 	  break;
@@ -472,7 +466,6 @@ init_copy_prop (void)
   FOR_EACH_BB_FN (bb, cfun)
     {
       gimple_stmt_iterator si;
-      int depth = bb_loop_depth (bb);
 
       for (si = gsi_start_bb (bb); !gsi_end_p (si); gsi_next (&si))
 	{
@@ -483,21 +476,10 @@ init_copy_prop (void)
 	  /* The only statements that we care about are those that may
 	     generate useful copies.  We also need to mark conditional
 	     jumps so that their outgoing edges are added to the work
-	     lists of the propagator.
-
-	     Avoid copy propagation from an inner into an outer loop.
-	     Otherwise, this may move loop variant variables outside of
-	     their loops and prevent coalescing opportunities.  If the
-	     value was loop invariant, it will be hoisted by LICM and
-	     exposed for copy propagation.
-	     ???  This doesn't make sense.  */
+	     lists of the propagator.  */
 	  if (stmt_ends_bb_p (stmt))
             prop_set_simulate_again (stmt, true);
-	  else if (stmt_may_generate_copy (stmt)
-                   /* Since we are iterating over the statements in
-                      BB, not the phi nodes, STMT will always be an
-                      assignment.  */
-                   && loop_depth_of_name (gimple_assign_rhs1 (stmt)) <= depth)
+	  else if (stmt_may_generate_copy (stmt))
             prop_set_simulate_again (stmt, true);
 	  else
             prop_set_simulate_again (stmt, false);
@@ -543,7 +525,7 @@ get_value (tree name)
 /* Deallocate memory used in copy propagation and do final
    substitution.  */
 
-static void
+static bool
 fini_copy_prop (void)
 {
   unsigned i;
@@ -595,10 +577,17 @@ fini_copy_prop (void)
 	}
     }
 
-  /* Don't do DCE if SCEV is initialized.  It would destroy the scev cache.  */
-  substitute_and_fold (get_value, NULL, !scev_initialized_p ());
+  bool changed = substitute_and_fold (get_value, NULL, true);
+  if (changed)
+    {
+      free_numbers_of_iterations_estimates ();
+      if (scev_initialized_p ())
+	scev_reset ();
+    }
 
   free (copy_of);
+
+  return changed;
 }
 
 
@@ -640,7 +629,8 @@ execute_copy_prop (void)
 {
   init_copy_prop ();
   ssa_propagate (copy_prop_visit_stmt, copy_prop_visit_phi_node);
-  fini_copy_prop ();
+  if (fini_copy_prop ())
+    return TODO_cleanup_cfg;
   return 0;
 }
 
@@ -651,13 +641,12 @@ const pass_data pass_data_copy_prop =
   GIMPLE_PASS, /* type */
   "copyprop", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_COPY_PROP, /* tv_id */
   ( PROP_ssa | PROP_cfg ), /* properties_required */
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_cleanup_cfg | TODO_update_ssa ), /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_copy_prop : public gimple_opt_pass

@@ -985,7 +985,7 @@ create_log_links (void)
 {
   basic_block bb;
   rtx *next_use, insn;
-  df_ref *def_vec, *use_vec;
+  df_ref def, use;
 
   next_use = XCNEWVEC (rtx, max_reg_num ());
 
@@ -1008,9 +1008,8 @@ create_log_links (void)
 	  /* Log links are created only once.  */
 	  gcc_assert (!LOG_LINKS (insn));
 
-          for (def_vec = DF_INSN_DEFS (insn); *def_vec; def_vec++)
+	  FOR_EACH_INSN_DEF (def, insn)
             {
-	      df_ref def = *def_vec;
               int regno = DF_REF_REGNO (def);
               rtx use_insn;
 
@@ -1061,9 +1060,8 @@ create_log_links (void)
               next_use[regno] = NULL_RTX;
             }
 
-          for (use_vec = DF_INSN_USES (insn); *use_vec; use_vec++)
+	  FOR_EACH_INSN_USE (use, insn)
             {
-	      df_ref use = *use_vec;
 	      int regno = DF_REF_REGNO (use);
 
               /* Do not consider the usage of the stack pointer
@@ -11983,7 +11981,7 @@ simplify_comparison (enum rtx_code code, rtx *pop0, rtx *pop1)
 		= (unsigned HOST_WIDE_INT) 1 << (GET_MODE_BITSIZE (mode) - 1);
 	      op0 = simplify_gen_binary (AND, tmode,
 					 gen_lowpart (tmode, op0),
-					 gen_int_mode (sign, mode));
+					 gen_int_mode (sign, tmode));
 	      code = (code == LT) ? NE : EQ;
 	      break;
 	    }
@@ -13888,7 +13886,6 @@ const pass_data pass_data_combine =
   RTL_PASS, /* type */
   "combine", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_COMBINE, /* tv_id */
   PROP_cfglayout, /* properties_required */
   0, /* properties_provided */

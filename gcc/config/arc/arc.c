@@ -609,7 +609,6 @@ const pass_data pass_data_arc_ifcvt =
   RTL_PASS,
   "arc_ifcvt",				/* name */
   OPTGROUP_NONE,			/* optinfo_flags */
-  true,					/* has_execute */
   TV_IFCVT2,				/* tv_id */
   0,					/* properties_required */
   0,					/* properties_provided */
@@ -647,7 +646,6 @@ const pass_data pass_data_arc_predicate_delay_insns =
   RTL_PASS,
   "arc_predicate_delay_insns",		/* name */
   OPTGROUP_NONE,			/* optinfo_flags */
-  true,					/* has_execute */
   TV_IFCVT2,				/* tv_id */
   0,					/* properties_required */
   0,					/* properties_provided */
@@ -6277,7 +6275,7 @@ arc_in_small_data_p (const_tree decl)
       const char *name;
 
       /* Reject anything that isn't in a known small-data section.  */
-      name = TREE_STRING_POINTER (DECL_SECTION_NAME (decl));
+      name = DECL_SECTION_NAME (decl);
       if (strcmp (name, ".sdata") != 0 && strcmp (name, ".sbss") != 0)
 	return false;
 

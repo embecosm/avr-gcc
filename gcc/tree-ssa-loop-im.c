@@ -184,7 +184,7 @@ mem_ref_hasher::equal (const value_type *mem1, const compare_type *obj2)
 static struct
 {
   /* The hash table of memory references accessed in loops.  */
-  hash_table <mem_ref_hasher> refs;
+  hash_table<mem_ref_hasher> *refs;
 
   /* The list of memory references.  */
   vec<mem_ref_p> refs_list;
@@ -609,7 +609,7 @@ mem_ref_in_stmt (gimple stmt)
   gcc_assert (!store);
 
   hash = iterative_hash_expr (*mem, 0);
-  ref = memory_accesses.refs.find_with_hash (*mem, hash);
+  ref = memory_accesses.refs->find_with_hash (*mem, hash);
 
   gcc_assert (ref != NULL);
   return ref;
@@ -719,18 +719,31 @@ determine_max_movement (gimple stmt, bool must_preserve_exec)
       FOR_EACH_PHI_ARG (use_p, stmt, iter, SSA_OP_USE)
 	{
 	  val = USE_FROM_PTR (use_p);
+
 	  if (TREE_CODE (val) != SSA_NAME)
-	    continue;
+	    {
+	      /* Assign const 1 to constants.  */
+	      min_cost = MIN (min_cost, 1);
+	      total_cost += 1;
+	      continue;
+	    }
 	  if (!add_dependency (val, lim_data, loop, false))
 	    return false;
-	  def_data = get_lim_data (SSA_NAME_DEF_STMT (val));
-	  if (def_data)
+
+	  gimple def_stmt = SSA_NAME_DEF_STMT (val);
+	  if (gimple_bb (def_stmt)
+	      && gimple_bb (def_stmt)->loop_father == loop)
 	    {
-	      min_cost = MIN (min_cost, def_data->cost);
-	      total_cost += def_data->cost;
+	      def_data = get_lim_data (def_stmt);
+	      if (def_data)
+		{
+		  min_cost = MIN (min_cost, def_data->cost);
+		  total_cost += def_data->cost;
+		}
 	    }
 	}
 
+      min_cost = MIN (min_cost, total_cost);
       lim_data->cost += min_cost;
 
       if (gimple_phi_num_args (stmt) > 1)
@@ -1472,7 +1485,7 @@ gather_mem_refs_stmt (struct loop *loop, gimple stmt)
   else
     {
       hash = iterative_hash_expr (*mem, 0);
-      slot = memory_accesses.refs.find_slot_with_hash (*mem, hash, INSERT);
+      slot = memory_accesses.refs->find_slot_with_hash (*mem, hash, INSERT);
       if (*slot)
 	{
 	  ref = (mem_ref_p) *slot;
@@ -2423,7 +2436,7 @@ tree_ssa_lim_initialize (void)
 
   alloc_aux_for_edges (0);
 
-  memory_accesses.refs.create (100);
+  memory_accesses.refs = new hash_table<mem_ref_hasher> (100);
   memory_accesses.refs_list.create (100);
   /* Allocate a special, unanalyzable mem-ref with ID zero.  */
   memory_accesses.refs_list.quick_push
@@ -2473,7 +2486,8 @@ tree_ssa_lim_finalize (void)
   bitmap_obstack_release (&lim_bitmap_obstack);
   pointer_map_destroy (lim_aux_data_map);
 
-  memory_accesses.refs.dispose ();
+  delete memory_accesses.refs;
+  memory_accesses.refs = NULL;
 
   FOR_EACH_VEC_ELT (memory_accesses.refs_list, i, ref)
     memref_free (ref);
@@ -2532,7 +2546,6 @@ const pass_data pass_data_lim =
   GIMPLE_PASS, /* type */
   "lim", /* name */
   OPTGROUP_LOOP, /* optinfo_flags */
-  true, /* has_execute */
   TV_LIM, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */

@@ -53,7 +53,7 @@ print_mcu (const avr_mcu_t *mcu)
 	 ? " -msp8" : " %<msp8");
 
   errata_skip = (mcu->dev_attribute & AVR_ERRATA_SKIP) ? " -mskip-bug" : "";
-  rmw = (mcu->dev_attribute & AVR_ISA_RMW) ? "%%{!mno-rmw:-mrmw}" : "";
+  rmw = (mcu->dev_attribute & AVR_ISA_RMW) ? "%%{!mno-rmw: -mrmw}" : "";
 
   const char *arch_name = avr_arch_types[mcu->arch].arch_name;
 
@@ -93,6 +93,9 @@ print_mcu (const avr_mcu_t *mcu)
   if (mcu->data_section_start
       != avr_arch_types[mcu->arch].default_data_section_start)
     fprintf (f, " -Tdata 0x%lX", 0x800000UL + mcu->data_section_start);
+  if (mcu->text_section_start != 0x0)
+    fprintf (f, " -Ttext 0x%lX", mcu->text_section_start);
+
   fprintf (f, " %%{shared:%%eshared is not supported}\n\n");
 
   fprintf (f, "*lib:\n");

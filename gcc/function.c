@@ -64,6 +64,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "params.h"
 #include "bb-reorder.h"
 #include "shrink-wrap.h"
+#include "toplev.h"
 
 /* So we can assign to cfun in this file.  */
 #undef cfun
@@ -1348,9 +1349,13 @@ static int cfa_offset;
 #define STACK_POINTER_OFFSET	0
 #endif
 
+#if defined (REG_PARM_STACK_SPACE) && !defined (INCOMING_REG_PARM_STACK_SPACE)
+#define INCOMING_REG_PARM_STACK_SPACE REG_PARM_STACK_SPACE
+#endif
+
 /* If not defined, pick an appropriate default for the offset of dynamically
    allocated memory depending on the value of ACCUMULATE_OUTGOING_ARGS,
-   REG_PARM_STACK_SPACE, and OUTGOING_REG_PARM_STACK_SPACE.  */
+   INCOMING_REG_PARM_STACK_SPACE, and OUTGOING_REG_PARM_STACK_SPACE.  */
 
 #ifndef STACK_DYNAMIC_OFFSET
 
@@ -1362,12 +1367,12 @@ static int cfa_offset;
    `crtl->outgoing_args_size'.  Nevertheless, we must allow
    for it when allocating stack dynamic objects.  */
 
-#if defined(REG_PARM_STACK_SPACE)
+#ifdef INCOMING_REG_PARM_STACK_SPACE
 #define STACK_DYNAMIC_OFFSET(FNDECL)	\
 ((ACCUMULATE_OUTGOING_ARGS						      \
   ? (crtl->outgoing_args_size				      \
      + (OUTGOING_REG_PARM_STACK_SPACE ((!(FNDECL) ? NULL_TREE : TREE_TYPE (FNDECL))) ? 0 \
-					       : REG_PARM_STACK_SPACE (FNDECL))) \
+					       : INCOMING_REG_PARM_STACK_SPACE (FNDECL))) \
   : 0) + (STACK_POINTER_OFFSET))
 #else
 #define STACK_DYNAMIC_OFFSET(FNDECL)	\
@@ -1873,6 +1878,11 @@ instantiate_decls (tree fndecl)
 	}
     }
 
+  /* Process the saved static chain if it exists.  */
+  decl = DECL_STRUCT_FUNCTION (fndecl)->static_chain_decl;
+  if (decl && DECL_HAS_VALUE_EXPR_P (decl))
+    instantiate_decl_rtl (DECL_RTL (DECL_VALUE_EXPR (decl)));
+
   /* Now process all variables defined in the function or its subblocks.  */
   instantiate_decls_1 (DECL_INITIAL (fndecl));
 
@@ -1951,7 +1961,6 @@ const pass_data pass_data_instantiate_virtual_regs =
   RTL_PASS, /* type */
   "vregs", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_NONE, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
@@ -2224,8 +2233,9 @@ assign_parms_initialize_all (struct assign_parm_data_all *all)
 #endif
   all->args_so_far = pack_cumulative_args (&all->args_so_far_v);
 
-#ifdef REG_PARM_STACK_SPACE
-  all->reg_parm_stack_space = REG_PARM_STACK_SPACE (current_function_decl);
+#ifdef INCOMING_REG_PARM_STACK_SPACE
+  all->reg_parm_stack_space
+    = INCOMING_REG_PARM_STACK_SPACE (current_function_decl);
 #endif
 }
 
@@ -4539,6 +4549,7 @@ allocate_struct_function (tree fndecl, bool abstract_p)
       /* ??? This could be set on a per-function basis by the front-end
          but is this worth the hassle?  */
       cfun->can_throw_non_call_exceptions = flag_non_call_exceptions;
+      cfun->can_delete_dead_exceptions = flag_delete_dead_exceptions;
     }
 }
 
@@ -4620,6 +4631,10 @@ init_function_start (tree subr)
     set_cfun (DECL_STRUCT_FUNCTION (subr));
   else
     allocate_struct_function (subr, false);
+
+  /* Initialize backend, if needed.  */
+  initialize_rtl ();
+
   prepare_function_start ();
   decide_function_section (subr);
 
@@ -4649,7 +4664,7 @@ stack_protect_epilogue (void)
 
   /* Allow the target to compare Y with X without leaking either into
      a register.  */
-  switch (HAVE_stack_protect_test != 0)
+  switch ((int) (HAVE_stack_protect_test != 0))
     {
     case 1:
       tmp = gen_stack_protect_test (x, y, label);
@@ -4806,6 +4821,20 @@ expand_function_start (tree subr)
       if (MEM_P (chain)
 	  && reg_mentioned_p (arg_pointer_rtx, XEXP (chain, 0)))
 	set_dst_reg_note (insn, REG_EQUIV, chain, local);
+
+      /* If we aren't optimizing, save the static chain onto the stack.  */
+      if (!optimize)
+	{
+	  tree saved_static_chain_decl
+	    = build_decl (DECL_SOURCE_LOCATION (parm), VAR_DECL,
+			  DECL_NAME (parm), TREE_TYPE (parm));
+	  rtx saved_static_chain_rtx
+	    = assign_stack_local (Pmode, GET_MODE_SIZE (Pmode), 0);
+	  SET_DECL_RTL (saved_static_chain_decl, saved_static_chain_rtx);
+	  emit_move_insn (saved_static_chain_rtx, chain);
+	  SET_DECL_VALUE_EXPR (parm, saved_static_chain_decl);
+	  DECL_HAS_VALUE_EXPR_P (parm) = 1;
+	}
     }
 
   /* If the function receives a non-local goto, then store the
@@ -6168,7 +6197,6 @@ const pass_data pass_data_leaf_regs =
   RTL_PASS, /* type */
   "*leaf_regs", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_NONE, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
@@ -6230,7 +6258,6 @@ const pass_data pass_data_thread_prologue_and_epilogue =
   RTL_PASS, /* type */
   "pro_and_epilogue", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_THREAD_PROLOGUE_AND_EPILOGUE, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
@@ -6414,7 +6441,6 @@ const pass_data pass_data_match_asm_constraints =
   RTL_PASS, /* type */
   "asmcons", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_NONE, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */

@@ -68,6 +68,14 @@
 (define_c_enum "unspec" [
     UNSPEC_CASESI
     UNSPEC_CLS
+    UNSPEC_CRC32B
+    UNSPEC_CRC32CB
+    UNSPEC_CRC32CH
+    UNSPEC_CRC32CW
+    UNSPEC_CRC32CX
+    UNSPEC_CRC32H
+    UNSPEC_CRC32W
+    UNSPEC_CRC32X
     UNSPEC_FRECPE
     UNSPEC_FRECPS
     UNSPEC_FRECPX
@@ -420,6 +428,12 @@
 ;; Subroutine calls and sibcalls
 ;; -------------------------------------------------------------------
 
+(define_expand "call_internal"
+  [(parallel [(call (match_operand 0 "memory_operand" "")
+		    (match_operand 1 "general_operand" ""))
+	      (use (match_operand 2 "" ""))
+	      (clobber (reg:DI LR_REGNUM))])])
+
 (define_expand "call"
   [(parallel [(call (match_operand 0 "memory_operand" "")
 		    (match_operand 1 "general_operand" ""))
@@ -428,7 +442,7 @@
   ""
   "
   {
-    rtx callee;
+    rtx callee, pat;
 
     /* In an untyped call, we can get NULL for operand 2.  */
     if (operands[2] == NULL)
@@ -442,6 +456,10 @@
 	? aarch64_is_long_call_p (callee)
 	: !REG_P (callee))
       XEXP (operands[0], 0) = force_reg (Pmode, callee);
+
+    pat = gen_call_internal (operands[0], operands[1], operands[2]);
+    aarch64_emit_call_insn (pat);
+    DONE;
   }"
 )
 
@@ -466,6 +484,13 @@
   [(set_attr "type" "call")]
 )
 
+(define_expand "call_value_internal"
+  [(parallel [(set (match_operand 0 "" "")
+		   (call (match_operand 1 "memory_operand" "")
+			 (match_operand 2 "general_operand" "")))
+	      (use (match_operand 3 "" ""))
+	      (clobber (reg:DI LR_REGNUM))])])
+
 (define_expand "call_value"
   [(parallel [(set (match_operand 0 "" "")
 		   (call (match_operand 1 "memory_operand" "")
@@ -475,7 +500,7 @@
   ""
   "
   {
-    rtx callee;
+    rtx callee, pat;
 
     /* In an untyped call, we can get NULL for operand 3.  */
     if (operands[3] == NULL)
@@ -489,6 +514,11 @@
 	? aarch64_is_long_call_p (callee)
 	: !REG_P (callee))
       XEXP (operands[1], 0) = force_reg (Pmode, callee);
+
+    pat = gen_call_value_internal (operands[0], operands[1], operands[2],
+                                   operands[3]);
+    aarch64_emit_call_insn (pat);
+    DONE;
   }"
 )
 
@@ -516,6 +546,12 @@
   [(set_attr "type" "call")]
 )
 
+(define_expand "sibcall_internal"
+  [(parallel [(call (match_operand 0 "memory_operand" "")
+		    (match_operand 1 "general_operand" ""))
+	      (return)
+	      (use (match_operand 2 "" ""))])])
+
 (define_expand "sibcall"
   [(parallel [(call (match_operand 0 "memory_operand" "")
 		    (match_operand 1 "general_operand" ""))
@@ -523,14 +559,27 @@
 	      (use (match_operand 2 "" ""))])]
   ""
   {
+    rtx pat;
+
     if (!REG_P (XEXP (operands[0], 0))
        && (GET_CODE (XEXP (operands[0], 0)) != SYMBOL_REF))
      XEXP (operands[0], 0) = force_reg (Pmode, XEXP (operands[0], 0));
 
     if (operands[2] == NULL_RTX)
       operands[2] = const0_rtx;
+
+    pat = gen_sibcall_internal (operands[0], operands[1], operands[2]);
+    aarch64_emit_call_insn (pat);
+    DONE;
   }
 )
+
+(define_expand "sibcall_value_internal"
+  [(parallel [(set (match_operand 0 "" "")
+		   (call (match_operand 1 "memory_operand" "")
+			 (match_operand 2 "general_operand" "")))
+	      (return)
+	      (use (match_operand 3 "" ""))])])
 
 (define_expand "sibcall_value"
   [(parallel [(set (match_operand 0 "" "")
@@ -540,12 +589,19 @@
 	      (use (match_operand 3 "" ""))])]
   ""
   {
+    rtx pat;
+
     if (!REG_P (XEXP (operands[1], 0))
        && (GET_CODE (XEXP (operands[1], 0)) != SYMBOL_REF))
      XEXP (operands[1], 0) = force_reg (Pmode, XEXP (operands[1], 0));
 
     if (operands[3] == NULL_RTX)
       operands[3] = const0_rtx;
+
+    pat = gen_sibcall_value_internal (operands[0], operands[1], operands[2],
+                                      operands[3]);
+    aarch64_emit_call_insn (pat);
+    DONE;
   }
 )
 
@@ -689,7 +745,7 @@
    fmov\\t%w0, %s1
    fmov\\t%s0, %s1"
   [(set_attr "type" "mov_reg,mov_reg,mov_reg,mov_imm,load1,load1,store1,store1,\
-                     adr,adr,fmov,fmov,fmov")
+                     adr,adr,f_mcr,f_mrc,fmov")
    (set_attr "fp" "*,*,*,*,*,yes,*,yes,*,*,yes,yes,yes")]
 )
 
@@ -714,7 +770,7 @@
    fmov\\t%d0, %d1
    movi\\t%d0, %1"
   [(set_attr "type" "mov_reg,mov_reg,mov_reg,mov_imm,load1,load1,store1,store1,\
-                     adr,adr,fmov,fmov,fmov,fmov")
+                     adr,adr,f_mcr,f_mrc,fmov,fmov")
    (set_attr "fp" "*,*,*,*,*,yes,*,yes,*,*,yes,yes,yes,*")
    (set_attr "simd" "*,*,*,*,*,*,*,*,*,*,*,*,*,yes")]
 )
@@ -809,7 +865,7 @@
    str\\t%w1, %0
    mov\\t%w0, %w1"
   [(set_attr "type" "f_mcr,f_mrc,fmov,fconsts,\
-                     f_loads,f_stores,f_loads,f_stores,fmov")]
+                     f_loads,f_stores,f_loads,f_stores,mov_reg")]
 )
 
 (define_insn "*movdf_aarch64"
@@ -881,6 +937,24 @@
     aarch64_split_128bit_move (operands[0], operands[1]);
     DONE;
   }
+)
+
+;; 0 is dst
+;; 1 is src
+;; 2 is size of move in bytes
+;; 3 is alignment
+
+(define_expand "movmemdi"
+  [(match_operand:BLK 0 "memory_operand")
+   (match_operand:BLK 1 "memory_operand")
+   (match_operand:DI 2 "immediate_operand")
+   (match_operand:DI 3 "immediate_operand")]
+   "!STRICT_ALIGNMENT"
+{
+  if (aarch64_expand_movmem (operands))
+    DONE;
+  FAIL;
+}
 )
 
 ;; Operands 1 and 3 are tied together by the final condition; so we allow
@@ -1083,16 +1157,18 @@
 
 (define_insn "*addsi3_aarch64"
   [(set
-    (match_operand:SI 0 "register_operand" "=rk,rk,rk")
+    (match_operand:SI 0 "register_operand" "=rk,rk,w,rk")
     (plus:SI
-     (match_operand:SI 1 "register_operand" "%rk,rk,rk")
-     (match_operand:SI 2 "aarch64_plus_operand" "I,r,J")))]
+     (match_operand:SI 1 "register_operand" "%rk,rk,w,rk")
+     (match_operand:SI 2 "aarch64_plus_operand" "I,r,w,J")))]
   ""
   "@
   add\\t%w0, %w1, %2
   add\\t%w0, %w1, %w2
+  add\\t%0.2s, %1.2s, %2.2s
   sub\\t%w0, %w1, #%n2"
-  [(set_attr "type" "alu_imm,alu_reg,alu_imm")]
+  [(set_attr "type" "alu_imm,alu_reg,neon_add,alu_imm")
+   (set_attr "simd" "*,*,yes,*")]
 )
 
 ;; zero_extend version of above
@@ -2463,6 +2539,23 @@
   }
 )
 
+
+;; CRC32 instructions.
+(define_insn "aarch64_<crc_variant>"
+  [(set (match_operand:SI 0 "register_operand" "=r")
+        (unspec:SI [(match_operand:SI 1 "register_operand" "r")
+                    (match_operand:<crc_mode> 2 "register_operand" "r")]
+         CRC))]
+  "TARGET_CRC32"
+  {
+    if (GET_MODE_BITSIZE (GET_MODE (operands[2])) >= 64)
+      return "<crc_variant>\\t%w0, %w1, %x2";
+    else
+      return "<crc_variant>\\t%w0, %w1, %w2";
+  }
+  [(set_attr "type" "crc")]
+)
+
 (define_insn "*csinc2<mode>_insn"
   [(set (match_operand:GPI 0 "register_operand" "=r")
         (plus:GPI (match_operator:GPI 2 "aarch64_comparison_operator"
@@ -2964,17 +3057,18 @@
 
 ;; Arithmetic right shift using SISD or Integer instruction
 (define_insn "*aarch64_ashr_sisd_or_int_<mode>3"
-  [(set (match_operand:GPI 0 "register_operand" "=w,w,r")
+  [(set (match_operand:GPI 0 "register_operand" "=w,&w,&w,r")
         (ashiftrt:GPI
-          (match_operand:GPI 1 "register_operand" "w,w,r")
-          (match_operand:QI 2 "aarch64_reg_or_shift_imm_di" "Us<cmode>,w,rUs<cmode>")))]
+          (match_operand:GPI 1 "register_operand" "w,w,w,r")
+          (match_operand:QI 2 "aarch64_reg_or_shift_imm_di" "Us<cmode>,w,0,rUs<cmode>")))]
   ""
   "@
    sshr\t%<rtn>0<vas>, %<rtn>1<vas>, %2
    #
+   #
    asr\t%<w>0, %<w>1, %<w>2"
-  [(set_attr "simd" "yes,yes,no")
-   (set_attr "type" "neon_shift_imm<q>,neon_shift_reg<q>,shift_reg")]
+  [(set_attr "simd" "yes,yes,yes,no")
+   (set_attr "type" "neon_shift_imm<q>,neon_shift_reg<q>,neon_shift_reg<q>,shift_reg")]
 )
 
 (define_split
@@ -2983,11 +3077,13 @@
            (match_operand:DI 1 "aarch64_simd_register")
            (match_operand:QI 2 "aarch64_simd_register")))]
   "TARGET_SIMD && reload_completed"
-  [(set (match_dup 2)
+  [(set (match_dup 3)
         (unspec:QI [(match_dup 2)] UNSPEC_SISD_NEG))
    (set (match_dup 0)
-        (unspec:DI [(match_dup 1) (match_dup 2)] UNSPEC_SISD_SSHL))]
-  ""
+        (unspec:DI [(match_dup 1) (match_dup 3)] UNSPEC_SISD_SSHL))]
+{
+  operands[3] = gen_lowpart (QImode, operands[0]);
+}
 )
 
 (define_split
@@ -2996,11 +3092,13 @@
            (match_operand:SI 1 "aarch64_simd_register")
            (match_operand:QI 2 "aarch64_simd_register")))]
   "TARGET_SIMD && reload_completed"
-  [(set (match_dup 2)
+  [(set (match_dup 3)
         (unspec:QI [(match_dup 2)] UNSPEC_SISD_NEG))
    (set (match_dup 0)
-        (unspec:SI [(match_dup 1) (match_dup 2)] UNSPEC_SSHL_2S))]
-  ""
+        (unspec:SI [(match_dup 1) (match_dup 3)] UNSPEC_SSHL_2S))]
+{
+  operands[3] = gen_lowpart (QImode, operands[0]);
+}
 )
 
 (define_insn "*aarch64_sisd_ushl"
@@ -3661,7 +3759,7 @@
 	  (truncate:DI (match_operand:TI 1 "register_operand" "w"))))]
   "reload_completed || reload_in_progress"
   "fmov\\t%d0, %d1"
-  [(set_attr "type" "f_mcr")
+  [(set_attr "type" "fmov")
    (set_attr "length" "4")
   ])
 
@@ -3812,6 +3910,7 @@
         (unspec:PTR [(match_operand 0 "aarch64_valid_symref" "S")]
 		   UNSPEC_TLSDESC))
    (clobber (reg:DI LR_REGNUM))
+   (clobber (reg:CC CC_REGNUM))
    (clobber (match_scratch:DI 1 "=r"))]
   "TARGET_TLS_DESC"
   "adrp\\tx0, %A0\;ldr\\t%<w>1, [x0, #%L0]\;add\\t<w>0, <w>0, %L0\;.tlsdesccall\\t%0\;blr\\t%1"

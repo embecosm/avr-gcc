@@ -36,6 +36,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "flags.h"
 #include "pointer-set.h"
 
+const char * const tls_model_names[]={"none", "tls-emulated", "tls-real",
+				      "tls-global-dynamic", "tls-local-dynamic",
+				      "tls-initial-exec", "tls-local-exec"};
+
 /* List of hooks triggered on varpool_node events.  */
 struct varpool_node_hook_list {
   varpool_node_hook hook;
@@ -207,12 +211,16 @@ dump_varpool_node (FILE *f, varpool_node *node)
     fprintf (f, " initialized");
   if (node->output)
     fprintf (f, " output");
+  if (node->used_by_single_function)
+    fprintf (f, " used-by-single-function");
   if (TREE_READONLY (node->decl))
     fprintf (f, " read-only");
   if (ctor_for_folding (node->decl) != error_mark_node)
     fprintf (f, " const-value-known");
   if (node->writeonly)
     fprintf (f, " write-only");
+  if (node->tls_model)
+    fprintf (f, " %s", tls_model_names [node->tls_model]);
   fprintf (f, "\n");
 }
 
@@ -416,16 +424,15 @@ varpool_analyze_node (varpool_node *node)
 static void
 assemble_aliases (varpool_node *node)
 {
-  int i;
   struct ipa_ref *ref;
-  for (i = 0; ipa_ref_list_referring_iterate (&node->ref_list, i, ref); i++)
-    if (ref->use == IPA_REF_ALIAS)
-      {
-	varpool_node *alias = ipa_ref_referring_varpool_node (ref);
-	do_assemble_alias (alias->decl,
-			   DECL_ASSEMBLER_NAME (node->decl));
-	assemble_aliases (alias);
-      }
+
+  FOR_EACH_ALIAS (node, ref)
+    {
+      varpool_node *alias = dyn_cast <varpool_node *> (ref->referring);
+      do_assemble_alias (alias->decl,
+			 DECL_ASSEMBLER_NAME (node->decl));
+      assemble_aliases (alias);
+    }
 }
 
 /* Output one variable, if necessary.  Return whether we output it.  */
@@ -498,7 +505,7 @@ varpool_remove_unreferenced_decls (void)
   varpool_node *next, *node;
   varpool_node *first = (varpool_node *)(void *)1;
   int i;
-  struct ipa_ref *ref;
+  struct ipa_ref *ref = NULL;
   struct pointer_set_t *referenced = pointer_set_create ();
 
   if (seen_error ())
@@ -536,7 +543,7 @@ varpool_remove_unreferenced_decls (void)
 		enqueue_node (vnext, &first);
 	    }
 	}
-      for (i = 0; ipa_ref_list_reference_iterate (&node->ref_list, i, ref); i++)
+      for (i = 0; node->iterate_reference (i, ref); i++)
 	{
 	  varpool_node *vnode = dyn_cast <varpool_node *> (ref->referred);
 	  if (vnode
@@ -582,7 +589,7 @@ varpool_finalize_named_section_flags (varpool_node *node)
       && !DECL_EXTERNAL (node->decl)
       && TREE_CODE (node->decl) == VAR_DECL
       && !DECL_HAS_VALUE_EXPR_P (node->decl)
-      && DECL_SECTION_NAME (node->decl))
+      && node->get_section ())
     get_variable_section (node->decl, false);
 }
 
@@ -685,20 +692,19 @@ varpool_for_node_and_aliases (varpool_node *node,
 			      void *data,
 			      bool include_overwritable)
 {
-  int i;
   struct ipa_ref *ref;
 
   if (callback (node, data))
     return true;
-  for (i = 0; ipa_ref_list_referring_iterate (&node->ref_list, i, ref); i++)
-    if (ref->use == IPA_REF_ALIAS)
-      {
-	varpool_node *alias = ipa_ref_referring_varpool_node (ref);
-	if (include_overwritable
-	    || cgraph_variable_initializer_availability (alias) > AVAIL_OVERWRITABLE)
-          if (varpool_for_node_and_aliases (alias, callback, data,
-					   include_overwritable))
-	    return true;
-      }
+
+  FOR_EACH_ALIAS (node, ref)
+    {
+      varpool_node *alias = dyn_cast <varpool_node *> (ref->referring);
+      if (include_overwritable
+	  || cgraph_variable_initializer_availability (alias) > AVAIL_OVERWRITABLE)
+	if (varpool_for_node_and_aliases (alias, callback, data,
+					 include_overwritable))
+	  return true;
+    }
   return false;
 }

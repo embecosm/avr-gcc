@@ -40,7 +40,7 @@ typedef enum seq_type
 seq_type;
 
 /* Stack to keep track of the nesting of blocks as we move through the
-   code.  See resolve_branch() and resolve_code().  */
+   code.  See resolve_branch() and gfc_resolve_code().  */
 
 typedef struct code_stack
 {
@@ -1674,7 +1674,7 @@ gfc_resolve_intrinsic (gfc_symbol *sym, locus *loc)
       return false;
     }
 
-  gfc_copy_formal_args_intr (sym, isym);
+  gfc_copy_formal_args_intr (sym, isym, NULL);
 
   sym->attr.pure = isym->pure;
   sym->attr.elemental = isym->elemental;
@@ -2887,7 +2887,8 @@ resolve_function (gfc_expr *expr)
 
   /* See if function is already resolved.  */
 
-  if (expr->value.function.name != NULL)
+  if (expr->value.function.name != NULL
+      || expr->value.function.isym != NULL)
     {
       if (expr->ts.type == BT_UNKNOWN)
 	expr->ts = sym->ts;
@@ -4766,7 +4767,7 @@ remove_caf_get_intrinsic (gfc_expr *e)
   gcc_assert (e->expr_type == EXPR_FUNCTION && e->value.function.isym
 	      && e->value.function.isym->id == GFC_ISYM_CAF_GET);
   gfc_expr *e2 = e->value.function.actual->expr;
-  e->value.function.actual->expr =NULL;
+  e->value.function.actual->expr = NULL;
   gfc_free_actual_arglist (e->value.function.actual);
   gfc_free_shape (&e->shape, e->rank);
   *e = *e2;
@@ -4930,7 +4931,7 @@ resolve_variable (gfc_expr *e)
   if (check_assumed_size_reference (sym, e))
     return false;
 
-  /* Deal with forward references to entries during resolve_code, to
+  /* Deal with forward references to entries during gfc_resolve_code, to
      satisfy, at least partially, 12.5.2.5.  */
   if (gfc_current_ns->entries
       && current_entry_id == sym->entry_id
@@ -5056,7 +5057,7 @@ resolve_procedure:
   if (t)
     expression_rank (e);
 
-  if (0 && t && gfc_option.coarray == GFC_FCOARRAY_LIB && gfc_is_coindexed (e))
+  if (t && gfc_option.coarray == GFC_FCOARRAY_LIB && gfc_is_coindexed (e))
     add_caf_get_intrinsic (e);
 
   return t;
@@ -7911,10 +7912,7 @@ resolve_assoc_var (gfc_symbol* sym, bool resolve_target)
       sym->as = gfc_get_array_spec ();
       sym->as->rank = target->rank;
       sym->as->type = AS_DEFERRED;
-
-      /* Target must not be coindexed, thus the associate-variable
-	 has no corank.  */
-      sym->as->corank = 0;
+      sym->as->corank = gfc_get_corank (target);
     }
 
   /* Mark this as an associate variable.  */
@@ -8424,6 +8422,11 @@ find_reachable_labels (gfc_code *block)
 static void
 resolve_lock_unlock (gfc_code *code)
 {
+  if (code->expr1->expr_type == EXPR_FUNCTION
+      && code->expr1->value.function.isym
+      && code->expr1->value.function.isym->id == GFC_ISYM_CAF_GET)
+    remove_caf_get_intrinsic (code->expr1);
+
   if (code->expr1->ts.type != BT_DERIVED
       || code->expr1->expr_type != EXPR_VARIABLE
       || code->expr1->ts.u.derived->from_intmod != INTMOD_ISO_FORTRAN_ENV
@@ -8974,8 +8977,6 @@ resolve_block_construct (gfc_code* code)
 /* Resolve lists of blocks found in IF, SELECT CASE, WHERE, FORALL, GOTO and
    DO code nodes.  */
 
-static void resolve_code (gfc_code *, gfc_namespace *);
-
 void
 gfc_resolve_blocks (gfc_code *b, gfc_namespace *ns)
 {
@@ -9027,6 +9028,10 @@ gfc_resolve_blocks (gfc_code *b, gfc_namespace *ns)
 
 	case EXEC_OMP_ATOMIC:
 	case EXEC_OMP_CRITICAL:
+	case EXEC_OMP_DISTRIBUTE:
+	case EXEC_OMP_DISTRIBUTE_PARALLEL_DO:
+	case EXEC_OMP_DISTRIBUTE_PARALLEL_DO_SIMD:
+	case EXEC_OMP_DISTRIBUTE_SIMD:
 	case EXEC_OMP_DO:
 	case EXEC_OMP_DO_SIMD:
 	case EXEC_OMP_MASTER:
@@ -9039,10 +9044,23 @@ gfc_resolve_blocks (gfc_code *b, gfc_namespace *ns)
 	case EXEC_OMP_SECTIONS:
 	case EXEC_OMP_SIMD:
 	case EXEC_OMP_SINGLE:
+	case EXEC_OMP_TARGET:
+	case EXEC_OMP_TARGET_DATA:
+	case EXEC_OMP_TARGET_TEAMS:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_SIMD:
+	case EXEC_OMP_TARGET_UPDATE:
 	case EXEC_OMP_TASK:
 	case EXEC_OMP_TASKGROUP:
 	case EXEC_OMP_TASKWAIT:
 	case EXEC_OMP_TASKYIELD:
+	case EXEC_OMP_TEAMS:
+	case EXEC_OMP_TEAMS_DISTRIBUTE:
+	case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO:
+	case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
+	case EXEC_OMP_TEAMS_DISTRIBUTE_SIMD:
 	case EXEC_OMP_WORKSHARE:
 	  break;
 
@@ -9050,7 +9068,7 @@ gfc_resolve_blocks (gfc_code *b, gfc_namespace *ns)
 	  gfc_internal_error ("gfc_resolve_blocks(): Bad block type");
 	}
 
-      resolve_code (b->next, ns);
+      gfc_resolve_code (b->next, ns);
     }
 }
 
@@ -9276,8 +9294,25 @@ resolve_ordinary_assign (gfc_code *code, gfc_namespace *ns)
 
   gfc_check_assign (lhs, rhs, 1);
 
-  if (0 && lhs_coindexed && gfc_option.coarray == GFC_FCOARRAY_LIB)
+  /* Insert a GFC_ISYM_CAF_SEND intrinsic, when the LHS is a coindexed variable.
+     Additionally, insert this code when the RHS is a CAF as we then use the
+     GFC_ISYM_CAF_SEND intrinsic just to avoid a temporary; but do not do so if
+     the LHS is (re)allocatable or has a vector subscript.  If the LHS is a
+     noncoindexed array and the RHS is a coindexed scalar, use the normal code
+     path.  */
+  if (gfc_option.coarray == GFC_FCOARRAY_LIB
+      && (lhs_coindexed
+	  || (code->expr2->expr_type == EXPR_FUNCTION
+	      && code->expr2->value.function.isym
+	      && code->expr2->value.function.isym->id == GFC_ISYM_CAF_GET
+	      && (code->expr1->rank == 0 || code->expr2->rank != 0)
+	      && !gfc_expr_attr (rhs).allocatable
+              && !gfc_has_vector_subscript (rhs))))
     {
+      if (code->expr2->expr_type == EXPR_FUNCTION
+	  && code->expr2->value.function.isym
+	  && code->expr2->value.function.isym->id == GFC_ISYM_CAF_GET)
+	remove_caf_get_intrinsic (code->expr2);
       code->op = EXEC_CALL;
       gfc_get_sym_tree (GFC_PREFIX ("caf_send"), ns, &code->symtree, true);
       code->resolved_sym = code->symtree->n.sym;
@@ -9484,7 +9519,7 @@ nonscalar_typebound_assign (gfc_symbol *derived, int depth)
    The pointer assignments are taken care of by the intrinsic
    assignment of the structure itself.  This function recursively adds
    defined assignments where required.  The recursion is accomplished
-   by calling resolve_code.
+   by calling gfc_resolve_code.
 
    When the lhs in a defined assignment has intent INOUT, we need a
    temporary for the lhs.  In pseudo-code:
@@ -9602,9 +9637,9 @@ generate_component_assignments (gfc_code **code, gfc_namespace *ns)
 				    comp1, comp2, (*code)->loc);
 
       /* Convert the assignment if there is a defined assignment for
-	 this type.  Otherwise, using the call from resolve_code,
+	 this type.  Otherwise, using the call from gfc_resolve_code,
 	 recurse into its components.  */
-      resolve_code (this_code, ns);
+      gfc_resolve_code (this_code, ns);
 
       if (this_code->op == EXEC_ASSIGN_CALL)
 	{
@@ -9768,8 +9803,8 @@ generate_component_assignments (gfc_code **code, gfc_namespace *ns)
 /* Given a block of code, recursively resolve everything pointed to by this
    code block.  */
 
-static void
-resolve_code (gfc_code *code, gfc_namespace *ns)
+void
+gfc_resolve_code (gfc_code *code, gfc_namespace *ns)
 {
   int omp_workshare_save;
   int forall_save, do_concurrent_save;
@@ -9808,11 +9843,23 @@ resolve_code (gfc_code *code, gfc_namespace *ns)
 	    case EXEC_OMP_PARALLEL_DO:
 	    case EXEC_OMP_PARALLEL_DO_SIMD:
 	    case EXEC_OMP_PARALLEL_SECTIONS:
+	    case EXEC_OMP_TARGET_TEAMS:
+	    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE:
+	    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO:
+	    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
+	    case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_SIMD:
 	    case EXEC_OMP_TASK:
+	    case EXEC_OMP_TEAMS:
+	    case EXEC_OMP_TEAMS_DISTRIBUTE:
+	    case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO:
+	    case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
+	    case EXEC_OMP_TEAMS_DISTRIBUTE_SIMD:
 	      omp_workshare_save = omp_workshare_flag;
 	      omp_workshare_flag = 0;
 	      gfc_resolve_omp_parallel_blocks (code, ns);
 	      break;
+	    case EXEC_OMP_DISTRIBUTE:
+	    case EXEC_OMP_DISTRIBUTE_SIMD:
 	    case EXEC_OMP_DO:
 	    case EXEC_OMP_DO_SIMD:
 	    case EXEC_OMP_SIMD:
@@ -9919,6 +9966,8 @@ resolve_code (gfc_code *code, gfc_namespace *ns)
 	  if (!t)
 	    break;
 
+	  /* Remove a GFC_ISYM_CAF_GET inserted for a coindexed variable on
+	     the LHS. */
 	  if (code->expr1->expr_type == EXPR_FUNCTION
 	      && code->expr1->value.function.isym
 	      && code->expr1->value.function.isym->id == GFC_ISYM_CAF_GET)
@@ -10041,7 +10090,8 @@ resolve_code (gfc_code *code, gfc_namespace *ns)
 
 	case EXEC_DO_WHILE:
 	  if (code->expr1 == NULL)
-	    gfc_internal_error ("resolve_code(): No expression on DO WHILE");
+	    gfc_internal_error ("gfc_resolve_code(): No expression on "
+				"DO WHILE");
 	  if (t
 	      && (code->expr1->rank != 0
 		  || code->expr1->ts.type != BT_LOGICAL))
@@ -10139,6 +10189,10 @@ resolve_code (gfc_code *code, gfc_namespace *ns)
 	case EXEC_OMP_CANCELLATION_POINT:
 	case EXEC_OMP_CRITICAL:
 	case EXEC_OMP_FLUSH:
+	case EXEC_OMP_DISTRIBUTE:
+	case EXEC_OMP_DISTRIBUTE_PARALLEL_DO:
+	case EXEC_OMP_DISTRIBUTE_PARALLEL_DO_SIMD:
+	case EXEC_OMP_DISTRIBUTE_SIMD:
 	case EXEC_OMP_DO:
 	case EXEC_OMP_DO_SIMD:
 	case EXEC_OMP_MASTER:
@@ -10146,9 +10200,23 @@ resolve_code (gfc_code *code, gfc_namespace *ns)
 	case EXEC_OMP_SECTIONS:
 	case EXEC_OMP_SIMD:
 	case EXEC_OMP_SINGLE:
+	case EXEC_OMP_TARGET:
+	case EXEC_OMP_TARGET_DATA:
+	case EXEC_OMP_TARGET_TEAMS:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
+	case EXEC_OMP_TARGET_TEAMS_DISTRIBUTE_SIMD:
+	case EXEC_OMP_TARGET_UPDATE:
+	case EXEC_OMP_TASK:
 	case EXEC_OMP_TASKGROUP:
 	case EXEC_OMP_TASKWAIT:
 	case EXEC_OMP_TASKYIELD:
+	case EXEC_OMP_TEAMS:
+	case EXEC_OMP_TEAMS_DISTRIBUTE:
+	case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO:
+	case EXEC_OMP_TEAMS_DISTRIBUTE_PARALLEL_DO_SIMD:
+	case EXEC_OMP_TEAMS_DISTRIBUTE_SIMD:
 	case EXEC_OMP_WORKSHARE:
 	  gfc_resolve_omp_directive (code, ns);
 	  break;
@@ -10158,7 +10226,6 @@ resolve_code (gfc_code *code, gfc_namespace *ns)
 	case EXEC_OMP_PARALLEL_DO_SIMD:
 	case EXEC_OMP_PARALLEL_SECTIONS:
 	case EXEC_OMP_PARALLEL_WORKSHARE:
-	case EXEC_OMP_TASK:
 	  omp_workshare_save = omp_workshare_flag;
 	  omp_workshare_flag = 0;
 	  gfc_resolve_omp_directive (code, ns);
@@ -10166,7 +10233,7 @@ resolve_code (gfc_code *code, gfc_namespace *ns)
 	  break;
 
 	default:
-	  gfc_internal_error ("resolve_code(): Bad statement code");
+	  gfc_internal_error ("gfc_resolve_code(): Bad statement code");
 	}
     }
 
@@ -10866,7 +10933,10 @@ resolve_fl_variable (gfc_symbol *sym, int mp_flag)
     }
 
   /* Constraints on deferred type parameter.  */
-  if (sym->ts.deferred && !(sym->attr.pointer || sym->attr.allocatable))
+  if (sym->ts.deferred
+      && !(sym->attr.pointer
+	   || sym->attr.allocatable
+	   || sym->attr.omp_udr_artificial_var))
     {
       gfc_error ("Entity '%s' at %L has a deferred type parameter and "
 		 "requires either the pointer or allocatable attribute",
@@ -10881,7 +10951,8 @@ resolve_fl_variable (gfc_symbol *sym, int mp_flag)
 	 dummy arguments.  */
       e = sym->ts.u.cl->length;
       if (e == NULL && !sym->attr.dummy && !sym->attr.result
-	  && !sym->ts.deferred && !sym->attr.select_type_temporary)
+	  && !sym->ts.deferred && !sym->attr.select_type_temporary
+	  && !sym->attr.omp_udr_artificial_var)
 	{
 	  gfc_error ("Entity with assumed character length at %L must be a "
 		     "dummy argument or a PARAMETER", &sym->declared_at);
@@ -13516,6 +13587,18 @@ resolve_symbol (gfc_symbol *sym)
 	      || sym->ns->proc_name->attr.flavor != FL_MODULE)))
     gfc_error ("Threadprivate at %L isn't SAVEd", &sym->declared_at);
 
+  /* Check omp declare target restrictions.  */
+  if (sym->attr.omp_declare_target
+      && sym->attr.flavor == FL_VARIABLE
+      && !sym->attr.save
+      && !sym->ns->save_all
+      && (!sym->attr.in_common
+	  && sym->module == NULL
+	  && (sym->ns->proc_name == NULL
+	      || sym->ns->proc_name->attr.flavor != FL_MODULE)))
+    gfc_error ("!$OMP DECLARE TARGET variable '%s' at %L isn't SAVEd",
+	       sym->name, &sym->declared_at);
+
   /* If we have come this far we can apply default-initializers, as
      described in 14.7.5, to those variables that have not already
      been assigned one.  */
@@ -14613,7 +14696,7 @@ gfc_resolve_uops (gfc_symtree *symtree)
    assign types to all intermediate expressions, make sure that all
    assignments are to compatible types and figure out which names
    refer to which functions or subroutines.  It doesn't check code
-   block, which is handled by resolve_code.  */
+   block, which is handled by gfc_resolve_code.  */
 
 static void
 resolve_types (gfc_namespace *ns)
@@ -14696,11 +14779,13 @@ resolve_types (gfc_namespace *ns)
 
   gfc_resolve_omp_declare_simd (ns);
 
+  gfc_resolve_omp_udrs (ns->omp_udr_root);
+
   gfc_current_ns = old_ns;
 }
 
 
-/* Call resolve_code recursively.  */
+/* Call gfc_resolve_code recursively.  */
 
 static void
 resolve_codes (gfc_namespace *ns)
@@ -14726,7 +14811,7 @@ resolve_codes (gfc_namespace *ns)
   old_obstack = labels_obstack;
   bitmap_obstack_initialize (&labels_obstack);
 
-  resolve_code (ns->code, ns);
+  gfc_resolve_code (ns->code, ns);
 
   bitmap_obstack_release (&labels_obstack);
   labels_obstack = old_obstack;

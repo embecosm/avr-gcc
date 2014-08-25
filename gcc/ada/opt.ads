@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2013, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2014, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -137,12 +137,11 @@ package Opt is
 
    Ada_Version_Explicit : Ada_Version_Type := Ada_Version_Default;
    --  GNAT
-   --  Like Ada_Version, but does not get set implicitly for predefined
-   --  or internal units, so it reflects the Ada version explicitly set
-   --  using configuration pragmas or compiler switches (or if neither
-   --  appears, it remains set to Ada_Version_Default). This is used in
-   --  the rare cases (notably for pragmas Preelaborate_05 and Pure_05/12)
-   --  where in the run-time we want the explicit version set.
+   --  Like Ada_Version, but does not get set implicitly for predefined or
+   --  internal units, so it reflects the Ada version explicitly set using
+   --  configuration pragmas or compiler switches (or if neither appears, it
+   --  remains set to Ada_Version_Default). This is used in the rare cases
+   --  (notably pragma Obsolescent) where we want the explicit version set.
 
    Ada_Version_Runtime : Ada_Version_Type := Ada_2012;
    --  GNAT
@@ -375,6 +374,15 @@ package Opt is
    --  GNATCLEAN, GPRCLEAN:
    --    set to True to delete only the files produced by the compiler but not
    --    the library files or the executable files.
+
+   Compiler_Unit : Boolean := False;
+   --  GNAT1
+   --  Set True by an occurrence of pragma Compiler_Unit_Warning (or of the
+   --  obsolete pragma Compiler_Unit) in the main unit. Once set True, stays
+   --  True, since any units that are with'ed directly or indirectly by
+   --  a Compiler_Unit_Warning main unit are subject to the same restrictions.
+   --  Such units really should have their own pragmas, but we do not bother to
+   --  check for that, so this transitivity provides extra checking.
 
    Config_File : Boolean := True;
    --  GNAT

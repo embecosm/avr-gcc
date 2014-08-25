@@ -52,6 +52,7 @@
 #include "stor-layout.h"
 #include "varasm.h"
 #include "calls.h"
+#include "builtins.h"
 
 /* Forward function declarations.  */
 static bool prologue_saved_reg_p (unsigned);
@@ -1628,7 +1629,7 @@ nios2_in_small_data_p (const_tree exp)
     {
       if (DECL_SECTION_NAME (exp))
 	{
-	  const char *section = TREE_STRING_POINTER (DECL_SECTION_NAME (exp));
+	  const char *section = DECL_SECTION_NAME (exp);
 	  if (nios2_section_threshold > 0
 	      && nios2_small_section_name_p (section))
 	    return true;

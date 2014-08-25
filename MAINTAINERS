@@ -238,9 +238,9 @@ tree-ssa		Diego Novillo		dnovillo@google.com
 tree-ssa		Andrew MacLeod		amacleod@redhat.com
 PRE			Daniel Berlin		dberlin@dberlin.org
 code sinking		Daniel Berlin		dberlin@dberlin.org
-tree browser/unparser	Sebastian Pop		sebastian.pop@amd.com
+tree browser/unparser	Sebastian Pop		sebpop@gmail.com
 scev, data dependence	Daniel Berlin		dberlin@dberlin.org
-scev, data dependence	Sebastian Pop		sebastian.pop@amd.com
+scev, data dependence	Sebastian Pop		sebpop@gmail.com
 profile feedback	Jan Hubicka		hubicka@ucw.cz
 type-safe vectors	Nathan Sidwell		nathan@codesourcery.com
 alias analysis		Daniel Berlin		dberlin@dberlin.org
@@ -283,7 +283,7 @@ Fortran			Paul Thomas		pault@gcc.gnu.org
 Fortran			Janus Weil		janus@gcc.gnu.org
 Graphite		Daniel Berlin		dberlin@dberlin.org
 Graphite 		Tobias Grosser		grosser@fim.uni-passau.de
-Graphite		Sebastian Pop		sebastian.pop@amd.com
+Graphite		Sebastian Pop		sebpop@gmail.com
 libcpp			Tom Tromey		tromey@redhat.com
 libsanitizer, asan.c	Jakub Jelinek		jakub@redhat.com
 libsanitizer, asan.c	Dodji Seketeli		dodji@redhat.com
@@ -350,6 +350,7 @@ Daniel Carrera					dcarrera@gmail.com
 Stephane Carrez					stcarrez@nerim.fr
 Gabriel Charette				gchare@google.com
 Chandra Chavva					cchavva@redhat.com
+Dehao Chen					dehao@google.com
 Fabien Chêne					fabien@gcc.gnu.org
 Bin Cheng					bin.cheng@arm.com
 Harshit Chopra					harshit@google.com
@@ -380,6 +381,7 @@ Changpeng Fang					changpeng.fang@amd.com
 Li Feng						nemokingdom@gmail.com
 Thomas Fitzsimmons				fitzsim@redhat.com
 Brian Ford					ford@vss.fsi.com
+Matthew Fortune					matthew.fortune@imgtec.com
 John Freeman					jfreeman08@gmail.com
 Nathan Froyd					froydnj@gcc.gnu.org
 Chao-ying Fu					fu@mips.com
@@ -501,6 +503,7 @@ Paul Pluzhnikov					ppluzhnikov@google.com
 Marek Polacek					polacek@redhat.com
 Antoniu Pop					antoniu.pop@gmail.com
 Vidya Praveen					vidyapraveen@arm.com
+Thomas Preud'homme				thomas.preudhomme@arm.com
 Vladimir Prus					vladimir@codesourcery.com
 Yao Qi						yao@codesourcery.com
 Jerry Quinn					jlquinn@optonline.net
@@ -527,7 +530,7 @@ Dodji Seketeli					dodji@gcc.gnu.org
 Svein Seldal					svein@dev.seldal.com
 Thiemo Seufer					ths@networkno.de
 Marcus Shawcroft				marcus.shawcroft@arm.com
-Tim Shen					timshen91@gmail.com
+Tim Shen					timshen@google.com
 Sharad Singhai					singhai@google.com
 Johannes Singler				singler@kit.edu
 Franz Sirl					franz.sirl-kernel@lauterbach.com

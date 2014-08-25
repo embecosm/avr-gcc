@@ -2130,6 +2130,7 @@ extern rtx prev_cc0_setter (rtx);
 extern int insn_line (const_rtx);
 extern const char * insn_file (const_rtx);
 extern tree insn_scope (const_rtx);
+extern expanded_location insn_location (const_rtx);
 extern location_t prologue_location, epilogue_location;
 
 /* In jump.c */
@@ -2513,6 +2514,10 @@ struct GTY(()) target_rtl {
 
   /* The default memory attributes for each mode.  */
   struct mem_attrs *x_mode_mem_attrs[(int) MAX_MACHINE_MODE];
+
+  /* Track if RTL has been initialized.  */
+  bool target_specific_initialized;
+  bool lang_dependent_initialized;
 };
 
 extern GTY(()) struct target_rtl default_target_rtl;

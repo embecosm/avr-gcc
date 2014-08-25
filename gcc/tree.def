@@ -574,7 +574,7 @@ DEFTREECODE (BIND_EXPR, "bind_expr", tcc_expression, 3)
 /* Function call.  CALL_EXPRs are represented by variably-sized expression
    nodes.  There are at least three fixed operands.  Operand 0 is an
    INTEGER_CST node containing the total operand count, the number of
-   arguments plus 3.  Operand 1 is the function, while operand 2 is
+   arguments plus 3.  Operand 1 is the function or NULL, while operand 2 is
    is static chain argument, or NULL.  The remaining operands are the
    arguments to the call.  */
 DEFTREECODE (CALL_EXPR, "call_expr", tcc_vl_exp, 3)
@@ -1184,6 +1184,22 @@ DEFTREECODE (DOT_PROD_EXPR, "dot_prod_expr", tcc_expression, 3)
    the first argument from type t1 to type t2, and then summing it
    with the second argument.  */
 DEFTREECODE (WIDEN_SUM_EXPR, "widen_sum_expr", tcc_binary, 2)
+
+/* Widening sad (sum of absolute differences).
+   The first two arguments are of type t1 which should be integer.
+   The third argument and the result are of type t2, such that t2 is at least
+   twice the size of t1.  Like DOT_PROD_EXPR, SAD_EXPR (arg1,arg2,arg3) is
+   equivalent to (note we don't have WIDEN_MINUS_EXPR now, but we assume its
+   behavior is similar to WIDEN_SUM_EXPR):
+       tmp = WIDEN_MINUS_EXPR (arg1, arg2)
+       tmp2 = ABS_EXPR (tmp)
+       arg3 = PLUS_EXPR (tmp2, arg3)
+  or:
+       tmp = WIDEN_MINUS_EXPR (arg1, arg2)
+       tmp2 = ABS_EXPR (tmp)
+       arg3 = WIDEN_SUM_EXPR (tmp2, arg3)
+ */
+DEFTREECODE (SAD_EXPR, "sad_expr", tcc_expression, 3)
 
 /* Widening multiplication.
    The two arguments are of type t1.

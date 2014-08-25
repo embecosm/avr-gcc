@@ -431,23 +431,20 @@ transform_ifelse (ext_cand *cand, rtx def_insn)
 static struct df_link *
 get_defs (rtx insn, rtx reg, vec<rtx> *dest)
 {
-  df_ref reg_info, *uses;
+  df_ref use;
   struct df_link *ref_chain, *ref_link;
 
-  reg_info = NULL;
-
-  for (uses = DF_INSN_USES (insn); *uses; uses++)
+  FOR_EACH_INSN_USE (use, insn)
     {
-      reg_info = *uses;
-      if (GET_CODE (DF_REF_REG (reg_info)) == SUBREG)
+      if (GET_CODE (DF_REF_REG (use)) == SUBREG)
         return NULL;
-      if (REGNO (DF_REF_REG (reg_info)) == REGNO (reg))
-        break;
+      if (REGNO (DF_REF_REG (use)) == REGNO (reg))
+	break;
     }
 
-  gcc_assert (reg_info != NULL && uses != NULL);
+  gcc_assert (use != NULL);
 
-  ref_chain = DF_REF_CHAIN (reg_info);
+  ref_chain = DF_REF_CHAIN (use);
 
   for (ref_link = ref_chain; ref_link; ref_link = ref_link->next)
     {
@@ -787,13 +784,16 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
 	 generated more than one insn.
 
          This generates garbage since we throw away the insn when we're
-	 done, only to recreate it later if this test was successful.  */
+	 done, only to recreate it later if this test was successful. 
+
+	 Make sure to get the mode from the extension (cand->insn).  This
+	 is different than in the code to emit the copy as we have not
+	 modified the defining insn yet.  */
       start_sequence ();
-      rtx sub_rtx = *get_sub_rtx (def_insn);
       rtx pat = PATTERN (cand->insn);
-      rtx new_dst = gen_rtx_REG (GET_MODE (SET_DEST (sub_rtx)),
+      rtx new_dst = gen_rtx_REG (GET_MODE (SET_DEST (pat)),
                                  REGNO (XEXP (SET_SRC (pat), 0)));
-      rtx new_src = gen_rtx_REG (GET_MODE (SET_DEST (sub_rtx)),
+      rtx new_src = gen_rtx_REG (GET_MODE (SET_DEST (pat)),
                                  REGNO (SET_DEST (pat)));
       emit_move_insn (new_dst, new_src);
 
@@ -1133,7 +1133,6 @@ const pass_data pass_data_ree =
   RTL_PASS, /* type */
   "ree", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_REE, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */

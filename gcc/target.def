@@ -5134,18 +5134,18 @@ FRAME_POINTER_REGNUM, ARG_POINTER_REGNUM, and the PIC_OFFSET_TABLE_REGNUM.",
  hook_void_bitmap)
 
 /* Targets should define this target hook to mark that non-callee clobbers are
-   present in CALL_INSN_FUNCTION_USAGE for all the calls in the current
-   function.  */
+   present in CALL_INSN_FUNCTION_USAGE for all the calls that bind to a local
+   definition.  */
 DEFHOOKPOD
 (call_fusage_contains_non_callee_clobbers,
- "set to true if all the calls in the current function contain clobbers in\n\
-CALL_INSN_FUNCTION_USAGE for the registers that are clobbered by the call\n\
-rather than by the callee, and are not already set or clobbered in the call\n\
-pattern.  Examples of such registers are registers used in PLTs and stubs,\n\
-and temporary registers used in the call instruction but not present in the\n\
-rtl pattern.  Another way to formulate it is the registers not present in the\n\
-rtl pattern that are clobbered by the call assuming the callee does not\n\
-clobber any register.  The default version of this hook is set to false.",
+ "Set to true if each call that binds to a local definition explicitly\n\
+clobbers or sets all non-fixed registers modified by performing the call.\n\
+That is, by the call pattern itself, or by code that might be inserted by the\n\
+linker (e.g. stubs, veneers, branch islands), but not including those\n\
+modifiable by the callee.  The affected registers may be mentioned explicitly\n\
+in the call pattern, or included as clobbers in CALL_INSN_FUNCTION_USAGE.\n\
+The default version of this hook is set to false.  The purpose of this hook\n\
+is to enable the fuse-caller-save optimization.",
  bool, 
  false)
 
@@ -5371,12 +5371,12 @@ HOOK_VECTOR (TARGET_TOGGLE_, mode_switching)
 
 DEFHOOK
 (emit,
- "Generate one or more insns to set @var{entity} to @var{mode}. @var{hard_reg_live} is the set of hard registers live at the point where the insn(s) are to be inserted. Sets of a lower numbered entity will be emitted before sets of a higher numbered entity to a mode of the same or lower priority.",
- void, (int entity, int mode, HARD_REG_SET regs_live), NULL)
+ "Generate one or more insns to set @var{entity} to @var{mode}. @var{hard_reg_live} is the set of hard registers live at the point where the insn(s) are to be inserted. @var{prev_moxde} indicates the mode to switch from. Sets of a lower numbered entity will be emitted before sets of a higher numbered entity to a mode of the same or lower priority.",
+ void, (int entity, int mode, int prev_mode, HARD_REG_SET regs_live), NULL)
 
 DEFHOOK
 (needed,
- "@var{entity} is an integer specifying a mode-switched entity. If @code{OPTIMIZE_MODE_SWITCHING} is defined, you must define this macro to return an integer value not larger than the corresponding element in @code{NUM_MODES_FOR_MODE_SWITCHING}, to denote the mode that @var{entity} must be switched into prior to the execution of @var{insn}.",
+ "@var{entity} is an integer specifying a mode-switched entity.  If @code{OPTIMIZE_MODE_SWITCHING} is defined, you must define this macro to return an integer value not larger than the corresponding element in @code{NUM_MODES_FOR_MODE_SWITCHING}, to denote the mode that @var{entity} must be switched into prior to the execution of @var{insn}.",
  int, (int entity, rtx insn), NULL)
 
 DEFHOOK

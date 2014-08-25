@@ -264,6 +264,7 @@ struct mips_cpu_info {
 				     || mips_tune == PROCESSOR_OCTEON2)
 #define TUNE_SB1                    (mips_tune == PROCESSOR_SB1		\
 				     || mips_tune == PROCESSOR_SB1A)
+#define TUNE_P5600                  (mips_tune == PROCESSOR_P5600)
 
 /* Whether vector modes and intrinsics for ST Microelectronics
    Loongson-2E/2F processors should be enabled.  In o32 pairs of
@@ -306,7 +307,8 @@ struct mips_cpu_info {
 #define TUNE_MACC_CHAINS	    (TUNE_MIPS5500		\
 				     || TUNE_MIPS4120		\
 				     || TUNE_MIPS4130		\
-				     || TUNE_24K)
+				     || TUNE_24K		\
+				     || TUNE_P5600)
 
 #define TARGET_OLDABI		    (mips_abi == ABI_32 || mips_abi == ABI_O64)
 #define TARGET_NEWABI		    (mips_abi == ABI_N32 || mips_abi == ABI_64)
@@ -724,7 +726,7 @@ struct mips_cpu_info {
      %{march=mips32r2|march=m4k|march=4ke*|march=4ksd|march=24k* \
        |march=34k*|march=74k*|march=m14k*|march=1004k*: -mips32r2} \
      %{march=mips32r3: -mips32r3} \
-     %{march=mips32r5: -mips32r5} \
+     %{march=mips32r5|march=p5600: -mips32r5} \
      %{march=mips64|march=5k*|march=20k*|march=sb1*|march=sr71000 \
        |march=xlr: -mips64} \
      %{march=mips64r2|march=loongson3a|march=octeon|march=xlp: -mips64r2} \
@@ -1867,10 +1869,12 @@ enum reg_class
   NO_REGS,			/* no registers in set */
   M16_STORE_REGS,		/* microMIPS store registers  */
   M16_REGS,			/* mips16 directly accessible registers */
+  M16_SP_REGS,			/* mips16 + $sp */
   T_REG,			/* mips16 T register ($24) */
   M16_T_REGS,			/* mips16 registers plus T register */
   PIC_FN_ADDR_REG,		/* SVR4 PIC function address register */
   V1_REG,			/* Register $v1 ($3) used for TLS access.  */
+  SPILL_REGS,			/* All but $sp and call preserved regs are in here */
   LEA_REGS,			/* Every GPR except $25 */
   GR_REGS,			/* integer registers */
   FP_REGS,			/* floating point registers */
@@ -1905,10 +1909,12 @@ enum reg_class
   "NO_REGS",								\
   "M16_STORE_REGS",							\
   "M16_REGS",								\
+  "M16_SP_REGS",								\
   "T_REG",								\
   "M16_T_REGS",								\
   "PIC_FN_ADDR_REG",							\
   "V1_REG",								\
+  "SPILL_REGS",								\
   "LEA_REGS",								\
   "GR_REGS",								\
   "FP_REGS",								\
@@ -1946,10 +1952,12 @@ enum reg_class
   { 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* NO_REGS */		\
   { 0x000200fc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* M16_STORE_REGS */	\
   { 0x000300fc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* M16_REGS */		\
+  { 0x200300fc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* M16_SP_REGS */		\
   { 0x01000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* T_REG */		\
   { 0x010300fc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* M16_T_REGS */	\
   { 0x02000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* PIC_FN_ADDR_REG */	\
   { 0x00000008, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* V1_REG */		\
+  { 0x0303fffc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* SPILL_REGS */      	\
   { 0xfdffffff, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* LEA_REGS */		\
   { 0xffffffff, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* GR_REGS */		\
   { 0x00000000, 0xffffffff, 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* FP_REGS */		\
@@ -1982,7 +1990,7 @@ enum reg_class
    valid base register must belong.  A base register is one used in
    an address which is the register value plus a displacement.  */
 
-#define BASE_REG_CLASS  (TARGET_MIPS16 ? M16_REGS : GR_REGS)
+#define BASE_REG_CLASS  (TARGET_MIPS16 ? M16_SP_REGS : GR_REGS)
 
 /* A macro whose definition is the name of the class to which a
    valid index register must belong.  An index register is one used
@@ -2037,13 +2045,6 @@ enum reg_class
   160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,	\
   182,183,184,185,186,187						\
 }
-
-/* ADJUST_REG_ALLOC_ORDER is a macro which permits reg_alloc_order
-   to be rearranged based on a particular function.  On the mips16, we
-   want to allocate $24 (T_REG) before other registers for
-   instructions for which it is possible.  */
-
-#define ADJUST_REG_ALLOC_ORDER mips_order_regs_for_local_alloc ()
 
 /* True if VALUE is an unsigned 6-bit number.  */
 

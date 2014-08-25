@@ -482,31 +482,30 @@ try_forward_edges (int mode, basic_block b)
 		  location_t new_locus = single_succ_edge (target)->goto_locus;
 		  location_t locus = goto_locus;
 
-		  if (new_locus != UNKNOWN_LOCATION
-		      && locus != UNKNOWN_LOCATION
+		  if (LOCATION_LOCUS (new_locus) != UNKNOWN_LOCATION
+		      && LOCATION_LOCUS (locus) != UNKNOWN_LOCATION
 		      && new_locus != locus)
 		    new_target = NULL;
 		  else
 		    {
-		      rtx last;
-
-		      if (new_locus != UNKNOWN_LOCATION)
+		      if (LOCATION_LOCUS (new_locus) != UNKNOWN_LOCATION)
 			locus = new_locus;
 
-		      last = BB_END (target);
+		      rtx last = BB_END (target);
 		      if (DEBUG_INSN_P (last))
 			last = prev_nondebug_insn (last);
+		      if (last && INSN_P (last))
+			new_locus = INSN_LOCATION (last);
+		      else
+			new_locus = UNKNOWN_LOCATION;
 
-		      new_locus = last && INSN_P (last)
-				  ? INSN_LOCATION (last) : 0;
-
-		      if (new_locus != UNKNOWN_LOCATION
-			  && locus != UNKNOWN_LOCATION
+		      if (LOCATION_LOCUS (new_locus) != UNKNOWN_LOCATION
+			  && LOCATION_LOCUS (locus) != UNKNOWN_LOCATION
 			  && new_locus != locus)
 			new_target = NULL;
 		      else
 			{
-			  if (new_locus != UNKNOWN_LOCATION)
+			  if (LOCATION_LOCUS (new_locus) != UNKNOWN_LOCATION)
 			    locus = new_locus;
 
 			  goto_locus = locus;
@@ -1175,7 +1174,7 @@ old_insns_match_p (int mode ATTRIBUTE_UNUSED, rtx i1, rtx i2)
 		      && DECL_FUNCTION_CODE (SYMBOL_REF_DECL (symbol))
 			 >= BUILT_IN_ASAN_REPORT_LOAD1
 		      && DECL_FUNCTION_CODE (SYMBOL_REF_DECL (symbol))
-			 <= BUILT_IN_ASAN_REPORT_STORE16)
+			 <= BUILT_IN_ASAN_STOREN)
 		    return dir_none;
 		}
 	    }
@@ -3087,7 +3086,6 @@ const pass_data pass_data_jump =
   RTL_PASS, /* type */
   "jump", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_JUMP, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
@@ -3134,7 +3132,6 @@ const pass_data pass_data_jump2 =
   RTL_PASS, /* type */
   "jump2", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_JUMP, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */

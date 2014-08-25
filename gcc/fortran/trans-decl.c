@@ -90,6 +90,9 @@ static stmtblock_t caf_init_block;
 tree gfc_static_ctors;
 
 
+/* Whether we've seen a symbol from an IEEE module in the namespace.  */
+static int seen_ieee_symbol;
+
 /* Function declarations for builtin library functions.  */
 
 tree gfor_fndecl_pause_numeric;
@@ -116,6 +119,10 @@ tree gfor_fndecl_ttynam;
 tree gfor_fndecl_in_pack;
 tree gfor_fndecl_in_unpack;
 tree gfor_fndecl_associated;
+tree gfor_fndecl_system_clock4;
+tree gfor_fndecl_system_clock8;
+tree gfor_fndecl_ieee_procedure_entry;
+tree gfor_fndecl_ieee_procedure_exit;
 
 
 /* Coarray run-time library function decls.  */
@@ -125,6 +132,9 @@ tree gfor_fndecl_caf_this_image;
 tree gfor_fndecl_caf_num_images;
 tree gfor_fndecl_caf_register;
 tree gfor_fndecl_caf_deregister;
+tree gfor_fndecl_caf_get;
+tree gfor_fndecl_caf_send;
+tree gfor_fndecl_caf_sendget;
 tree gfor_fndecl_caf_critical;
 tree gfor_fndecl_caf_end_critical;
 tree gfor_fndecl_caf_sync_all;
@@ -496,6 +506,29 @@ gfc_finish_decl (tree decl)
 }
 
 
+/* Handle setting of GFC_DECL_SCALAR* on DECL.  */
+
+void
+gfc_finish_decl_attrs (tree decl, symbol_attribute *attr)
+{
+  if (!attr->dimension && !attr->codimension)
+    {
+      /* Handle scalar allocatable variables.  */
+      if (attr->allocatable)
+	{
+	  gfc_allocate_lang_decl (decl);
+	  GFC_DECL_SCALAR_ALLOCATABLE (decl) = 1;
+	}
+      /* Handle scalar pointer variables.  */
+      if (attr->pointer)
+	{
+	  gfc_allocate_lang_decl (decl);
+	  GFC_DECL_SCALAR_POINTER (decl) = 1;
+	}
+    }
+}
+
+
 /* Apply symbol attributes to a variable, and add it to the function scope.  */
 
 static void
@@ -606,7 +639,9 @@ gfc_finish_var_decl (tree decl, gfc_symbol * sym)
   /* Handle threadprivate variables.  */
   if (sym->attr.threadprivate
       && (TREE_STATIC (decl) || DECL_EXTERNAL (decl)))
-    DECL_TLS_MODEL (decl) = decl_default_tls_model (decl);
+    set_decl_tls_model (decl, decl_default_tls_model (decl));
+
+  gfc_finish_decl_attrs (decl, &sym->attr);
 }
 
 
@@ -615,7 +650,8 @@ gfc_finish_var_decl (tree decl, gfc_symbol * sym)
 void
 gfc_allocate_lang_decl (tree decl)
 {
-  DECL_LANG_SPECIFIC (decl) = ggc_cleared_alloc<struct lang_decl> ();
+  if (DECL_LANG_SPECIFIC (decl) == NULL)
+    DECL_LANG_SPECIFIC (decl) = ggc_cleared_alloc<struct lang_decl> ();
 }
 
 /* Remember a symbol to generate initialization/cleanup code at function
@@ -1191,6 +1227,10 @@ add_attributes_to_decl (symbol_attribute sym_attr, tree list)
 	list = chainon (list, attr);
       }
 
+  if (sym_attr.omp_declare_target)
+    list = tree_cons (get_identifier ("omp declare target"),
+		      NULL_TREE, list);
+
   return list;
 }
 
@@ -1341,8 +1381,9 @@ gfc_get_symbol_decl (gfc_symbol * sym)
 
   /* Special case for array-valued named constants from intrinsic
      procedures; those are inlined.  */
-  if (sym->attr.use_assoc && sym->from_intmod
-      && sym->attr.flavor == FL_PARAMETER)
+  if (sym->attr.use_assoc && sym->attr.flavor == FL_PARAMETER
+      && (sym->from_intmod == INTMOD_ISO_FORTRAN_ENV
+	  || sym->from_intmod == INTMOD_ISO_C_BINDING))
     intrinsic_array_parameter = true;
 
   /* If use associated compilation, use the module
@@ -1517,6 +1558,9 @@ gfc_get_symbol_decl (gfc_symbol * sym)
       && !sym->attr.select_type_temporary)
     DECL_BY_REFERENCE (decl) = 1;
 
+  if (sym->attr.associate_var)
+    GFC_DECL_ASSOCIATE_VAR_P (decl) = 1;
+
   if (sym->attr.vtab
       || (sym->name[0] == '_' && strncmp ("__def_init", sym->name, 10) == 0))
     TREE_READONLY (decl) = 1;
@@ -1614,7 +1658,7 @@ get_proc_pointer_decl (gfc_symbol *sym)
   /* Handle threadprivate procedure pointers.  */
   if (sym->attr.threadprivate
       && (TREE_STATIC (decl) || DECL_EXTERNAL (decl)))
-    DECL_TLS_MODEL (decl) = decl_default_tls_model (decl);
+    set_decl_tls_model (decl, decl_default_tls_model (decl));
 
   attributes = add_attributes_to_decl (sym->attr, NULL_TREE);
   decl_attributes (&decl, attributes, 0);
@@ -2236,6 +2280,7 @@ create_function_arglist (gfc_symbol * sym)
 	DECL_BY_REFERENCE (parm) = 1;
 
       gfc_finish_decl (parm);
+      gfc_finish_decl_attrs (parm, &f->sym->attr);
 
       f->sym->backend_decl = parm;
 
@@ -2690,6 +2735,7 @@ gfc_get_fake_result_decl (gfc_symbol * sym, int parent_flag)
       TREE_ADDRESSABLE (decl) = 1;
 
       layout_decl (decl, 0);
+      gfc_finish_decl_attrs (decl, &sym->attr);
 
       if (parent_flag)
 	gfc_add_decl_to_parent_function (decl);
@@ -2791,7 +2837,9 @@ static void
 gfc_build_intrinsic_function_decls (void)
 {
   tree gfc_int4_type_node = gfc_get_int_type (4);
+  tree gfc_pint4_type_node = build_pointer_type (gfc_int4_type_node);
   tree gfc_int8_type_node = gfc_get_int_type (8);
+  tree gfc_pint8_type_node = build_pointer_type (gfc_int8_type_node);
   tree gfc_int16_type_node = gfc_get_int_type (16);
   tree gfc_logical4_type_node = gfc_get_logical_type (4);
   tree pchar1_type_node = gfc_get_pchar_type (1);
@@ -2989,6 +3037,16 @@ gfc_build_intrinsic_function_decls (void)
 	pvoid_type_node);
   DECL_PURE_P (gfor_fndecl_sr_kind) = 1;
   TREE_NOTHROW (gfor_fndecl_sr_kind) = 1;
+
+  gfor_fndecl_system_clock4 = gfc_build_library_function_decl (
+	get_identifier (PREFIX("system_clock_4")),
+	void_type_node, 3, gfc_pint4_type_node, gfc_pint4_type_node,
+	gfc_pint4_type_node);
+
+  gfor_fndecl_system_clock8 = gfc_build_library_function_decl (
+	get_identifier (PREFIX("system_clock_8")),
+	void_type_node, 3, gfc_pint8_type_node, gfc_pint8_type_node,
+	gfc_pint8_type_node);
 
   /* Power functions.  */
   {
@@ -3217,6 +3275,14 @@ gfc_build_builtin_function_decls (void)
 	get_identifier (PREFIX("set_fpe")),
 	void_type_node, 1, integer_type_node);
 
+  gfor_fndecl_ieee_procedure_entry = gfc_build_library_function_decl (
+	get_identifier (PREFIX("ieee_procedure_entry")),
+	void_type_node, 1, pvoid_type_node);
+
+  gfor_fndecl_ieee_procedure_exit = gfc_build_library_function_decl (
+	get_identifier (PREFIX("ieee_procedure_exit")),
+	void_type_node, 1, pvoid_type_node);
+
   /* Keep the array dimension in sync with the call, later in this file.  */
   gfor_fndecl_set_options = gfc_build_library_function_decl_with_spec (
 	get_identifier (PREFIX("set_options")), "..R",
@@ -3282,6 +3348,22 @@ gfc_build_builtin_function_decls (void)
 	get_identifier (PREFIX("caf_deregister")), ".WWW", void_type_node, 4,
         ppvoid_type_node, pint_type, pchar_type_node, integer_type_node);
 
+      gfor_fndecl_caf_get = gfc_build_library_function_decl_with_spec (
+	get_identifier (PREFIX("caf_get")), ".R.RRRW", void_type_node, 8,
+        pvoid_type_node, size_type_node, integer_type_node, pvoid_type_node,
+	pvoid_type_node, pvoid_type_node, integer_type_node, integer_type_node);
+
+      gfor_fndecl_caf_send = gfc_build_library_function_decl_with_spec (
+	get_identifier (PREFIX("caf_send")), ".R.RRRR", void_type_node, 8,
+        pvoid_type_node, size_type_node, integer_type_node, pvoid_type_node,
+	pvoid_type_node, pvoid_type_node, integer_type_node, integer_type_node);
+
+      gfor_fndecl_caf_sendget = gfc_build_library_function_decl_with_spec (
+	get_identifier (PREFIX("caf_sendget")), ".R.RRRR.RRR", void_type_node,
+	12, pvoid_type_node, size_type_node, integer_type_node, pvoid_type_node,
+	pvoid_type_node, pvoid_type_node, size_type_node, integer_type_node,
+	pvoid_type_node, pvoid_type_node, integer_type_node, integer_type_node);
+
       gfor_fndecl_caf_critical = gfc_build_library_function_decl (
 	get_identifier (PREFIX("caf_critical")), void_type_node, 0);
 
@@ -3310,18 +3392,18 @@ gfc_build_builtin_function_decls (void)
       TREE_THIS_VOLATILE (gfor_fndecl_caf_error_stop_str) = 1;
 
       gfor_fndecl_co_max = gfc_build_library_function_decl_with_spec (
-	get_identifier (PREFIX("caf_co_max")), "WR.WW",
-	void_type_node, 7, pvoid_type_node, pvoid_type_node, integer_type_node,
+	get_identifier (PREFIX("caf_co_max")), "W.WW",
+	void_type_node, 6, pvoid_type_node, integer_type_node,
 	pint_type, pchar_type_node, integer_type_node, integer_type_node);
 
       gfor_fndecl_co_min = gfc_build_library_function_decl_with_spec (
-	get_identifier (PREFIX("caf_co_min")), "WR.WW",
-	void_type_node, 7, pvoid_type_node, pvoid_type_node, integer_type_node,
+	get_identifier (PREFIX("caf_co_min")), "W.WW",
+	void_type_node, 6, pvoid_type_node, integer_type_node,
 	pint_type, pchar_type_node, integer_type_node, integer_type_node);
 
       gfor_fndecl_co_sum = gfc_build_library_function_decl_with_spec (
-	get_identifier (PREFIX("caf_co_sum")), "WR.WW",
-	void_type_node, 6, pvoid_type_node, pvoid_type_node, integer_type_node,
+	get_identifier (PREFIX("caf_co_sum")), "W.WW",
+	void_type_node, 5, pvoid_type_node, integer_type_node,
 	pint_type, pchar_type_node, integer_type_node);
     }
 
@@ -3802,7 +3884,7 @@ gfc_trans_deferred_vars (gfc_symbol * proc_sym, gfc_wrapped_block * block)
 					NULL_TREE);
 		  continue;
 		}
-	      else if (gfc_option.coarray != GFC_FCOARRAY_LIB)
+	      else
 		{
 		  gfc_save_backend_locus (&loc);
 		  gfc_set_backend_locus (&sym->declared_at);
@@ -4278,8 +4360,8 @@ gfc_create_module_variable (gfc_symbol * sym)
     }
 
   /* Don't generate variables from other modules. Variables from
-     COMMONs will already have been generated.  */
-  if (sym->attr.use_assoc || sym->attr.in_common)
+     COMMONs and Cray pointees will already have been generated.  */
+  if (sym->attr.use_assoc || sym->attr.in_common || sym->attr.cray_pointee)
     return;
 
   /* Equivalenced variables arrive here after creation.  */
@@ -4588,7 +4670,8 @@ generate_coarray_sym_init (gfc_symbol *sym)
   tree tmp, size, decl, token;
 
   if (sym->attr.dummy || sym->attr.allocatable || !sym->attr.codimension
-      || sym->attr.use_assoc || !sym->attr.referenced)
+      || sym->attr.use_assoc || !sym->attr.referenced
+      || sym->attr.select_type_temporary)
     return;
 
   decl = sym->backend_decl;
@@ -5300,11 +5383,16 @@ create_main_function (tree fndecl)
     TREE_STATIC (array) = 1;
 
     /* Create a static variable to hold the jump table.  */
-    var = gfc_create_var (array_type, "options");
+    var = build_decl (input_location, VAR_DECL,
+		      create_tmp_var_name ("options"),
+		      array_type);
+    DECL_ARTIFICIAL (var) = 1;
+    DECL_IGNORED_P (var) = 1;
     TREE_CONSTANT (var) = 1;
     TREE_STATIC (var) = 1;
     TREE_READONLY (var) = 1;
     DECL_INITIAL (var) = array;
+    pushdecl (var);
     var = gfc_build_addr_expr (build_pointer_type (integer_type_node), var);
 
     tmp = build_call_expr_loc (input_location,
@@ -5462,6 +5550,55 @@ gfc_generate_return (void)
 }
 
 
+static void
+is_from_ieee_module (gfc_symbol *sym)
+{
+  if (sym->from_intmod == INTMOD_IEEE_FEATURES
+      || sym->from_intmod == INTMOD_IEEE_EXCEPTIONS
+      || sym->from_intmod == INTMOD_IEEE_ARITHMETIC)
+    seen_ieee_symbol = 1;
+}
+
+
+static int
+is_ieee_module_used (gfc_namespace *ns)
+{
+  seen_ieee_symbol = 0;
+  gfc_traverse_ns (ns, is_from_ieee_module);
+  return seen_ieee_symbol;
+}
+
+
+static tree
+save_fp_state (stmtblock_t *block)
+{
+  tree type, fpstate, tmp;
+
+  type = build_array_type (char_type_node,
+	                   build_range_type (size_type_node, size_zero_node,
+					     size_int (32)));
+  fpstate = gfc_create_var (type, "fpstate");
+  fpstate = gfc_build_addr_expr (pvoid_type_node, fpstate);
+
+  tmp = build_call_expr_loc (input_location, gfor_fndecl_ieee_procedure_entry,
+			     1, fpstate);
+  gfc_add_expr_to_block (block, tmp);
+
+  return fpstate;
+}
+
+
+static void
+restore_fp_state (stmtblock_t *block, tree fpstate)
+{
+  tree tmp;
+
+  tmp = build_call_expr_loc (input_location, gfor_fndecl_ieee_procedure_exit,
+			     1, fpstate);
+  gfc_add_expr_to_block (block, tmp);
+}
+
+
 /* Generate code for a function.  */
 
 void
@@ -5471,13 +5608,14 @@ gfc_generate_function_code (gfc_namespace * ns)
   tree old_context;
   tree decl;
   tree tmp;
+  tree fpstate = NULL_TREE;
   stmtblock_t init, cleanup;
   stmtblock_t body;
   gfc_wrapped_block try_block;
   tree recurcheckvar = NULL_TREE;
   gfc_symbol *sym;
   gfc_symbol *previous_procedure_symbol;
-  int rank;
+  int rank, ieee;
   bool is_recursive;
 
   sym = ns->proc_name;
@@ -5568,6 +5706,12 @@ gfc_generate_function_code (gfc_namespace * ns)
       free (msg);
     }
 
+  /* Check if an IEEE module is used in the procedure.  If so, save
+     the floating point state.  */
+  ieee = is_ieee_module_used (ns);
+  if (ieee)
+    fpstate = save_fp_state (&init);
+
   /* Now generate the code for the body of this function.  */
   gfc_init_block (&body);
 
@@ -5650,6 +5794,10 @@ gfc_generate_function_code (gfc_namespace * ns)
       gfc_add_modify (&cleanup, recurcheckvar, boolean_false_node);
       recurcheckvar = NULL;
     }
+
+  /* If IEEE modules are loaded, restore the floating-point state.  */
+  if (ieee)
+    restore_fp_state (&cleanup, fpstate);
 
   /* Finish the function body and add init and cleanup code.  */
   tmp = gfc_finish_block (&body);

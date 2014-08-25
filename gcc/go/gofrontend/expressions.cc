@@ -4105,7 +4105,8 @@ Unary_expression::do_get_backend(Translate_context* context)
 			      && !context->is_const());
 	    }
 	  Bvariable* implicit =
-	    gogo->backend()->implicit_variable(buf, btype, bexpr, copy_to_heap);
+	    gogo->backend()->implicit_variable(buf, btype, bexpr, copy_to_heap,
+					       false, 0);
 	  bexpr = gogo->backend()->var_expression(implicit, loc);
 	}
       else if ((this->expr_->is_composite_literal()
@@ -7598,7 +7599,7 @@ Builtin_call_expression::do_numeric_constant_value(Numeric_constant* nc) const
       if (this->seen_)
         return false;
 
-      unsigned int ret;
+      unsigned long ret;
       if (this->code_ == BUILTIN_SIZEOF)
 	{
           this->seen_ = true;
@@ -7626,8 +7627,7 @@ Builtin_call_expression::do_numeric_constant_value(Numeric_constant* nc) const
       else
 	go_unreachable();
 
-      nc->set_unsigned_long(Type::lookup_integer_type("uintptr"),
-			    static_cast<unsigned long>(ret));
+      nc->set_unsigned_long(Type::lookup_integer_type("uintptr"), ret);
       return true;
     }
   else if (this->code_ == BUILTIN_OFFSETOF)
@@ -10218,7 +10218,8 @@ Array_index_expression::do_get_backend(Translate_context* context)
   Location loc = this->location();
   Gogo* gogo = context->gogo();
 
-  Btype* int_btype = Type::lookup_integer_type("int")->get_backend(gogo);
+  Type* int_type = Type::lookup_integer_type("int");
+  Btype* int_btype = int_type->get_backend(gogo);
 
   // We need to convert the length and capacity to the Go "int" type here
   // because the length of a fixed-length array could be of type "uintptr"
@@ -10259,8 +10260,15 @@ Array_index_expression::do_get_backend(Translate_context* context)
 		 : RUNTIME_ERROR_SLICE_SLICE_OUT_OF_BOUNDS));
   Bexpression* crash = gogo->runtime_error(code, loc)->get_backend(context);
 
+  if (this->start_->type()->integer_type() == NULL
+      && !Type::are_convertible(int_type, this->start_->type(), NULL))
+    {
+      go_assert(saw_errors());
+      return context->backend()->error_expression();
+    }
+  Expression* start_expr = Expression::make_cast(int_type, this->start_, loc);
   Bexpression* bad_index =
-    Expression::check_bounds(this->start_, loc)->get_backend(context);
+    Expression::check_bounds(start_expr, loc)->get_backend(context);
 
   Bexpression* start = this->start_->get_backend(context);
   start = gogo->backend()->convert_expression(int_btype, start, loc);

@@ -82,7 +82,7 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Don't put any single quote (') in MOD_VERSION, if you want it to be
    recognized.  */
-#define MOD_VERSION "12"
+#define MOD_VERSION "13"
 
 
 /* Structure that describes a position within a module file.  */
@@ -189,6 +189,9 @@ static gzFile module_fp;
 /* The name of the module we're reading (USE'ing) or writing.  */
 static const char *module_name;
 static gfc_use_list *module_list;
+
+/* If we're reading an intrinsic module, this is its ID.  */
+static intmod_id current_intmod;
 
 /* Content of module.  */
 static char* module_content;
@@ -1877,7 +1880,7 @@ typedef enum
   AB_IS_BIND_C, AB_IS_C_INTEROP, AB_IS_ISO_C, AB_ABSTRACT, AB_ZERO_COMP,
   AB_IS_CLASS, AB_PROCEDURE, AB_PROC_POINTER, AB_ASYNCHRONOUS, AB_CODIMENSION,
   AB_COARRAY_COMP, AB_VTYPE, AB_VTAB, AB_CONTIGUOUS, AB_CLASS_POINTER,
-  AB_IMPLICIT_PURE, AB_ARTIFICIAL, AB_UNLIMITED_POLY
+  AB_IMPLICIT_PURE, AB_ARTIFICIAL, AB_UNLIMITED_POLY, AB_OMP_DECLARE_TARGET
 }
 ab_attribute;
 
@@ -1932,6 +1935,7 @@ static const mstring attr_bits[] =
     minit ("CLASS_POINTER", AB_CLASS_POINTER),
     minit ("IMPLICIT_PURE", AB_IMPLICIT_PURE),
     minit ("UNLIMITED_POLY", AB_UNLIMITED_POLY),
+    minit ("OMP_DECLARE_TARGET", AB_OMP_DECLARE_TARGET),
     minit (NULL, -1)
 };
 
@@ -2110,6 +2114,8 @@ mio_symbol_attribute (symbol_attribute *attr)
 	MIO_NAME (ab_attribute) (AB_VTYPE, attr_bits);
       if (attr->vtab)
 	MIO_NAME (ab_attribute) (AB_VTAB, attr_bits);
+      if (attr->omp_declare_target)
+	MIO_NAME (ab_attribute) (AB_OMP_DECLARE_TARGET, attr_bits);
 
       mio_rparen ();
 
@@ -2272,6 +2278,9 @@ mio_symbol_attribute (symbol_attribute *attr)
 	      break;
 	    case AB_VTAB:
 	      attr->vtab = 1;
+	      break;
+	    case AB_OMP_DECLARE_TARGET:
+	      attr->omp_declare_target = 1;
 	      break;
 	    }
 	}
@@ -3130,6 +3139,7 @@ static const mstring intrinsics[] =
     minit ("LE", INTRINSIC_LE_OS),
     minit ("NOT", INTRINSIC_NOT),
     minit ("PARENTHESES", INTRINSIC_PARENTHESES),
+    minit ("USER", INTRINSIC_USER),
     minit (NULL, -1)
 };
 
@@ -3166,7 +3176,8 @@ fix_mio_expr (gfc_expr *e)
 	  && !e->symtree->n.sym->attr.dummy)
 	e->symtree = ns_st;
     }
-  else if (e->expr_type == EXPR_FUNCTION && e->value.function.name)
+  else if (e->expr_type == EXPR_FUNCTION
+	   && (e->value.function.name || e->value.function.isym))
     {
       gfc_symbol *sym;
 
@@ -3281,6 +3292,32 @@ mio_expr (gfc_expr **ep)
 	  mio_expr (&e->value.op.op2);
 	  break;
 
+	case INTRINSIC_USER:
+	  /* INTRINSIC_USER should not appear in resolved expressions,
+	     though for UDRs we need to stream unresolved ones.  */
+	  if (iomode == IO_OUTPUT)
+	    write_atom (ATOM_STRING, e->value.op.uop->name);
+	  else
+	    {
+	      char *name = read_string ();
+	      const char *uop_name = find_use_name (name, true);
+	      if (uop_name == NULL)
+		{
+		  size_t len = strlen (name);
+		  char *name2 = XCNEWVEC (char, len + 2);
+		  memcpy (name2, name, len);
+		  name2[len] = ' ';
+		  name2[len + 1] = '\0';
+		  free (name);
+		  uop_name = name = name2;
+		}
+	      e->value.op.uop = gfc_get_uop (uop_name);
+	      free (name);
+	    }
+	  mio_expr (&e->value.op.op1);
+	  mio_expr (&e->value.op.op2);
+	  break;
+
 	default:
 	  bad_module ("Bad operator");
 	}
@@ -3299,6 +3336,8 @@ mio_expr (gfc_expr **ep)
 	    flag = 1;
 	  else if (e->ref)
 	    flag = 2;
+	  else if (e->value.function.isym == NULL)
+	    flag = 3;
 	  else
 	    flag = 0;
 	  mio_integer (&flag);
@@ -3310,6 +3349,8 @@ mio_expr (gfc_expr **ep)
 	    case 2:
 	      mio_ref_list (&e->ref);
 	      break;
+	    case 3:
+	      break;
 	    default:
 	      write_atom (ATOM_STRING, e->value.function.isym->name);
 	    }
@@ -3317,7 +3358,10 @@ mio_expr (gfc_expr **ep)
       else
 	{
 	  require_atom (ATOM_STRING);
-	  e->value.function.name = gfc_get_string (atom_string);
+	  if (atom_string[0] == '\0')
+	    e->value.function.name = NULL;
+	  else
+	    e->value.function.name = gfc_get_string (atom_string);
 	  free (atom_string);
 
 	  mio_integer (&flag);
@@ -3328,6 +3372,8 @@ mio_expr (gfc_expr **ep)
 	      break;
 	    case 2:
 	      mio_ref_list (&e->ref);
+	      break;
+	    case 3:
 	      break;
 	    default:
 	      require_atom (ATOM_STRING);
@@ -3896,6 +3942,98 @@ mio_omp_declare_simd (gfc_namespace *ns, gfc_omp_declare_simd **odsp)
 }
 
 
+static const mstring omp_declare_reduction_stmt[] =
+{
+    minit ("ASSIGN", 0),
+    minit ("CALL", 1),
+    minit (NULL, -1)
+};
+
+
+static void
+mio_omp_udr_expr (gfc_omp_udr *udr, gfc_symbol **sym1, gfc_symbol **sym2,
+		  gfc_namespace *ns, bool is_initializer)
+{
+  if (iomode == IO_OUTPUT)
+    {
+      if ((*sym1)->module == NULL)
+	{
+	  (*sym1)->module = module_name;
+	  (*sym2)->module = module_name;
+	}
+      mio_symbol_ref (sym1);
+      mio_symbol_ref (sym2);
+      if (ns->code->op == EXEC_ASSIGN)
+	{
+	  mio_name (0, omp_declare_reduction_stmt);
+	  mio_expr (&ns->code->expr1);
+	  mio_expr (&ns->code->expr2);
+	}
+      else
+	{
+	  int flag;
+	  mio_name (1, omp_declare_reduction_stmt);
+	  mio_symtree_ref (&ns->code->symtree);
+	  mio_actual_arglist (&ns->code->ext.actual);
+
+	  flag = ns->code->resolved_isym != NULL;
+	  mio_integer (&flag);
+	  if (flag)
+	    write_atom (ATOM_STRING, ns->code->resolved_isym->name);
+	  else
+	    mio_symbol_ref (&ns->code->resolved_sym);
+	}
+    }
+  else
+    {
+      pointer_info *p1 = mio_symbol_ref (sym1);
+      pointer_info *p2 = mio_symbol_ref (sym2);
+      gfc_symbol *sym;
+      gcc_assert (p1->u.rsym.ns == p2->u.rsym.ns);
+      gcc_assert (p1->u.rsym.sym == NULL);
+      /* Add hidden symbols to the symtree.  */
+      pointer_info *q = get_integer (p1->u.rsym.ns);
+      q->u.pointer = (void *) ns;
+      sym = gfc_new_symbol (is_initializer ? "omp_priv" : "omp_out", ns);
+      sym->ts = udr->ts;
+      sym->module = gfc_get_string (p1->u.rsym.module);
+      associate_integer_pointer (p1, sym);
+      sym->attr.omp_udr_artificial_var = 1;
+      gcc_assert (p2->u.rsym.sym == NULL);
+      sym = gfc_new_symbol (is_initializer ? "omp_orig" : "omp_in", ns);
+      sym->ts = udr->ts;
+      sym->module = gfc_get_string (p2->u.rsym.module);
+      associate_integer_pointer (p2, sym);
+      sym->attr.omp_udr_artificial_var = 1;
+      if (mio_name (0, omp_declare_reduction_stmt) == 0)
+	{
+	  ns->code = gfc_get_code (EXEC_ASSIGN);
+	  mio_expr (&ns->code->expr1);
+	  mio_expr (&ns->code->expr2);
+	}
+      else
+	{
+	  int flag;
+	  ns->code = gfc_get_code (EXEC_CALL);
+	  mio_symtree_ref (&ns->code->symtree);
+	  mio_actual_arglist (&ns->code->ext.actual);
+
+	  mio_integer (&flag);
+	  if (flag)
+	    {
+	      require_atom (ATOM_STRING);
+	      ns->code->resolved_isym = gfc_find_subroutine (atom_string);
+	      free (atom_string);
+	    }
+	  else
+	    mio_symbol_ref (&ns->code->resolved_sym);
+	}
+      ns->code->loc = gfc_current_locus;
+      ns->omp_udr_ns = 1;
+    }
+}
+
+
 /* Unlike most other routines, the address of the symbol node is already
    fixed on input and the name/module has already been filled in.
    If you update the symbol format here, don't forget to update read_module
@@ -3961,7 +4099,10 @@ mio_symbol (gfc_symbol *sym)
   else
     {
       mio_integer (&intmod);
-      sym->from_intmod = (intmod_id) intmod;
+      if (current_intmod)
+	sym->from_intmod = current_intmod;
+      else
+	sym->from_intmod = (intmod_id) intmod;
     }
   
   mio_integer (&(sym->intmod_sym_id));
@@ -4453,6 +4594,119 @@ load_derived_extensions (void)
 }
 
 
+/* This function loads OpenMP user defined reductions.  */
+static void
+load_omp_udrs (void)
+{
+  mio_lparen ();
+  while (peek_atom () != ATOM_RPAREN)
+    {
+      const char *name, *newname;
+      char *altname;
+      gfc_typespec ts;
+      gfc_symtree *st;
+      gfc_omp_reduction_op rop = OMP_REDUCTION_USER;
+
+      mio_lparen ();
+      mio_pool_string (&name);
+      mio_typespec (&ts);
+      if (strncmp (name, "operator ", sizeof ("operator ") - 1) == 0)
+	{
+	  const char *p = name + sizeof ("operator ") - 1;
+	  if (strcmp (p, "+") == 0)
+	    rop = OMP_REDUCTION_PLUS;
+	  else if (strcmp (p, "*") == 0)
+	    rop = OMP_REDUCTION_TIMES;
+	  else if (strcmp (p, "-") == 0)
+	    rop = OMP_REDUCTION_MINUS;
+	  else if (strcmp (p, ".and.") == 0)
+	    rop = OMP_REDUCTION_AND;
+	  else if (strcmp (p, ".or.") == 0)
+	    rop = OMP_REDUCTION_OR;
+	  else if (strcmp (p, ".eqv.") == 0)
+	    rop = OMP_REDUCTION_EQV;
+	  else if (strcmp (p, ".neqv.") == 0)
+	    rop = OMP_REDUCTION_NEQV;
+	}
+      altname = NULL;
+      if (rop == OMP_REDUCTION_USER && name[0] == '.')
+	{
+	  size_t len = strlen (name + 1);
+	  altname = XALLOCAVEC (char, len);
+	  gcc_assert (name[len] == '.');
+	  memcpy (altname, name + 1, len - 1);
+	  altname[len - 1] = '\0';
+	}
+      newname = name;
+      if (rop == OMP_REDUCTION_USER)
+	newname = find_use_name (altname ? altname : name, !!altname);
+      else if (only_flag && find_use_operator ((gfc_intrinsic_op) rop) == NULL)
+	newname = NULL;
+      if (newname == NULL)
+	{
+	  skip_list (1);
+	  continue;
+	}
+      if (altname && newname != altname)
+	{
+	  size_t len = strlen (newname);
+	  altname = XALLOCAVEC (char, len + 3);
+	  altname[0] = '.';
+	  memcpy (altname + 1, newname, len);
+	  altname[len + 1] = '.';
+	  altname[len + 2] = '\0';
+	  name = gfc_get_string (altname);
+	}
+      st = gfc_find_symtree (gfc_current_ns->omp_udr_root, name);
+      gfc_omp_udr *udr = gfc_omp_udr_find (st, &ts);
+      if (udr)
+	{
+	  require_atom (ATOM_INTEGER);
+	  pointer_info *p = get_integer (atom_int);
+	  if (strcmp (p->u.rsym.module, udr->omp_out->module))
+	    {
+	      gfc_error ("Ambiguous !$OMP DECLARE REDUCTION from "
+			 "module %s at %L",
+			 p->u.rsym.module, &gfc_current_locus);
+	      gfc_error ("Previous !$OMP DECLARE REDUCTION from module "
+			 "%s at %L",
+			 udr->omp_out->module, &udr->where);
+	    }
+	  skip_list (1);
+	  continue;
+	}
+      udr = gfc_get_omp_udr ();
+      udr->name = name;
+      udr->rop = rop;
+      udr->ts = ts;
+      udr->where = gfc_current_locus;
+      udr->combiner_ns = gfc_get_namespace (gfc_current_ns, 1);
+      udr->combiner_ns->proc_name = gfc_current_ns->proc_name;
+      mio_omp_udr_expr (udr, &udr->omp_out, &udr->omp_in, udr->combiner_ns,
+			false);
+      if (peek_atom () != ATOM_RPAREN)
+	{
+	  udr->initializer_ns = gfc_get_namespace (gfc_current_ns, 1);
+	  udr->initializer_ns->proc_name = gfc_current_ns->proc_name;
+	  mio_omp_udr_expr (udr, &udr->omp_priv, &udr->omp_orig,
+			    udr->initializer_ns, true);
+	}
+      if (st)
+	{
+	  udr->next = st->n.omp_udr;
+	  st->n.omp_udr = udr;
+	}
+      else
+	{
+	  st = gfc_new_symtree (&gfc_current_ns->omp_udr_root, name);
+	  st->n.omp_udr = udr;
+	}
+      mio_rparen ();
+    }
+  mio_rparen ();
+}
+
+
 /* Recursive function to traverse the pointer_info tree and load a
    needed symbol.  We return nonzero if we load a symbol and stop the
    traversal, because the act of loading can alter the tree.  */
@@ -4640,7 +4894,7 @@ check_for_ambiguous (gfc_symbol *st_sym, pointer_info *info)
 static void
 read_module (void)
 {
-  module_locus operator_interfaces, user_operators, extensions;
+  module_locus operator_interfaces, user_operators, extensions, omp_udrs;
   const char *p;
   char name[GFC_MAX_SYMBOL_LEN + 1];
   int i;
@@ -4662,6 +4916,10 @@ read_module (void)
   skip_list ();
 
   get_module_locus (&extensions);
+  skip_list ();
+
+  /* Skip OpenMP UDRs.  */
+  get_module_locus (&omp_udrs);
   skip_list ();
 
   mio_lparen ();
@@ -4928,6 +5186,10 @@ read_module (void)
 
   load_commons ();
   load_equiv ();
+
+  /* Load OpenMP user defined reductions.  */
+  set_module_locus (&omp_udrs);
+  load_omp_udrs ();
 
   /* At this point, we read those symbols that are needed but haven't
      been loaded yet.  If one symbol requires another, the other gets
@@ -5307,6 +5569,80 @@ write_symbol0 (gfc_symtree *st)
 }
 
 
+static void
+write_omp_udr (gfc_omp_udr *udr)
+{
+  switch (udr->rop)
+    {
+    case OMP_REDUCTION_USER:
+      /* Non-operators can't be used outside of the module.  */
+      if (udr->name[0] != '.')
+	return;
+      else
+	{
+	  gfc_symtree *st;
+	  size_t len = strlen (udr->name + 1);
+	  char *name = XALLOCAVEC (char, len);
+	  memcpy (name, udr->name, len - 1);
+	  name[len - 1] = '\0';
+	  st = gfc_find_symtree (gfc_current_ns->uop_root, name);
+	  /* If corresponding user operator is private, don't write
+	     the UDR.  */
+	  if (st != NULL)
+	    {
+	      gfc_user_op *uop = st->n.uop;
+	      if (!check_access (uop->access, uop->ns->default_access))
+		return;
+	    }
+	}
+      break;
+    case OMP_REDUCTION_PLUS:
+    case OMP_REDUCTION_MINUS:
+    case OMP_REDUCTION_TIMES:
+    case OMP_REDUCTION_AND:
+    case OMP_REDUCTION_OR:
+    case OMP_REDUCTION_EQV:
+    case OMP_REDUCTION_NEQV:
+      /* If corresponding operator is private, don't write the UDR.  */
+      if (!check_access (gfc_current_ns->operator_access[udr->rop],
+			 gfc_current_ns->default_access))
+	return;
+      break;
+    default:
+      break;
+    }
+  if (udr->ts.type == BT_DERIVED || udr->ts.type == BT_CLASS)
+    {
+      /* If derived type is private, don't write the UDR.  */
+      if (!gfc_check_symbol_access (udr->ts.u.derived))
+	return;
+    }
+
+  mio_lparen ();
+  mio_pool_string (&udr->name);
+  mio_typespec (&udr->ts);
+  mio_omp_udr_expr (udr, &udr->omp_out, &udr->omp_in, udr->combiner_ns, false);
+  if (udr->initializer_ns)
+    mio_omp_udr_expr (udr, &udr->omp_priv, &udr->omp_orig,
+		      udr->initializer_ns, true);
+  mio_rparen ();
+}
+
+
+static void
+write_omp_udrs (gfc_symtree *st)
+{
+  if (st == NULL)
+    return;
+
+  write_omp_udrs (st->left);
+  gfc_omp_udr *udr;
+  for (udr = st->n.omp_udr; udr; udr = udr->next)
+    write_omp_udr (udr);
+  write_omp_udrs (st->right);
+}
+
+
 /* Type for the temporary tree used when writing secondary symbols.  */
 
 struct sorted_pointer_info
@@ -5551,6 +5887,12 @@ write_module (void)
   mio_lparen ();
   gfc_traverse_symtree (gfc_current_ns->sym_root,
 			write_derived_extensions);
+  mio_rparen ();
+  write_char ('\n');
+  write_char ('\n');
+
+  mio_lparen ();
+  write_omp_udrs (gfc_current_ns->omp_udr_root);
   mio_rparen ();
   write_char ('\n');
   write_char ('\n');
@@ -6397,6 +6739,7 @@ gfc_use_module (gfc_use_list *module)
   module_name = module->module_name;
   gfc_rename_list = module->rename;
   only_flag = module->only_flag;
+  current_intmod = INTMOD_NONE;
 
   filename = XALLOCAVEC (char, strlen (module_name) + strlen (MODULE_EXTENSION)
 			       + 1);
@@ -6441,6 +6784,26 @@ gfc_use_module (gfc_use_list *module)
       if (module_fp == NULL && module->intrinsic)
 	gfc_fatal_error ("Can't find an intrinsic module named '%s' at %C",
 			 module_name);
+
+      /* Check for the IEEE modules, so we can mark their symbols
+	 accordingly when we read them.  */
+      if (strcmp (module_name, "ieee_features") == 0
+	  && gfc_notify_std (GFC_STD_F2003, "IEEE_FEATURES module at %C"))
+	{
+	  current_intmod = INTMOD_IEEE_FEATURES;
+	}
+      else if (strcmp (module_name, "ieee_exceptions") == 0
+	       && gfc_notify_std (GFC_STD_F2003,
+				  "IEEE_EXCEPTIONS module at %C"))
+	{
+	  current_intmod = INTMOD_IEEE_EXCEPTIONS;
+	}
+      else if (strcmp (module_name, "ieee_arithmetic") == 0
+	       && gfc_notify_std (GFC_STD_F2003,
+				  "IEEE_ARITHMETIC module at %C"))
+	{
+	  current_intmod = INTMOD_IEEE_ARITHMETIC;
+	}
     }
 
   if (module_fp == NULL)

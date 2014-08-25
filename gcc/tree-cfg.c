@@ -143,7 +143,7 @@ locus_discrim_hasher::equal (const value_type *a, const compare_type *b)
   return LOCATION_LINE (a->locus) == LOCATION_LINE (b->locus);
 }
 
-static hash_table <locus_discrim_hasher> discriminator_per_locus;
+static hash_table<locus_discrim_hasher> *discriminator_per_locus;
 
 /* Basic blocks and flowgraphs.  */
 static void make_blocks (gimple_seq);
@@ -244,11 +244,12 @@ build_gimple_cfg (gimple_seq seq)
   group_case_labels ();
 
   /* Create the edges of the flowgraph.  */
-  discriminator_per_locus.create (13);
+  discriminator_per_locus = new hash_table<locus_discrim_hasher> (13);
   make_edges ();
   assign_discriminators ();
   cleanup_dead_labels ();
-  discriminator_per_locus.dispose ();
+  delete discriminator_per_locus;
+  discriminator_per_locus = NULL;
 }
 
 
@@ -353,7 +354,6 @@ const pass_data pass_data_build_cfg =
   GIMPLE_PASS, /* type */
   "cfg", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_CFG, /* tv_id */
   PROP_gimple_leh, /* properties_required */
   ( PROP_cfg | PROP_loops ), /* properties_provided */
@@ -763,8 +763,11 @@ make_edges (void)
 	      fallthru = false;
 	      break;
 	    case GIMPLE_RETURN:
-	      make_edge (bb, EXIT_BLOCK_PTR_FOR_FN (cfun), 0);
-	      fallthru = false;
+	      {
+		edge e = make_edge (bb, EXIT_BLOCK_PTR_FOR_FN (cfun), 0);
+		e->goto_locus = gimple_location (last);
+		fallthru = false;
+	      }
 	      break;
 	    case GIMPLE_COND:
 	      make_cond_expr_edges (bb);
@@ -935,7 +938,7 @@ next_discriminator_for_locus (location_t locus)
 
   item.locus = locus;
   item.discriminator = 0;
-  slot = discriminator_per_locus.find_slot_with_hash (
+  slot = discriminator_per_locus->find_slot_with_hash (
       &item, LOCATION_LINE (locus), INSERT);
   gcc_assert (slot);
   if (*slot == HTAB_EMPTY_ENTRY)
@@ -1880,8 +1883,11 @@ gimple_merge_blocks (basic_block a, basic_block b)
   /* When merging two BBs, if their counts are different, the larger count
      is selected as the new bb count. This is to handle inconsistent
      profiles.  */
-  a->count = MAX (a->count, b->count);
-  a->frequency = MAX (a->frequency, b->frequency);
+  if (a->loop_father == b->loop_father)
+    {
+      a->count = MAX (a->count, b->count);
+      a->frequency = MAX (a->frequency, b->frequency);
+    }
 
   /* Merge the sequences.  */
   last = gsi_last_bb (a);
@@ -3956,6 +3962,36 @@ verify_gimple_assign_ternary (gimple stmt)
 	     != GET_MODE_BITSIZE (TYPE_MODE (TREE_TYPE (rhs1_type))))
 	{
 	  error ("invalid mask type in vector permute expression");
+	  debug_generic_expr (lhs_type);
+	  debug_generic_expr (rhs1_type);
+	  debug_generic_expr (rhs2_type);
+	  debug_generic_expr (rhs3_type);
+	  return true;
+	}
+
+      return false;
+
+    case SAD_EXPR:
+      if (!useless_type_conversion_p (rhs1_type, rhs2_type)
+	  || !useless_type_conversion_p (lhs_type, rhs3_type)
+	  || 2 * GET_MODE_BITSIZE (GET_MODE_INNER
+				     (TYPE_MODE (TREE_TYPE (rhs1_type))))
+	       > GET_MODE_BITSIZE (GET_MODE_INNER
+				     (TYPE_MODE (TREE_TYPE (lhs_type)))))
+	{
+	  error ("type mismatch in sad expression");
+	  debug_generic_expr (lhs_type);
+	  debug_generic_expr (rhs1_type);
+	  debug_generic_expr (rhs2_type);
+	  debug_generic_expr (rhs3_type);
+	  return true;
+	}
+
+      if (TREE_CODE (rhs1_type) != VECTOR_TYPE
+	  || TREE_CODE (rhs2_type) != VECTOR_TYPE
+	  || TREE_CODE (rhs3_type) != VECTOR_TYPE)
+	{
+	  error ("vector types expected in sad expression");
 	  debug_generic_expr (lhs_type);
 	  debug_generic_expr (rhs1_type);
 	  debug_generic_expr (rhs2_type);
@@ -8092,7 +8128,6 @@ const pass_data pass_data_split_crit_edges =
   GIMPLE_PASS, /* type */
   "crited", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_SPLIT_EDGES, /* tv_id */
   PROP_cfg, /* properties_required */
   PROP_no_crit_edges, /* properties_provided */
@@ -8207,7 +8242,6 @@ const pass_data pass_data_warn_function_return =
   GIMPLE_PASS, /* type */
   "*warn_function_return", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_NONE, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */
@@ -8363,7 +8397,6 @@ const pass_data pass_data_warn_unused_result =
   GIMPLE_PASS, /* type */
   "*warn_unused_result", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_NONE, /* tv_id */
   PROP_gimple_any, /* properties_required */
   0, /* properties_provided */
@@ -8546,7 +8579,6 @@ const pass_data pass_data_fixup_cfg =
   GIMPLE_PASS, /* type */
   "*free_cfg_annotations", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_NONE, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */

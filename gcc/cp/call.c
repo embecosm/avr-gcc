@@ -1311,10 +1311,10 @@ standard_conversion (tree to, tree from, tree expr, bool c_cast_p,
     {
       /* [conv.bool]
 
-	  An rvalue of arithmetic, unscoped enumeration, pointer, or
-	  pointer to member type can be converted to an rvalue of type
-	  bool. ... An rvalue of type std::nullptr_t can be converted
-	  to an rvalue of type bool;  */
+	  A prvalue of arithmetic, unscoped enumeration, pointer, or pointer
+	  to member type can be converted to a prvalue of type bool. ...
+	  For direct-initialization (8.5 [dcl.init]), a prvalue of type
+	  std::nullptr_t can be converted to a prvalue of type bool;  */
       if (ARITHMETIC_TYPE_P (from)
 	  || UNSCOPED_ENUM_P (from)
 	  || fcode == POINTER_TYPE
@@ -1328,6 +1328,8 @@ standard_conversion (tree to, tree from, tree expr, bool c_cast_p,
 		  && conv->rank < cr_pbool)
 	      || NULLPTR_TYPE_P (from))
 	    conv->rank = cr_pbool;
+	  if (NULLPTR_TYPE_P (from) && (flags & LOOKUP_ONLYCONVERTING))
+	    conv->bad_p = true;
 	  return conv;
 	}
 
@@ -2023,6 +2025,9 @@ add_function_candidate (struct z_candidate **candidates,
 		     object parameter has reference type.  */
 		  bool rv = FUNCTION_RVALUE_QUALIFIED (TREE_TYPE (fn));
 		  parmtype = cp_build_reference_type (parmtype, rv);
+		  /* The special handling of 'this' conversions in compare_ics
+		     does not apply if there is a ref-qualifier.  */
+		  is_this = false;
 		}
 	      else
 		{
@@ -4128,29 +4133,17 @@ build_operator_new_call (tree fnname, vec<tree, va_gc> **args,
    if (*cookie_size)
      {
        bool use_cookie = true;
-       if (!abi_version_at_least (2))
-	 {
-	   /* In G++ 3.2, the check was implemented incorrectly; it
-	      looked at the placement expression, rather than the
-	      type of the function.  */
-	   if ((*args)->length () == 2
-	       && same_type_p (TREE_TYPE ((**args)[1]), ptr_type_node))
-	     use_cookie = false;
-	 }
-       else
-	 {
-	   tree arg_types;
+       tree arg_types;
 
-	   arg_types = TYPE_ARG_TYPES (TREE_TYPE (cand->fn));
-	   /* Skip the size_t parameter.  */
-	   arg_types = TREE_CHAIN (arg_types);
-	   /* Check the remaining parameters (if any).  */
-	   if (arg_types
-	       && TREE_CHAIN (arg_types) == void_list_node
-	       && same_type_p (TREE_VALUE (arg_types),
-			       ptr_type_node))
-	     use_cookie = false;
-	 }
+       arg_types = TYPE_ARG_TYPES (TREE_TYPE (cand->fn));
+       /* Skip the size_t parameter.  */
+       arg_types = TREE_CHAIN (arg_types);
+       /* Check the remaining parameters (if any).  */
+       if (arg_types
+	   && TREE_CHAIN (arg_types) == void_list_node
+	   && same_type_p (TREE_VALUE (arg_types),
+			   ptr_type_node))
+	 use_cookie = false;
        /* If we need a cookie, adjust the number of bytes allocated.  */
        if (use_cookie)
 	 {
@@ -6062,6 +6055,14 @@ convert_like_real (conversion *convs, tree expr, tree fn, int argnum,
 	    expr = CONSTRUCTOR_ELT (expr, 0)->value;
 	}
 
+      /* Give a helpful error if this is bad because a conversion to bool
+	 from std::nullptr_t requires direct-initialization.  */
+      if (NULLPTR_TYPE_P (TREE_TYPE (expr))
+	  && TREE_CODE (totype) == BOOLEAN_TYPE)
+	complained = permerror (loc, "converting to %qT from %qT requires "
+				"direct-initialization",
+				totype, TREE_TYPE (expr));
+
       for (; t ; t = next_conversion (t))
 	{
 	  if (t->kind == ck_user && t->cand->reason)
@@ -6510,14 +6511,22 @@ convert_arg_to_ellipsis (tree arg, tsubst_flags_t complain)
     arg = null_pointer_node;
   else if (INTEGRAL_OR_ENUMERATION_TYPE_P (arg_type))
     {
-      if (SCOPED_ENUM_P (arg_type) && !abi_version_at_least (6))
+      if (SCOPED_ENUM_P (arg_type))
 	{
-	  if (complain & tf_warning)
-	    warning_at (loc, OPT_Wabi, "scoped enum %qT will not promote to an "
-			"integral type in a future version of GCC", arg_type);
-	  arg = cp_convert (ENUM_UNDERLYING_TYPE (arg_type), arg, complain);
+	  tree prom = cp_convert (ENUM_UNDERLYING_TYPE (arg_type), arg,
+				  complain);
+	  prom = cp_perform_integral_promotions (prom, complain);
+	  if (abi_version_crosses (6)
+	      && TYPE_MODE (TREE_TYPE (prom)) != TYPE_MODE (arg_type)
+	      && (complain & tf_warning))
+	    warning_at (loc, OPT_Wabi, "scoped enum %qT passed through ... as "
+			"%qT before -fabi-version=6, %qT after", arg_type,
+			TREE_TYPE (prom), ENUM_UNDERLYING_TYPE (arg_type));
+	  if (!abi_version_at_least (6))
+	    arg = prom;
 	}
-      arg = cp_perform_integral_promotions (arg, complain);
+      else
+	arg = cp_perform_integral_promotions (arg, complain);
     }
 
   arg = require_complete_type_sfinae (arg, complain);
@@ -6887,7 +6896,7 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 
 	  ++nargs;
 	  alcarray = XALLOCAVEC (tree, nargs);
-	  alcarray[0] = first_arg;
+	  alcarray[0] = build_this (first_arg);
 	  FOR_EACH_VEC_SAFE_ELT (args, ix, arg)
 	    alcarray[ix + 1] = arg;
 	  argarray = alcarray;
@@ -7405,6 +7414,11 @@ build_cxx_call (tree fn, int nargs, tree *argarray,
 	  || bif == BUILT_IN_CILKPLUS_SEC_REDUCE
 	  || bif == BUILT_IN_CILKPLUS_SEC_REDUCE_MUTATING)
 	{ 
+	  if (call_expr_nargs (fn) == 0)
+	    {
+	      error_at (EXPR_LOCATION (fn), "Invalid builtin arguments");
+	      return error_mark_node;
+	    }
 	  /* for bif == BUILT_IN_CILKPLUS_SEC_REDUCE_ALL_ZERO or
 	     BUILT_IN_CILKPLUS_SEC_REDUCE_ANY_ZERO or
 	     BUILT_IN_CILKPLUS_SEC_REDUCE_ANY_NONZERO or 
@@ -8588,10 +8602,11 @@ compare_ics (conversion *ics1, conversion *ics2)
   /* [over.ics.rank]
 
      --S1 and S2 are reference bindings (_dcl.init.ref_) and neither refers
-     to an implicit object parameter, and either S1 binds an lvalue reference
-     to an lvalue and S2 binds an rvalue reference or S1 binds an rvalue
-     reference to an rvalue and S2 binds an lvalue reference
-     (C++0x draft standard, 13.3.3.2)
+     to an implicit object parameter of a non-static member function
+     declared without a ref-qualifier, and either S1 binds an lvalue
+     reference to an lvalue and S2 binds an rvalue reference or S1 binds an
+     rvalue reference to an rvalue and S2 binds an lvalue reference (C++0x
+     draft standard, 13.3.3.2)
 
      --S1 and S2 are reference bindings (_dcl.init.ref_), and the
      types to which the references refer are the same type except for
@@ -9381,7 +9396,7 @@ make_temporary_var_for_ref_to_temp (tree decl, tree type)
       tree name;
 
       TREE_STATIC (var) = TREE_STATIC (decl);
-      DECL_TLS_MODEL (var) = DECL_TLS_MODEL (decl);
+      set_decl_tls_model (var, DECL_TLS_MODEL (decl));
       name = mangle_ref_init_variable (decl);
       DECL_NAME (var) = name;
       SET_DECL_ASSEMBLER_NAME (var, name);

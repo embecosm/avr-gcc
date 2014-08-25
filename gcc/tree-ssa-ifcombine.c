@@ -233,7 +233,8 @@ recognize_single_bit_test (gimple cond, tree *name, tree *bit, bool inv)
       while (is_gimple_assign (stmt)
 	     && ((CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (stmt))
 		  && (TYPE_PRECISION (TREE_TYPE (gimple_assign_lhs (stmt)))
-		      <= TYPE_PRECISION (TREE_TYPE (gimple_assign_rhs1 (stmt)))))
+		      <= TYPE_PRECISION (TREE_TYPE (gimple_assign_rhs1 (stmt))))
+		  && TREE_CODE (gimple_assign_rhs1 (stmt)) == SSA_NAME)
 		 || gimple_assign_ssa_name_copy_p (stmt)))
 	stmt = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (stmt));
 
@@ -734,7 +735,6 @@ const pass_data pass_data_tree_ifcombine =
   GIMPLE_PASS, /* type */
   "ifcombine", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_IFCOMBINE, /* tv_id */
   ( PROP_cfg | PROP_ssa ), /* properties_required */
   0, /* properties_provided */

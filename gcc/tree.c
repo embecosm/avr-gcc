@@ -219,10 +219,6 @@ static GTY ((if_marked ("tree_decl_map_marked_p"), param_is (struct tree_decl_ma
 static GTY ((if_marked ("tree_vec_map_marked_p"), param_is (struct tree_vec_map)))
      htab_t debug_args_for_decl;
 
-static GTY ((if_marked ("tree_priority_map_marked_p"),
-	     param_is (struct tree_priority_map)))
-  htab_t init_priority_for_decl;
-
 static void set_type_quals (tree, int);
 static int type_hash_eq (const void *, const void *);
 static hashval_t type_hash_hash (const void *);
@@ -236,7 +232,6 @@ static void print_value_expr_statistics (void);
 static int type_hash_marked_p (const void *);
 static unsigned int type_hash_list (const_tree, hashval_t);
 static unsigned int attribute_hash_list (const_tree, hashval_t);
-static bool decls_same_for_odr (tree decl1, tree decl2);
 
 tree global_trees[TI_MAX];
 tree integer_types[itk_none];
@@ -573,8 +568,6 @@ init_ttree (void)
 
   value_expr_for_decl = htab_create_ggc (512, tree_decl_map_hash,
 					 tree_decl_map_eq, 0);
-  init_priority_for_decl = htab_create_ggc (512, tree_priority_map_hash,
-					    tree_priority_map_eq, 0);
 
   int_cst_hash_table = htab_create_ggc (1024, int_cst_hash_hash,
 					int_cst_hash_eq, NULL);
@@ -608,7 +601,7 @@ decl_assembler_name (tree decl)
    DECL is associated with.  This can be either an IDENTIFIER_NODE or a
    decl, in which case its DECL_ASSEMBLER_NAME identifies the group.  */
 tree
-decl_comdat_group (tree node)
+decl_comdat_group (const_tree node)
 {
   struct symtab_node *snode = symtab_get_node (node);
   if (!snode)
@@ -618,12 +611,70 @@ decl_comdat_group (tree node)
 
 /* Likewise, but make sure it's been reduced to an IDENTIFIER_NODE.  */
 tree
-decl_comdat_group_id (tree node)
+decl_comdat_group_id (const_tree node)
 {
   struct symtab_node *snode = symtab_get_node (node);
   if (!snode)
     return NULL;
   return snode->get_comdat_group_id ();
+}
+
+/* When the target supports named section, return its name as IDENTIFIER_NODE
+   or NULL if it is in no section.  */
+const char *
+decl_section_name (const_tree node)
+{
+  struct symtab_node *snode = symtab_get_node (node);
+  if (!snode)
+    return NULL;
+  return snode->get_section ();
+}
+
+/* Set section section name of NODE to VALUE (that is expected to
+   be identifier node)  */
+void
+set_decl_section_name (tree node, const char *value)
+{
+  struct symtab_node *snode;
+
+  if (value == NULL)
+    {
+      snode = symtab_get_node (node);
+      if (!snode)
+	return;
+    }
+  else if (TREE_CODE (node) == VAR_DECL)
+    snode = varpool_node_for_decl (node);
+  else
+    snode = cgraph_get_create_node (node);
+  snode->set_section (value);
+}
+
+/* Return TLS model of a variable NODE.  */
+enum tls_model
+decl_tls_model (const_tree node)
+{
+  struct varpool_node *snode = varpool_get_node (node);
+  if (!snode)
+    return TLS_MODEL_NONE;
+  return snode->tls_model;
+}
+
+/* Set TLS model of variable NODE to MODEL.  */
+void
+set_decl_tls_model (tree node, enum tls_model model)
+{
+  struct varpool_node *vnode;
+
+  if (model == TLS_MODEL_NONE)
+    {
+      vnode = varpool_get_node (node);
+      if (!vnode)
+	return;
+    }
+  else
+    vnode = varpool_node_for_decl (node);
+  vnode->tls_model = model;
 }
 
 /* Compute the number of bytes occupied by a tree with code CODE.
@@ -5254,7 +5305,6 @@ find_decls_types_r (tree *tp, int *ws, void *data)
       else if (TREE_CODE (t) == TYPE_DECL)
 	{
 	  fld_worklist_push (DECL_ARGUMENT_FLD (t), fld);
-	  fld_worklist_push (DECL_VINDEX (t), fld);
 	  fld_worklist_push (DECL_ORIGINAL_TYPE (t), fld);
 	}
       else if (TREE_CODE (t) == FIELD_DECL)
@@ -5263,10 +5313,6 @@ find_decls_types_r (tree *tp, int *ws, void *data)
 	  fld_worklist_push (DECL_BIT_FIELD_TYPE (t), fld);
 	  fld_worklist_push (DECL_FIELD_BIT_OFFSET (t), fld);
 	  fld_worklist_push (DECL_FCONTEXT (t), fld);
-	}
-      else if (TREE_CODE (t) == VAR_DECL)
-	{
-	  fld_worklist_push (DECL_SECTION_NAME (t), fld);
 	}
 
       if ((TREE_CODE (t) == VAR_DECL || TREE_CODE (t) == PARM_DECL)
@@ -5672,7 +5718,6 @@ const pass_data pass_data_ipa_free_lang_data =
   SIMPLE_IPA_PASS, /* type */
   "*free_lang_data", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_IPA_FREE_LANG_DATA, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
@@ -5758,6 +5803,44 @@ private_lookup_attribute (const char *attr_name, size_t attr_len, tree list)
 
   return list;
 }
+
+/* Given an attribute name ATTR_NAME and a list of attributes LIST,
+   return a pointer to the attribute's list first element if the attribute
+   starts with ATTR_NAME. ATTR_NAME must be in the form 'text' (not
+   '__text__').  */
+
+tree
+private_lookup_attribute_by_prefix (const char *attr_name, size_t attr_len,
+				    tree list)
+{
+  while (list)
+    {
+      size_t ident_len = IDENTIFIER_LENGTH (get_attribute_name (list));
+
+      if (attr_len > ident_len)
+	{
+	  list = TREE_CHAIN (list);
+	  continue;
+	}
+
+      const char *p = IDENTIFIER_POINTER (get_attribute_name (list));
+
+      if (strncmp (attr_name, p, attr_len) == 0)
+	break;
+
+      /* TODO: If we made sure that attributes were stored in the
+	 canonical form without '__...__' (ie, as in 'text' as opposed
+	 to '__text__') then we could avoid the following case.  */
+      if (p[0] == '_' && p[1] == '_' &&
+	  strncmp (attr_name, p + 2, attr_len) == 0)
+	break;
+
+      list = TREE_CHAIN (list);
+    }
+
+  return list;
+}
+
 
 /* A variant of lookup_attribute() that can be used with an identifier
    as the first argument, and where the identifier can be either
@@ -6261,8 +6344,10 @@ build_qualified_type (tree type, int type_quals)
       else if (TYPE_CANONICAL (type) != type)
 	/* Build the underlying canonical type, since it is different
 	   from TYPE. */
-	TYPE_CANONICAL (t) = build_qualified_type (TYPE_CANONICAL (type),
-						   type_quals);
+	{
+	  tree c = build_qualified_type (TYPE_CANONICAL (type), type_quals);
+	  TYPE_CANONICAL (t) = TYPE_CANONICAL (c);
+	}
       else
 	/* T is its own canonical type. */
 	TYPE_CANONICAL (t) = t;
@@ -6398,13 +6483,12 @@ tree_decl_map_hash (const void *item)
 priority_type
 decl_init_priority_lookup (tree decl)
 {
-  struct tree_priority_map *h;
-  struct tree_map_base in;
+  symtab_node *snode = symtab_get_node (decl);
 
-  gcc_assert (VAR_OR_FUNCTION_DECL_P (decl));
-  in.from = decl;
-  h = (struct tree_priority_map *) htab_find (init_priority_for_decl, &in);
-  return h ? h->init : DEFAULT_INIT_PRIORITY;
+  if (!snode)
+    return DEFAULT_INIT_PRIORITY;
+  return
+    snode->get_init_priority ();
 }
 
 /* Return the finalization priority for DECL.  */
@@ -6412,39 +6496,12 @@ decl_init_priority_lookup (tree decl)
 priority_type
 decl_fini_priority_lookup (tree decl)
 {
-  struct tree_priority_map *h;
-  struct tree_map_base in;
+  cgraph_node *node = cgraph_get_node (decl);
 
-  gcc_assert (TREE_CODE (decl) == FUNCTION_DECL);
-  in.from = decl;
-  h = (struct tree_priority_map *) htab_find (init_priority_for_decl, &in);
-  return h ? h->fini : DEFAULT_INIT_PRIORITY;
-}
-
-/* Return the initialization and finalization priority information for
-   DECL.  If there is no previous priority information, a freshly
-   allocated structure is returned.  */
-
-static struct tree_priority_map *
-decl_priority_info (tree decl)
-{
-  struct tree_priority_map in;
-  struct tree_priority_map *h;
-  void **loc;
-
-  in.base.from = decl;
-  loc = htab_find_slot (init_priority_for_decl, &in, INSERT);
-  h = (struct tree_priority_map *) *loc;
-  if (!h)
-    {
-      h = ggc_cleared_alloc<tree_priority_map> ();
-      *loc = h;
-      h->base.from = decl;
-      h->init = DEFAULT_INIT_PRIORITY;
-      h->fini = DEFAULT_INIT_PRIORITY;
-    }
-
-  return h;
+  if (!node)
+    return DEFAULT_INIT_PRIORITY;
+  return
+    node->get_fini_priority ();
 }
 
 /* Set the initialization priority for DECL to PRIORITY.  */
@@ -6452,13 +6509,19 @@ decl_priority_info (tree decl)
 void
 decl_init_priority_insert (tree decl, priority_type priority)
 {
-  struct tree_priority_map *h;
+  struct symtab_node *snode;
 
-  gcc_assert (VAR_OR_FUNCTION_DECL_P (decl));
   if (priority == DEFAULT_INIT_PRIORITY)
-    return;
-  h = decl_priority_info (decl);
-  h->init = priority;
+    {
+      snode = symtab_get_node (decl);
+      if (!snode)
+	return;
+    }
+  else if (TREE_CODE (decl) == VAR_DECL)
+    snode = varpool_node_for_decl (decl);
+  else
+    snode = cgraph_get_create_node (decl);
+  snode->set_init_priority (priority);
 }
 
 /* Set the finalization priority for DECL to PRIORITY.  */
@@ -6466,13 +6529,17 @@ decl_init_priority_insert (tree decl, priority_type priority)
 void
 decl_fini_priority_insert (tree decl, priority_type priority)
 {
-  struct tree_priority_map *h;
+  struct cgraph_node *node;
 
-  gcc_assert (TREE_CODE (decl) == FUNCTION_DECL);
   if (priority == DEFAULT_INIT_PRIORITY)
-    return;
-  h = decl_priority_info (decl);
-  h->fini = priority;
+    {
+      node = cgraph_get_node (decl);
+      if (!node)
+	return;
+    }
+  else
+    node = cgraph_get_create_node (decl);
+  node->set_fini_priority (priority);
 }
 
 /* Print out the statistics for the DECL_DEBUG_EXPR hash table.  */
@@ -8901,6 +8968,10 @@ get_callee_fndecl (const_tree call)
      called.  */
   addr = CALL_EXPR_FN (call);
 
+  /* If there is no function, return early.  */
+  if (addr == NULL_TREE)
+    return NULL_TREE;
+
   STRIP_NOPS (addr);
 
   /* If this is a readonly function pointer, extract its initial value.  */
@@ -10528,6 +10599,27 @@ build_call_expr (tree fndecl, int n, ...)
   return build_call_expr_loc_array (UNKNOWN_LOCATION, fndecl, n, argarray);
 }
 
+/* Build internal call expression.  This is just like CALL_EXPR, except
+   its CALL_EXPR_FN is NULL.  It will get gimplified later into ordinary
+   internal function.  */
+
+tree
+build_call_expr_internal_loc (location_t loc, enum internal_fn ifn,
+			      tree type, int n, ...)
+{
+  va_list ap;
+  int i;
+
+  tree fn = build_call_1 (type, NULL_TREE, n);
+  va_start (ap, n);
+  for (i = 0; i < n; i++)
+    CALL_EXPR_ARG (fn, i) = va_arg (ap, tree);
+  va_end (ap);
+  SET_EXPR_LOCATION (fn, loc);
+  CALL_EXPR_IFN (fn) = ifn;
+  return fn;
+}
+
 /* Create a new constant string literal and return a char* pointer to it.
    The STRING_CST value is the LEN characters at STR.  */
 tree
@@ -11727,151 +11819,6 @@ lhd_gcc_personality (void)
   return gcc_eh_personality_decl;
 }
 
-/* For languages with One Definition Rule, work out if
-   trees are actually the same even if the tree representation
-   differs.  This handles only decls appearing in TYPE_NAME
-   and TYPE_CONTEXT.  That is NAMESPACE_DECL, TYPE_DECL,
-   RECORD_TYPE and IDENTIFIER_NODE.  */
-
-static bool
-same_for_odr (tree t1, tree t2)
-{
-  if (t1 == t2)
-    return true;
-  if (!t1 || !t2)
-    return false;
-  /* C and C++ FEs differ by using IDENTIFIER_NODE and TYPE_DECL.  */
-  if (TREE_CODE (t1) == IDENTIFIER_NODE
-      && TREE_CODE (t2) == TYPE_DECL
-      && DECL_FILE_SCOPE_P (t1))
-    {
-      t2 = DECL_NAME (t2);
-      gcc_assert (TREE_CODE (t2) == IDENTIFIER_NODE);
-    }
-  if (TREE_CODE (t2) == IDENTIFIER_NODE
-      && TREE_CODE (t1) == TYPE_DECL
-      && DECL_FILE_SCOPE_P (t2))
-    {
-      t1 = DECL_NAME (t1);
-      gcc_assert (TREE_CODE (t1) == IDENTIFIER_NODE);
-    }
-  if (TREE_CODE (t1) != TREE_CODE (t2))
-    return false;
-  if (TYPE_P (t1))
-    return types_same_for_odr (t1, t2);
-  if (DECL_P (t1))
-    return decls_same_for_odr (t1, t2);
-  return false;
-}
-
-/* For languages with One Definition Rule, work out if
-   decls are actually the same even if the tree representation
-   differs.  This handles only decls appearing in TYPE_NAME
-   and TYPE_CONTEXT.  That is NAMESPACE_DECL, TYPE_DECL,
-   RECORD_TYPE and IDENTIFIER_NODE.  */
-
-static bool
-decls_same_for_odr (tree decl1, tree decl2)
-{
-  if (decl1 && TREE_CODE (decl1) == TYPE_DECL
-      && DECL_ORIGINAL_TYPE (decl1))
-    decl1 = DECL_ORIGINAL_TYPE (decl1);
-  if (decl2 && TREE_CODE (decl2) == TYPE_DECL
-      && DECL_ORIGINAL_TYPE (decl2))
-    decl2 = DECL_ORIGINAL_TYPE (decl2);
-  if (decl1 == decl2)
-    return true;
-  if (!decl1 || !decl2)
-    return false;
-  gcc_checking_assert (DECL_P (decl1) && DECL_P (decl2));
-  if (TREE_CODE (decl1) != TREE_CODE (decl2))
-    return false;
-  if (TREE_CODE (decl1) == TRANSLATION_UNIT_DECL)
-    return true;
-  if (TREE_CODE (decl1) != NAMESPACE_DECL
-      && TREE_CODE (decl1) != TYPE_DECL)
-    return false;
-  if (!DECL_NAME (decl1))
-    return false;
-  gcc_checking_assert (TREE_CODE (DECL_NAME (decl1)) == IDENTIFIER_NODE);
-  gcc_checking_assert (!DECL_NAME (decl2)
-		       ||  TREE_CODE (DECL_NAME (decl2)) == IDENTIFIER_NODE);
-  if (DECL_NAME (decl1) != DECL_NAME (decl2))
-    return false;
-  return same_for_odr (DECL_CONTEXT (decl1),
-		       DECL_CONTEXT (decl2));
-}
-
-/* For languages with One Definition Rule, work out if
-   types are same even if the tree representation differs. 
-   This is non-trivial for LTO where minnor differences in
-   the type representation may have prevented type merging
-   to merge two copies of otherwise equivalent type.  */
-
-bool
-types_same_for_odr (tree type1, tree type2)
-{
-  gcc_checking_assert (TYPE_P (type1) && TYPE_P (type2));
-  type1 = TYPE_MAIN_VARIANT (type1);
-  type2 = TYPE_MAIN_VARIANT (type2);
-  if (type1 == type2)
-    return true;
-
-#ifndef ENABLE_CHECKING
-  if (!in_lto_p)
-    return false;
-#endif
-
-  /* Check for anonymous namespaces. Those have !TREE_PUBLIC
-     on the corresponding TYPE_STUB_DECL.  */
-  if (type_in_anonymous_namespace_p (type1)
-      || type_in_anonymous_namespace_p (type2))
-    return false;
-  /* When assembler name of virtual table is available, it is
-     easy to compare types for equivalence.  */
-  if (TYPE_BINFO (type1) && TYPE_BINFO (type2)
-      && BINFO_VTABLE (TYPE_BINFO (type1))
-      && BINFO_VTABLE (TYPE_BINFO (type2)))
-    {
-      tree v1 = BINFO_VTABLE (TYPE_BINFO (type1));
-      tree v2 = BINFO_VTABLE (TYPE_BINFO (type2));
-
-      if (TREE_CODE (v1) == POINTER_PLUS_EXPR)
-	{
-	  if (TREE_CODE (v2) != POINTER_PLUS_EXPR
-	      || !operand_equal_p (TREE_OPERAND (v1, 1),
-			     TREE_OPERAND (v2, 1), 0))
-	    return false;
-	  v1 = TREE_OPERAND (TREE_OPERAND (v1, 0), 0);
-	  v2 = TREE_OPERAND (TREE_OPERAND (v2, 0), 0);
-	}
-      v1 = DECL_ASSEMBLER_NAME (v1);
-      v2 = DECL_ASSEMBLER_NAME (v2);
-      return (v1 == v2);
-    }
-
-  /* FIXME: the code comparing type names consider all instantiations of the
-     same template to have same name.  This is because we have no access
-     to template parameters.  For types with no virtual method tables
-     we thus can return false positives.  At the moment we do not need
-     to compare types in other scenarios than devirtualization.  */
-
-  /* If types are not structuraly same, do not bother to contnue.
-     Match in the remainder of code would mean ODR violation.  */
-  if (!types_compatible_p (type1, type2))
-    return false;
-  if (!TYPE_NAME (type1))
-    return false;
-  if (!decls_same_for_odr (TYPE_NAME (type1), TYPE_NAME (type2)))
-    return false;
-  if (!same_for_odr (TYPE_CONTEXT (type1), TYPE_CONTEXT (type2)))
-    return false;
-  /* When not in LTO the MAIN_VARIANT check should be the same.  */
-  gcc_assert (in_lto_p);
-    
-  return true;
-}
-
 /* TARGET is a call target of GIMPLE call statement
    (obtained by gimple_call_fn).  Return true if it is
    OBJ_TYPE_REF representing an virtual call of C++ method.
@@ -11915,7 +11862,7 @@ obj_type_ref_class (tree ref)
 /* Return true if T is in anonymous namespace.  */
 
 bool
-type_in_anonymous_namespace_p (tree t)
+type_in_anonymous_namespace_p (const_tree t)
 {
   return (TYPE_STUB_DECL (t) && !TREE_PUBLIC (TYPE_STUB_DECL (t)));
 }

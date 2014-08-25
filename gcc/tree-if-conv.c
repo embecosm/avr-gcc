@@ -1407,8 +1407,11 @@ is_cond_scalar_reduction (gimple phi, gimple *reduc,
   gimple stmt;
   gimple header_phi = NULL;
   enum tree_code reduction_op;
-  struct loop *loop = gimple_bb (phi)->loop_father;
+  basic_block bb = gimple_bb (phi);
+  struct loop *loop = bb->loop_father;
   edge latch_e = loop_latch_edge (loop);
+  imm_use_iterator imm_iter;
+  use_operand_p use_p;
 
   arg_0 = PHI_ARG_DEF (phi, 0);
   arg_1 = PHI_ARG_DEF (phi, 1);
@@ -1439,7 +1442,15 @@ is_cond_scalar_reduction (gimple phi, gimple *reduc,
       || gimple_has_volatile_ops (stmt))
     return false;
 
+  if (!flow_bb_inside_loop_p (loop, gimple_bb (stmt)))
+    return false;
+
   if (!is_predicated (gimple_bb (stmt)))
+    return false;
+
+  /* Check that stmt-block is predecessor of phi-block.  */
+  if (EDGE_PRED (bb, 0)->src != gimple_bb (stmt)
+      && EDGE_PRED (bb, 1)->src != gimple_bb (stmt))
     return false;
 
   if (!has_single_use (lhs))
@@ -1461,6 +1472,18 @@ is_cond_scalar_reduction (gimple phi, gimple *reduc,
     }
   else if (r_op1 != PHI_RESULT (header_phi))
     return false;
+
+  /* Check that R_OP1 is used in reduction stmt or in PHI only.  */
+  FOR_EACH_IMM_USE_FAST (use_p, imm_iter, r_op1)
+    {
+      gimple use_stmt = USE_STMT (use_p);
+      if (is_gimple_debug (use_stmt))
+	continue;
+      if (use_stmt == stmt)
+	continue;
+      if (gimple_code (use_stmt) != GIMPLE_PHI)
+	return false;
+    }
 
   *op0 = r_op1; *op1 = r_op2;
   *reduc = stmt;
@@ -2138,7 +2161,6 @@ const pass_data pass_data_if_conversion =
   GIMPLE_PASS, /* type */
   "ifcvt", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_NONE, /* tv_id */
   ( PROP_cfg | PROP_ssa ), /* properties_required */
   0, /* properties_provided */

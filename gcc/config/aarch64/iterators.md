@@ -138,8 +138,11 @@
 ;; Double vector modes for combines.
 (define_mode_iterator VDIC [V8QI V4HI V2SI])
 
-;; Double vector modes.
-(define_mode_iterator VD_RE [V8QI V4HI V2SI DI DF V2SF])
+;; Double vector modes, inc. V1DF and the DI "vector" mode, for VREINTERPRET.
+(define_mode_iterator VD_RE [V8QI V4HI V2SI DI V1DF V2SF])
+
+;; Double vector modes inc V1DF
+(define_mode_iterator VD1 [V8QI V4HI V2SI V2SF V1DF])
 
 ;; Vector modes except double int.
 (define_mode_iterator VDQIF [V8QI V16QI V4HI V8HI V2SI V4SI V2SF V4SF V2DF])
@@ -410,14 +413,15 @@
 			(SI   "SI") (HI   "HI")
 			(QI   "QI")])
 
-;; Define container mode for lane selection.
-(define_mode_attr VCOND [(V4HI "V4HI") (V8HI "V4HI")
+;; 64-bit container modes the inner or scalar source mode.
+(define_mode_attr VCOND [(HI "V4HI") (SI "V2SI")
+			 (V4HI "V4HI") (V8HI "V4HI")
 			 (V2SI "V2SI") (V4SI "V2SI")
 			 (DI   "DI") (V2DI "DI")
 			 (V2SF "V2SF") (V4SF "V2SF")
 			 (V2DF "DF")])
 
-;; Define container mode for lane selection.
+;; 128-bit container modes the inner or scalar source mode.
 (define_mode_attr VCONQ [(V8QI "V16QI") (V16QI "V16QI")
 			 (V4HI "V8HI") (V8HI "V8HI")
 			 (V2SI "V4SI") (V4SI "V4SI")
@@ -425,15 +429,6 @@
 			 (V2SF "V2SF") (V4SF "V4SF")
 			 (V2DF "V2DF") (SI   "V4SI")
 			 (HI   "V8HI") (QI   "V16QI")])
-
-;; Define container mode for lane selection.
-(define_mode_attr VCON [(V8QI "V16QI") (V16QI "V16QI")
-			(V4HI "V8HI") (V8HI "V8HI")
-			(V2SI "V4SI") (V4SI "V4SI")
-			(DI   "V2DI") (V2DI "V2DI")
-			(V2SF "V4SF") (V4SF "V4SF")
-			(V2DF "V2DF") (SI   "V4SI")
-			(HI   "V8HI") (QI   "V16QI")])
 
 ;; Half modes of all vector modes.
 (define_mode_attr VHALF [(V8QI "V4QI")  (V16QI "V8QI")
@@ -910,6 +905,10 @@
 
 (define_int_iterator FRECP [UNSPEC_FRECPE UNSPEC_FRECPX])
 
+(define_int_iterator CRC [UNSPEC_CRC32B UNSPEC_CRC32H UNSPEC_CRC32W
+                          UNSPEC_CRC32X UNSPEC_CRC32CB UNSPEC_CRC32CH
+                          UNSPEC_CRC32CW UNSPEC_CRC32CX])
+
 (define_int_iterator CRYPTO_AES [UNSPEC_AESE UNSPEC_AESD])
 (define_int_iterator CRYPTO_AESMC [UNSPEC_AESMC UNSPEC_AESIMC])
 
@@ -1037,6 +1036,16 @@
 			    (UNSPEC_UZP1 "1") (UNSPEC_UZP2 "2")])
 
 (define_int_attr frecp_suffix  [(UNSPEC_FRECPE "e") (UNSPEC_FRECPX "x")])
+
+(define_int_attr crc_variant [(UNSPEC_CRC32B "crc32b") (UNSPEC_CRC32H "crc32h")
+                        (UNSPEC_CRC32W "crc32w") (UNSPEC_CRC32X "crc32x")
+                        (UNSPEC_CRC32CB "crc32cb") (UNSPEC_CRC32CH "crc32ch")
+                        (UNSPEC_CRC32CW "crc32cw") (UNSPEC_CRC32CX "crc32cx")])
+
+(define_int_attr crc_mode [(UNSPEC_CRC32B "QI") (UNSPEC_CRC32H "HI")
+                        (UNSPEC_CRC32W "SI") (UNSPEC_CRC32X "DI")
+                        (UNSPEC_CRC32CB "QI") (UNSPEC_CRC32CH "HI")
+                        (UNSPEC_CRC32CW "SI") (UNSPEC_CRC32CX "DI")])
 
 (define_int_attr aes_op [(UNSPEC_AESE "e") (UNSPEC_AESD "d")])
 (define_int_attr aesmc_op [(UNSPEC_AESMC "mc") (UNSPEC_AESIMC "imc")])

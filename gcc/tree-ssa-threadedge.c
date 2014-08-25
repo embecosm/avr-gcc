@@ -200,9 +200,7 @@ record_temporary_equivalence (tree x, tree y, vec<tree> *stack)
    traversing back edges less painful.  */
 
 static bool
-record_temporary_equivalences_from_phis (edge e, vec<tree> *stack,
-					 bool backedge_seen,
-					 bitmap src_map, bitmap dst_map)
+record_temporary_equivalences_from_phis (edge e, vec<tree> *stack)
 {
   gimple_stmt_iterator gsi;
 
@@ -230,14 +228,6 @@ record_temporary_equivalences_from_phis (edge e, vec<tree> *stack,
 	stmt_count++;
 
       record_temporary_equivalence (dst, src, stack);
-
-      /* If we have crossed a backedge, then start recording equivalences
-	 we might need to invalidate.  */
-      if (backedge_seen && TREE_CODE (src) == SSA_NAME)
-	{
-	  bitmap_set_bit (src_map, SSA_NAME_VERSION (src));
-	  bitmap_set_bit (dst_map, SSA_NAME_VERSION (dst));
-	}
     }
   return true;
 }
@@ -295,29 +285,15 @@ fold_assignment_stmt (gimple stmt)
 /* A new value has been assigned to LHS.  If necessary, invalidate any
    equivalences that are no longer valid.  */
 static void
-invalidate_equivalences (tree lhs, vec<tree> *stack,
-			 bitmap src_map, bitmap dst_map)
+invalidate_equivalences (tree lhs, vec<tree> *stack)
 {
-  /* SRC_MAP contains the source SSA_NAMEs for equivalences created by PHI
-     nodes.  If an entry in SRC_MAP changes, there's some destination that
-     has been recorded as equivalent to the source and that equivalency
-     needs to be eliminated.  */
-  if (bitmap_bit_p (src_map, SSA_NAME_VERSION (lhs)))
-    {
-      unsigned int i;
-      bitmap_iterator bi;
 
-      /* We know that the LHS of STMT was used as the RHS in an equivalency
-	 created by a PHI.  All the LHS of such PHIs were recorded into DST_MAP.
-	 So we can iterate over them to see if any have the LHS of STMT as
-	 an equivalence, and if so, remove the equivalence as it is no longer
-	 valid.  */
-      EXECUTE_IF_SET_IN_BITMAP (dst_map, 0, i, bi)
-	{
-	  if (SSA_NAME_VALUE (ssa_name (i)) == lhs)
-	    record_temporary_equivalence (ssa_name (i), NULL_TREE, stack);
-	}
-    }
+  for (unsigned int i = 1; i < num_ssa_names; i++)
+    if (ssa_name (i) && SSA_NAME_VALUE (ssa_name (i)) == lhs)
+      record_temporary_equivalence (ssa_name (i), NULL_TREE, stack);
+
+  if (SSA_NAME_VALUE (lhs))
+    record_temporary_equivalence (lhs, NULL_TREE, stack);
 }
 
 /* Try to simplify each statement in E->dest, ultimately leading to
@@ -342,9 +318,7 @@ record_temporary_equivalences_from_stmts_at_dest (edge e,
 						  vec<tree> *stack,
 						  tree (*simplify) (gimple,
 								    gimple),
-						  bool backedge_seen,
-						  bitmap src_map,
-						  bitmap dst_map)
+						  bool backedge_seen)
 {
   gimple stmt = NULL;
   gimple_stmt_iterator gsi;
@@ -400,19 +374,7 @@ record_temporary_equivalences_from_stmts_at_dest (edge e,
 
 	  if (backedge_seen)
 	    FOR_EACH_SSA_TREE_OPERAND (op, stmt, iter, SSA_OP_DEF)
-	      {
-		/* This call only invalidates equivalences created by
-		   PHI nodes.  This is by design to keep the cost of
-		   of invalidation reasonable.  */
-		invalidate_equivalences (op, stack, src_map, dst_map);
-
-		/* However, conditionals can imply values for real
-		   operands as well.  And those won't be recorded in the
-		   maps.  In fact, those equivalences may be recorded totally
-		   outside the threading code.  We can just create a new
-		   temporary NULL equivalence here.  */
-	        record_temporary_equivalence (op, NULL_TREE, stack);
-	      }
+	      invalidate_equivalences (op, stack);
 
 	  continue;
 	}
@@ -452,8 +414,7 @@ record_temporary_equivalences_from_stmts_at_dest (edge e,
 	      if (backedge_seen)
 		{
 		  tree lhs = gimple_get_lhs (stmt);
-		  record_temporary_equivalence (lhs, NULL_TREE, stack);
-		  invalidate_equivalences (lhs, stack, src_map, dst_map);
+		  invalidate_equivalences (lhs, stack);
 		}
 	      continue;
 	    }
@@ -531,11 +492,7 @@ record_temporary_equivalences_from_stmts_at_dest (edge e,
 	      || is_gimple_min_invariant (cached_lhs)))
 	record_temporary_equivalence (gimple_get_lhs (stmt), cached_lhs, stack);
       else if (backedge_seen)
-	record_temporary_equivalence (gimple_get_lhs (stmt), NULL_TREE, stack);
-
-      if (backedge_seen)
-	invalidate_equivalences (gimple_get_lhs (stmt), stack,
-				 src_map, dst_map);
+	invalidate_equivalences (gimple_get_lhs (stmt), stack);
     }
   return stmt;
 }
@@ -585,16 +542,26 @@ simplify_control_stmt_condition (edge e,
       /* Get the current value of both operands.  */
       if (TREE_CODE (op0) == SSA_NAME)
 	{
-          tree tmp = SSA_NAME_VALUE (op0);
-	  if (tmp)
-	    op0 = tmp;
+	  for (int i = 0; i < 2; i++)
+	    {
+	      if (TREE_CODE (op0) == SSA_NAME
+		  && SSA_NAME_VALUE (op0))
+		op0 = SSA_NAME_VALUE (op0);
+	      else
+		break;
+	    }
 	}
 
       if (TREE_CODE (op1) == SSA_NAME)
 	{
-	  tree tmp = SSA_NAME_VALUE (op1);
-	  if (tmp)
-	    op1 = tmp;
+	  for (int i = 0; i < 2; i++)
+	    {
+	      if (TREE_CODE (op1) == SSA_NAME
+		  && SSA_NAME_VALUE (op1))
+		op1 = SSA_NAME_VALUE (op1);
+	      else
+		break;
+	    }
 	}
 
       if (handle_dominating_asserts)
@@ -668,10 +635,17 @@ simplify_control_stmt_condition (edge e,
 	 It is possible to get loops in the SSA_NAME_VALUE chains
 	 (consider threading the backedge of a loop where we have
 	 a loop invariant SSA_NAME used in the condition.  */
-      if (cached_lhs
-	  && TREE_CODE (cached_lhs) == SSA_NAME
-	  && SSA_NAME_VALUE (cached_lhs))
-	cached_lhs = SSA_NAME_VALUE (cached_lhs);
+      if (cached_lhs)
+	{
+	  for (int i = 0; i < 2; i++)
+	    {
+	      if (TREE_CODE (cached_lhs) == SSA_NAME
+		  && SSA_NAME_VALUE (cached_lhs))
+		cached_lhs = SSA_NAME_VALUE (cached_lhs);
+	      else
+		break;
+	    }
+	}
 
       /* If we're dominated by a suitable ASSERT_EXPR, then
 	 update CACHED_LHS appropriately.  */
@@ -982,9 +956,7 @@ thread_through_normal_block (edge e,
 			     tree (*simplify) (gimple, gimple),
 			     vec<jump_thread_edge *> *path,
 			     bitmap visited,
-			     bool *backedge_seen_p,
-			     bitmap src_map,
-			     bitmap dst_map)
+			     bool *backedge_seen_p)
 {
   /* If we have traversed a backedge, then we do not want to look
      at certain expressions in the table that can not be relied upon.
@@ -993,17 +965,18 @@ thread_through_normal_block (edge e,
   if (*backedge_seen_p)
     simplify = dummy_simplify;
 
-  /* PHIs create temporary equivalences.  */
-  if (!record_temporary_equivalences_from_phis (e, stack, *backedge_seen_p,
-						src_map, dst_map))
-    return 0;
+  /* PHIs create temporary equivalences.
+     Note that if we found a PHI that made the block non-threadable, then
+     we need to bubble that up to our caller in the same manner we do
+     when we prematurely stop processing statements below.  */
+  if (!record_temporary_equivalences_from_phis (e, stack))
+    return -1;
 
   /* Now walk each statement recording any context sensitive
      temporary equivalences we can detect.  */
   gimple stmt
     = record_temporary_equivalences_from_stmts_at_dest (e, stack, simplify,
-							*backedge_seen_p,
-							src_map, dst_map);
+							*backedge_seen_p);
 
   /* If we didn't look at all the statements, the most likely reason is
      there were too many and thus duplicating this block is not profitable.
@@ -1112,8 +1085,6 @@ thread_across_edge (gimple dummy_cond,
 		    tree (*simplify) (gimple, gimple))
 {
   bitmap visited = BITMAP_ALLOC (NULL);
-  bitmap src_map = BITMAP_ALLOC (NULL);
-  bitmap dst_map = BITMAP_ALLOC (NULL);
   bool backedge_seen;
 
   stmt_count = 0;
@@ -1129,16 +1100,13 @@ thread_across_edge (gimple dummy_cond,
   int threaded = thread_through_normal_block (e, dummy_cond,
 					      handle_dominating_asserts,
 					      stack, simplify, path,
-					      visited, &backedge_seen,
-					      src_map, dst_map);
+					      visited, &backedge_seen);
   if (threaded > 0)
     {
       propagate_threaded_block_debug_into (path->last ()->e->dest,
 					   e->dest);
       remove_temporary_equivalences (stack);
       BITMAP_FREE (visited);
-      BITMAP_FREE (src_map);
-      BITMAP_FREE (dst_map);
       register_jump_thread (path);
       return;
     }
@@ -1160,8 +1128,6 @@ thread_across_edge (gimple dummy_cond,
       if (threaded < 0)
 	{
 	  BITMAP_FREE (visited);
-	  BITMAP_FREE (src_map);
-	  BITMAP_FREE (dst_map);
 	  remove_temporary_equivalences (stack);
 	  return;
 	}
@@ -1190,17 +1156,8 @@ thread_across_edge (gimple dummy_cond,
 	{
 	  remove_temporary_equivalences (stack);
 	  BITMAP_FREE (visited);
-	  BITMAP_FREE (src_map);
-	  BITMAP_FREE (dst_map);
 	  return;
 	}
-
-    /* We need to restore the state of the maps to this point each loop
-       iteration.  */
-    bitmap src_map_copy = BITMAP_ALLOC (NULL);
-    bitmap dst_map_copy = BITMAP_ALLOC (NULL);
-    bitmap_copy (src_map_copy, src_map);
-    bitmap_copy (dst_map_copy, dst_map);
 
     /* Look at each successor of E->dest to see if we can thread through it.  */
     FOR_EACH_EDGE (taken_edge, ei, e->dest->succs)
@@ -1208,8 +1165,6 @@ thread_across_edge (gimple dummy_cond,
 	/* Push a fresh marker so we can unwind the equivalences created
 	   for each of E->dest's successors.  */
 	stack->safe_push (NULL_TREE);
-	bitmap_copy (src_map, src_map_copy);
-	bitmap_copy (dst_map, dst_map_copy);
      
 	/* Avoid threading to any block we have already visited.  */
 	bitmap_clear (visited);
@@ -1245,8 +1200,7 @@ thread_across_edge (gimple dummy_cond,
 	  found = thread_through_normal_block (path->last ()->e, dummy_cond,
 					       handle_dominating_asserts,
 					       stack, simplify, path, visited,
-					       &backedge_seen,
-					       src_map, dst_map) > 0;
+					       &backedge_seen) > 0;
 
 	/* If we were able to thread through a successor of E->dest, then
 	   record the jump threading opportunity.  */
@@ -1265,10 +1219,6 @@ thread_across_edge (gimple dummy_cond,
 	remove_temporary_equivalences (stack);
       }
     BITMAP_FREE (visited);
-    BITMAP_FREE (src_map);
-    BITMAP_FREE (dst_map);
-    BITMAP_FREE (src_map_copy);
-    BITMAP_FREE (dst_map_copy);
   }
 
   remove_temporary_equivalences (stack);

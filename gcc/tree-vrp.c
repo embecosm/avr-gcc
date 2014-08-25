@@ -3536,15 +3536,18 @@ extract_range_basic (value_range_t *vr, gimple stmt)
 	      /* If arg is non-zero, then ffs or popcount
 		 are non-zero.  */
 	      if (((vr0->type == VR_RANGE
-		    && integer_nonzerop (vr0->min))
+		    && range_includes_zero_p (vr0->min, vr0->max) == 0)
 		   || (vr0->type == VR_ANTI_RANGE
-		       && integer_zerop (vr0->min)))
-		  && !is_overflow_infinity (vr0->min))
+		       && range_includes_zero_p (vr0->min, vr0->max) == 1))
+		  && !is_overflow_infinity (vr0->min)
+		  && !is_overflow_infinity (vr0->max))
 		mini = 1;
 	      /* If some high bits are known to be zero,
 		 we can decrease the maximum.  */
 	      if (vr0->type == VR_RANGE
 		  && TREE_CODE (vr0->max) == INTEGER_CST
+		  && !operand_less_p (vr0->min,
+				      build_zero_cst (TREE_TYPE (vr0->min)))
 		  && !is_overflow_infinity (vr0->max))
 		maxi = tree_floor_log2 (vr0->max) + 1;
 	    }
@@ -3892,15 +3895,6 @@ adjust_range_with_scev (value_range_t *vr, struct loop *loop,
 	max = init;
       else
 	min = init;
-
-      /* If we would create an invalid range, then just assume we
-	 know absolutely nothing.  This may be over-conservative,
-	 but it's clearly safe, and should happen only in unreachable
-         parts of code, or for invalid programs.  */
-      if (compare_values (min, max) == 1)
-	return;
-
-      set_value_range (vr, VR_RANGE, min, max, vr->equiv);
     }
   else if (vr->type == VR_RANGE)
     {
@@ -3933,16 +3927,20 @@ adjust_range_with_scev (value_range_t *vr, struct loop *loop,
 	      || compare_values (tmax, max) == -1)
 	    max = tmax;
 	}
-
-      /* If we just created an invalid range with the minimum
-	 greater than the maximum, we fail conservatively.
-	 This should happen only in unreachable
-	 parts of code, or for invalid programs.  */
-      if (compare_values (min, max) == 1)
-	return;
-
-      set_value_range (vr, VR_RANGE, min, max, vr->equiv);
     }
+  else
+    return;
+
+  /* If we just created an invalid range with the minimum
+     greater than the maximum, we fail conservatively.
+     This should happen only in unreachable
+     parts of code, or for invalid programs.  */
+  if (compare_values (min, max) == 1
+      || (is_negative_overflow_infinity (min)
+	  && is_positive_overflow_infinity (max)))
+    return;
+
+  set_value_range (vr, VR_RANGE, min, max, vr->equiv);
 }
 
 
@@ -6528,8 +6526,9 @@ remove_range_assertions (void)
 	  }
 	else
 	  {
+	    if (!is_gimple_debug (gsi_stmt (si)))
+	      is_unreachable = 0;
 	    gsi_next (&si);
-	    is_unreachable = 0;
 	  }
       }
 }
@@ -8383,7 +8382,6 @@ vrp_visit_phi_node (gimple phi)
 	 PHI node SCEV may known more about its value-range.  */
       if ((cmp_min > 0 || cmp_min < 0
 	   || cmp_max < 0 || cmp_max > 0)
-	  && current_loops
 	  && (l = loop_containing_stmt (phi))
 	  && l->header == gimple_bb (phi))
 	adjust_range_with_scev (&vr_result, l, phi, lhs);
@@ -9784,8 +9782,7 @@ execute_vrp (void)
   if (to_remove_edges.length () > 0)
     {
       free_dominance_info (CDI_DOMINATORS);
-      if (current_loops)
-	loops_state_set (LOOPS_NEED_FIXUP);
+      loops_state_set (LOOPS_NEED_FIXUP);
     }
 
   to_remove_edges.release ();
@@ -9804,7 +9801,6 @@ const pass_data pass_data_vrp =
   GIMPLE_PASS, /* type */
   "vrp", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_VRP, /* tv_id */
   PROP_ssa, /* properties_required */
   0, /* properties_provided */

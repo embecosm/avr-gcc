@@ -53,6 +53,7 @@ enum aarch64_simd_builtin_type_mode
   T_V4HI,
   T_V2SI,
   T_V2SF,
+  T_V1DF,
   T_DI,
   T_DF,
   T_V16QI,
@@ -76,6 +77,7 @@ enum aarch64_simd_builtin_type_mode
 #define v4hi_UP  T_V4HI
 #define v2si_UP  T_V2SI
 #define v2sf_UP  T_V2SF
+#define v1df_UP  T_V1DF
 #define di_UP    T_DI
 #define df_UP    T_DF
 #define v16qi_UP T_V16QI
@@ -138,9 +140,11 @@ typedef struct
   enum aarch64_type_qualifiers *qualifiers;
 } aarch64_simd_builtin_datum;
 
+/*  The qualifier_internal allows generation of a unary builtin from
+    a pattern with a third pseudo-operand such as a match_scratch.  */
 static enum aarch64_type_qualifiers
 aarch64_types_unop_qualifiers[SIMD_MAX_BUILTIN_ARGS]
-  = { qualifier_none, qualifier_none };
+  = { qualifier_none, qualifier_none, qualifier_internal };
 #define TYPES_UNOP (aarch64_types_unop_qualifiers)
 static enum aarch64_type_qualifiers
 aarch64_types_unopu_qualifiers[SIMD_MAX_BUILTIN_ARGS]
@@ -346,6 +350,8 @@ aarch64_types_storestruct_lane_qualifiers[SIMD_MAX_BUILTIN_ARGS]
   VAR2 (T, N, MAP, v8qi, v16qi)
 #define BUILTIN_VD(T, N, MAP) \
   VAR4 (T, N, MAP, v8qi, v4hi, v2si, v2sf)
+#define BUILTIN_VD1(T, N, MAP) \
+  VAR5 (T, N, MAP, v8qi, v4hi, v2si, v2sf, v1df)
 #define BUILTIN_VDC(T, N, MAP) \
   VAR6 (T, N, MAP, v8qi, v4hi, v2si, v2sf, di, df)
 #define BUILTIN_VDIC(T, N, MAP) \
@@ -380,8 +386,6 @@ aarch64_types_storestruct_lane_qualifiers[SIMD_MAX_BUILTIN_ARGS]
   VAR3 (T, N, MAP, v8qi, v4hi, v2si)
 #define BUILTIN_VD_HSI(T, N, MAP) \
   VAR2 (T, N, MAP, v4hi, v2si)
-#define BUILTIN_VD_RE(T, N, MAP) \
-  VAR6 (T, N, MAP, v8qi, v4hi, v2si, v2sf, di, df)
 #define BUILTIN_VQ(T, N, MAP) \
   VAR6 (T, N, MAP, v16qi, v8hi, v4si, v2di, v4sf, v2df)
 #define BUILTIN_VQN(T, N, MAP) \
@@ -411,6 +415,28 @@ static aarch64_simd_builtin_datum aarch64_simd_builtin_data[] = {
 #include "aarch64-simd-builtins.def"
 };
 
+/* There's only 8 CRC32 builtins.  Probably not worth their own .def file.  */
+#define AARCH64_CRC32_BUILTINS \
+  CRC32_BUILTIN (crc32b, QI) \
+  CRC32_BUILTIN (crc32h, HI) \
+  CRC32_BUILTIN (crc32w, SI) \
+  CRC32_BUILTIN (crc32x, DI) \
+  CRC32_BUILTIN (crc32cb, QI) \
+  CRC32_BUILTIN (crc32ch, HI) \
+  CRC32_BUILTIN (crc32cw, SI) \
+  CRC32_BUILTIN (crc32cx, DI)
+
+typedef struct
+{
+  const char *name;
+  enum machine_mode mode;
+  const enum insn_code icode;
+  unsigned int fcode;
+} aarch64_crc_builtin_datum;
+
+#define CRC32_BUILTIN(N, M) \
+  AARCH64_BUILTIN_##N,
+
 #undef VAR1
 #define VAR1(T, N, MAP, A) \
   AARCH64_SIMD_BUILTIN_##T##_##N##A,
@@ -428,8 +454,21 @@ enum aarch64_builtins
 #include "aarch64-simd-builtins.def"
   AARCH64_SIMD_BUILTIN_MAX = AARCH64_SIMD_BUILTIN_BASE
 			      + ARRAY_SIZE (aarch64_simd_builtin_data),
+  AARCH64_CRC32_BUILTIN_BASE,
+  AARCH64_CRC32_BUILTINS
+  AARCH64_CRC32_BUILTIN_MAX,
   AARCH64_BUILTIN_MAX
 };
+
+#undef CRC32_BUILTIN
+#define CRC32_BUILTIN(N, M) \
+  {"__builtin_aarch64_"#N, M##mode, CODE_FOR_aarch64_##N, AARCH64_BUILTIN_##N},
+
+static aarch64_crc_builtin_datum aarch64_crc_builtin_data[] = {
+  AARCH64_CRC32_BUILTINS
+};
+
+#undef CRC32_BUILTIN
 
 static GTY(()) tree aarch64_builtin_decls[AARCH64_BUILTIN_MAX];
 
@@ -694,13 +733,13 @@ aarch64_init_simd_builtins (void)
       aarch64_simd_builtin_datum *d = &aarch64_simd_builtin_data[i];
       const char *const modenames[] =
 	{
-	  "v8qi", "v4hi", "v2si", "v2sf", "di", "df",
+	  "v8qi", "v4hi", "v2si", "v2sf", "v1df", "di", "df",
 	  "v16qi", "v8hi", "v4si", "v4sf", "v2di", "v2df",
 	  "ti", "ei", "oi", "xi", "si", "sf", "hi", "qi"
 	};
       const enum machine_mode modes[] =
 	{
-	  V8QImode, V4HImode, V2SImode, V2SFmode, DImode, DFmode,
+	  V8QImode, V4HImode, V2SImode, V2SFmode, V1DFmode, DImode, DFmode,
 	  V16QImode, V8HImode, V4SImode, V4SFmode, V2DImode,
 	  V2DFmode, TImode, EImode, OImode, XImode, SImode,
 	  SFmode, HImode, QImode
@@ -802,6 +841,24 @@ aarch64_init_simd_builtins (void)
     }
 }
 
+static void
+aarch64_init_crc32_builtins ()
+{
+  tree usi_type = aarch64_build_unsigned_type (SImode);
+  unsigned int i = 0;
+
+  for (i = 0; i < ARRAY_SIZE (aarch64_crc_builtin_data); ++i)
+    {
+      aarch64_crc_builtin_datum* d = &aarch64_crc_builtin_data[i];
+      tree argtype = aarch64_build_unsigned_type (d->mode);
+      tree ftype = build_function_type_list (usi_type, usi_type, argtype, NULL_TREE);
+      tree fndecl = add_builtin_function (d->name, ftype, d->fcode,
+                                          BUILT_IN_MD, NULL, NULL_TREE);
+
+      aarch64_builtin_decls[d->fcode] = fndecl;
+    }
+}
+
 void
 aarch64_init_builtins (void)
 {
@@ -825,6 +882,8 @@ aarch64_init_builtins (void)
 
   if (TARGET_SIMD)
     aarch64_init_simd_builtins ();
+  if (TARGET_CRC32)
+    aarch64_init_crc32_builtins ();
 }
 
 tree
@@ -1024,6 +1083,41 @@ aarch64_simd_expand_builtin (int fcode, tree exp, rtx target)
 	   SIMD_ARG_STOP);
 }
 
+rtx
+aarch64_crc32_expand_builtin (int fcode, tree exp, rtx target)
+{
+  rtx pat;
+  aarch64_crc_builtin_datum *d
+    = &aarch64_crc_builtin_data[fcode - (AARCH64_CRC32_BUILTIN_BASE + 1)];
+  enum insn_code icode = d->icode;
+  tree arg0 = CALL_EXPR_ARG (exp, 0);
+  tree arg1 = CALL_EXPR_ARG (exp, 1);
+  rtx op0 = expand_normal (arg0);
+  rtx op1 = expand_normal (arg1);
+  enum machine_mode tmode = insn_data[icode].operand[0].mode;
+  enum machine_mode mode0 = insn_data[icode].operand[1].mode;
+  enum machine_mode mode1 = insn_data[icode].operand[2].mode;
+
+  if (! target
+      || GET_MODE (target) != tmode
+      || ! (*insn_data[icode].operand[0].predicate) (target, tmode))
+    target = gen_reg_rtx (tmode);
+
+  gcc_assert ((GET_MODE (op0) == mode0 || GET_MODE (op0) == VOIDmode)
+	      && (GET_MODE (op1) == mode1 || GET_MODE (op1) == VOIDmode));
+
+  if (! (*insn_data[icode].operand[1].predicate) (op0, mode0))
+    op0 = copy_to_mode_reg (mode0, op0);
+  if (! (*insn_data[icode].operand[2].predicate) (op1, mode1))
+    op1 = copy_to_mode_reg (mode1, op1);
+
+  pat = GEN_FCN (icode) (target, op0, op1);
+  if (! pat)
+    return 0;
+  emit_insn (pat);
+  return target;
+}
+
 /* Expand an expression EXP that calls a built-in function,
    with result going to TARGET if that's convenient.  */
 rtx
@@ -1066,8 +1160,10 @@ aarch64_expand_builtin (tree exp,
       return target;
     }
 
-  if (fcode >= AARCH64_SIMD_BUILTIN_BASE)
+  if (fcode >= AARCH64_SIMD_BUILTIN_BASE && fcode <= AARCH64_SIMD_BUILTIN_MAX)
     return aarch64_simd_expand_builtin (fcode, exp, target);
+  else if (fcode >= AARCH64_CRC32_BUILTIN_BASE && fcode <= AARCH64_CRC32_BUILTIN_MAX)
+    return aarch64_crc32_expand_builtin (fcode, exp, target);
 
   return NULL_RTX;
 }
@@ -1250,24 +1346,23 @@ aarch64_fold_builtin (tree fndecl, int n_args ATTRIBUTE_UNUSED, tree *args,
 	  return fold_build2 (NE_EXPR, type, and_node, vec_zero_node);
 	  break;
 	}
-      VAR1 (REINTERP_SS, reinterpretdi, 0, df)
-      VAR1 (REINTERP_SS, reinterpretv8qi, 0, df)
-      VAR1 (REINTERP_SS, reinterpretv4hi, 0, df)
-      VAR1 (REINTERP_SS, reinterpretv2si, 0, df)
-      VAR1 (REINTERP_SS, reinterpretv2sf, 0, df)
-      BUILTIN_VD (REINTERP_SS, reinterpretdf, 0)
-      BUILTIN_VD (REINTERP_SU, reinterpretdf, 0)
-      VAR1 (REINTERP_US, reinterpretdi, 0, df)
-      VAR1 (REINTERP_US, reinterpretv8qi, 0, df)
-      VAR1 (REINTERP_US, reinterpretv4hi, 0, df)
-      VAR1 (REINTERP_US, reinterpretv2si, 0, df)
-      VAR1 (REINTERP_US, reinterpretv2sf, 0, df)
-      BUILTIN_VD (REINTERP_SP, reinterpretdf, 0)
-      VAR1 (REINTERP_PS, reinterpretdi, 0, df)
-      VAR1 (REINTERP_PS, reinterpretv8qi, 0, df)
-      VAR1 (REINTERP_PS, reinterpretv4hi, 0, df)
-      VAR1 (REINTERP_PS, reinterpretv2si, 0, df)
-      VAR1 (REINTERP_PS, reinterpretv2sf, 0, df)
+      VAR1 (REINTERP_SS, reinterpretdi, 0, v1df)
+      VAR1 (REINTERP_SS, reinterpretv8qi, 0, v1df)
+      VAR1 (REINTERP_SS, reinterpretv4hi, 0, v1df)
+      VAR1 (REINTERP_SS, reinterpretv2si, 0, v1df)
+      VAR1 (REINTERP_SS, reinterpretv2sf, 0, v1df)
+      BUILTIN_VD (REINTERP_SS, reinterpretv1df, 0)
+      BUILTIN_VD (REINTERP_SU, reinterpretv1df, 0)
+      VAR1 (REINTERP_US, reinterpretdi, 0, v1df)
+      VAR1 (REINTERP_US, reinterpretv8qi, 0, v1df)
+      VAR1 (REINTERP_US, reinterpretv4hi, 0, v1df)
+      VAR1 (REINTERP_US, reinterpretv2si, 0, v1df)
+      VAR1 (REINTERP_US, reinterpretv2sf, 0, v1df)
+      BUILTIN_VD (REINTERP_SP, reinterpretv1df, 0)
+      VAR1 (REINTERP_PS, reinterpretdi, 0, v1df)
+      VAR1 (REINTERP_PS, reinterpretv8qi, 0, v1df)
+      VAR1 (REINTERP_PS, reinterpretv4hi, 0, v1df)
+      VAR1 (REINTERP_PS, reinterpretv2sf, 0, v1df)
 	return fold_build1 (VIEW_CONVERT_EXPR, type, args[0]);
       VAR1 (UNOP, floatv2si, 2, v2sf)
       VAR1 (UNOP, floatv4si, 2, v4sf)
@@ -1447,6 +1542,7 @@ aarch64_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
 #undef BUILTIN_VALL
 #undef BUILTIN_VB
 #undef BUILTIN_VD
+#undef BUILTIN_VD1
 #undef BUILTIN_VDC
 #undef BUILTIN_VDIC
 #undef BUILTIN_VDN
@@ -1462,7 +1558,6 @@ aarch64_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
 #undef BUILTIN_VDW
 #undef BUILTIN_VD_BHSI
 #undef BUILTIN_VD_HSI
-#undef BUILTIN_VD_RE
 #undef BUILTIN_VQ
 #undef BUILTIN_VQN
 #undef BUILTIN_VQW

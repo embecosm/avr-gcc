@@ -1,3 +1,25 @@
+2014-06-13  Ian Lance Taylor  <iant@google.com>
+
+	PR go/61496
+	* gospec.c (lang_specific_driver): On Solaris, when not using GNU
+	ld, add -t option to avoid warning about common symbol changing
+	size.
+
+2014-06-10  Jan Hubicka  <hubicka@ucw.cz>
+
+	* go/go-gcc.cc (Gcc_backend::global_variable_set_init): Use
+	symtab_get_node(var_decl)->implicit_section.
+
+2014-06-07  Jan Hubicka  <hubicka@ucw.cz>
+
+	* go-gcc.cc (global_variable_set_init): Use
+	set_decl_section_name.
+
+2014-06-04  Ian Lance Taylor  <iant@google.com>
+
+	* go-gcc.cc (Gcc_backend::implicit_variable): Add is_common and
+	alignment parameters.  Permit init parameter to be NULL.
+
 2014-06-02  Andrew MacLeod  <amacleod@redhat.com>
 
 	* go-gcc.cc: Include builtins.h.

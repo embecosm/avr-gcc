@@ -2476,9 +2476,7 @@ process_attributes (tree *node, struct attrib **attr_list, bool in_place,
       case ATTR_LINK_SECTION:
 	if (targetm_common.have_named_sections)
 	  {
-	    DECL_SECTION_NAME (*node)
-	      = build_string (IDENTIFIER_LENGTH (attr->name),
-			      IDENTIFIER_POINTER (attr->name));
+	    set_decl_section_name (*node, IDENTIFIER_POINTER (attr->name));
 	    DECL_COMMON (*node) = 0;
 	  }
 	else
@@ -2497,7 +2495,7 @@ process_attributes (tree *node, struct attrib **attr_list, bool in_place,
 	break;
 
       case ATTR_THREAD_LOCAL_STORAGE:
-	DECL_TLS_MODEL (*node) = decl_default_tls_model (*node);
+	set_decl_tls_model (*node, decl_default_tls_model (*node));
 	DECL_COMMON (*node) = 0;
 	break;
       }

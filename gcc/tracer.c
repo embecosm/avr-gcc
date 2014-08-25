@@ -316,8 +316,7 @@ tail_duplicate (void)
 	         of all do { } while loops.  Do not do that - it is
 		 not profitable and it might create a loop with multiple
 		 entries or at least rotate the loop.  */
-	      && (!current_loops
-		  || bb2->loop_father->header != bb2))
+	      && bb2->loop_father->header != bb2)
 	    {
 	      edge e;
 	      basic_block copy;
@@ -375,7 +374,6 @@ const pass_data pass_data_tracer =
   GIMPLE_PASS, /* type */
   "tracer", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TRACER, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */
@@ -419,8 +417,7 @@ pass_tracer::execute (function *fun)
     {
       free_dominance_info (CDI_DOMINATORS);
       /* If we changed the CFG schedule loops for fixup by cleanup_cfg.  */
-      if (current_loops)
-	loops_state_set (LOOPS_NEED_FIXUP);
+      loops_state_set (LOOPS_NEED_FIXUP);
     }
 
   if (dump_file)

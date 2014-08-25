@@ -1701,7 +1701,7 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL}, and it shall be scalar.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
@@ -1750,11 +1750,11 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL}, and it shall be scalar.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is of type @code{REAL} and it lies in the
+The return value is of type @code{REAL} and lies in the
 range @math{ - 0.5818... \leq Bessel (0,x) \leq 0.5818 }. It has the same
 kind as @var{X}.
 
@@ -1865,12 +1865,11 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL}, and it shall be scalar.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is a scalar of type @code{REAL}. It has the same
-kind as @var{X}.
+The return value is of type @code{REAL}. It has the same kind as @var{X}.
 
 @item @emph{Example}:
 @smallexample
@@ -1913,12 +1912,11 @@ Elemental function
 
 @item @emph{Arguments}:
 @multitable @columnfractions .15 .70
-@item @var{X} @tab The type shall be @code{REAL}, and it shall be scalar.
+@item @var{X} @tab The type shall be @code{REAL}.
 @end multitable
 
 @item @emph{Return value}:
-The return value is a scalar of type @code{REAL}. It has the same
-kind as @var{X}.
+The return value is of type @code{REAL}. It has the same kind as @var{X}.
 
 @item @emph{Example}:
 @smallexample
@@ -12261,15 +12259,16 @@ clock implementation, provide up to nanosecond resolution.  If a
 monotonic clock is not available, the implementation falls back to a
 realtime clock.
 
-@var{COUNT_RATE} is system dependent and can vary depending on the
-kind of the arguments. For @var{kind=4} arguments, @var{COUNT}
-represents milliseconds, while for @var{kind=8} arguments, @var{COUNT}
-typically represents micro- or nanoseconds depending on resolution of
-the underlying platform clock. @var{COUNT_MAX} usually equals
-@code{HUGE(COUNT_MAX)}. Note that the millisecond resolution of the
-@var{kind=4} version implies that the @var{COUNT} will wrap around in
-roughly 25 days. In order to avoid issues with the wrap around and for
-more precise timing, please use the @var{kind=8} version.
+@var{COUNT_RATE} is system dependent and can vary depending on the kind of
+the arguments. For @var{kind=4} arguments (and smaller integer kinds),
+@var{COUNT} represents milliseconds, while for @var{kind=8} arguments (and
+larger integer kinds), @var{COUNT} typically represents micro- or
+nanoseconds depending on resolution of the underlying platform clock.
+@var{COUNT_MAX} usually equals @code{HUGE(COUNT_MAX)}. Note that the
+millisecond resolution of the @var{kind=4} version implies that the
+@var{COUNT} will wrap around in roughly 25 days. In order to avoid issues
+with the wrap around and for more precise timing, please use the
+@var{kind=8} version.
 
 If there is no clock, or querying the clock fails, @var{COUNT} is set
 to @code{-HUGE(COUNT)}, and @var{COUNT_RATE} and @var{COUNT_MAX} are
@@ -12301,7 +12300,7 @@ Subroutine
 @item @var{COUNT}      @tab (Optional) shall be a scalar of type 
 @code{INTEGER} with @code{INTENT(OUT)}.
 @item @var{COUNT_RATE} @tab (Optional) shall be a scalar of type 
-@code{INTEGER} with @code{INTENT(OUT)}.
+@code{INTEGER} or @code{REAL}, with @code{INTENT(OUT)}.
 @item @var{COUNT_MAX}  @tab (Optional) shall be a scalar of type 
 @code{INTEGER} with @code{INTENT(OUT)}.
 @end multitable
@@ -13156,6 +13155,7 @@ Fortran 95 elemental function: @ref{IEOR}
 @menu
 * ISO_FORTRAN_ENV::
 * ISO_C_BINDING::
+* IEEE modules::
 * OpenMP Modules OMP_LIB and OMP_LIB_KINDS::
 @end menu
 
@@ -13367,6 +13367,35 @@ Moreover, the following two named constants are defined:
 
 Both are equivalent to the value @code{NULL} in C.
 
+
+
+@node IEEE modules
+@section IEEE modules: @code{IEEE_EXCEPTIONS}, @code{IEEE_ARITHMETIC}, and @code{IEEE_FEATURES}
+@table @asis
+@item @emph{Standard}:
+Fortran 2003 and later
+@end table
+
+The @code{IEEE_EXCEPTIONS}, @code{IEEE_ARITHMETIC}, and @code{IEEE_FEATURES}
+intrinsic modules provide support for exceptions and IEEE arithmetic, as
+defined in Fortran 2003 and later standards, and the IEC 60559:1989 standard
+(@emph{Binary floating-point arithmetic for microprocessor systems}). These
+modules are only provided on the following supported platforms:
+
+@itemize @bullet
+@item i386 and x86_64 processors
+@item platforms which use the GNU C Library (glibc)
+@item platforms with support for SysV/386 routines for floating point
+interface (including Solaris and BSDs)
+@item platforms with the AIX OS
+@end itemize
+
+For full compliance with the Fortran standards, code using the
+@code{IEEE_EXCEPTIONS} or @code{IEEE_ARITHMETIC} modules should be compiled
+with the following options: @code{-fno-unsafe-math-optimizations
+-frounding-math -fsignaling-nans}.
+
+
 @node OpenMP Modules OMP_LIB and OMP_LIB_KINDS
 @section OpenMP Modules @code{OMP_LIB} and @code{OMP_LIB_KINDS}
 @table @asis
@@ -13400,8 +13429,7 @@ named constants:
 @code{OMP_LIB} provides the scalar default-integer
 named constant @code{openmp_version} with a value of the form
 @var{yyyymm}, where @code{yyyy} is the year and @var{mm} the month
-of the OpenMP version; for OpenMP v3.1 the value is @code{201107}
-and for OpenMP v4.0 the value is @code{201307}.
+of the OpenMP version; for OpenMP v4.0 the value is @code{201307}.
 
 The following scalar integer named constants of the
 kind @code{omp_sched_kind}:

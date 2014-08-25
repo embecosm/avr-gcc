@@ -87,7 +87,7 @@ create_output_block (enum lto_section_type section_type)
 
   clear_line_info (ob);
 
-  ob->string_hash_table.create (37);
+  ob->string_hash_table = new hash_table<string_slot_hasher> (37);
   gcc_obstack_init (&ob->obstack);
 
   return ob;
@@ -101,7 +101,8 @@ destroy_output_block (struct output_block *ob)
 {
   enum lto_section_type section_type = ob->section_type;
 
-  ob->string_hash_table.dispose ();
+  delete ob->string_hash_table;
+  ob->string_hash_table = NULL;
 
   free (ob->main_stream);
   free (ob->string_stream);
@@ -527,7 +528,6 @@ DFS_write_tree_body (struct output_block *ob,
     {
       if (TREE_CODE (expr) == TYPE_DECL)
 	DFS_follow_tree_edge (DECL_ORIGINAL_TYPE (expr));
-      DFS_follow_tree_edge (DECL_VINDEX (expr));
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_DECL_WITH_VIS))
@@ -535,7 +535,6 @@ DFS_write_tree_body (struct output_block *ob,
       /* Make sure we don't inadvertently set the assembler name.  */
       if (DECL_ASSEMBLER_NAME_SET_P (expr))
 	DFS_follow_tree_edge (DECL_ASSEMBLER_NAME (expr));
-      DFS_follow_tree_edge (DECL_SECTION_NAME (expr));
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_FIELD_DECL))
@@ -549,6 +548,7 @@ DFS_write_tree_body (struct output_block *ob,
 
   if (CODE_CONTAINS_STRUCT (code, TS_FUNCTION_DECL))
     {
+      DFS_follow_tree_edge (DECL_VINDEX (expr));
       DFS_follow_tree_edge (DECL_FUNCTION_PERSONALITY (expr));
       /* Do not DECL_FUNCTION_SPECIFIC_TARGET.  They will be regenerated.  */
       DFS_follow_tree_edge (DECL_FUNCTION_SPECIFIC_OPTIMIZATION (expr));
@@ -822,15 +822,12 @@ hash_tree (struct streamer_tree_cache_d *cache, tree t)
 	  v = iterative_hash_host_wide_int (DECL_HARD_REGISTER (t)
 					    | (DECL_IN_CONSTANT_POOL (t) << 1),
 					    v);
-	  v = iterative_hash_host_wide_int (DECL_TLS_MODEL (t), v);
 	}
       if (TREE_CODE (t) == FUNCTION_DECL)
 	v = iterative_hash_host_wide_int (DECL_FINAL_P (t)
 					  | (DECL_CXX_CONSTRUCTOR_P (t) << 1)
 					  | (DECL_CXX_DESTRUCTOR_P (t) << 2),
 					  v);
-      if (VAR_OR_FUNCTION_DECL_P (t))
-	v = iterative_hash_host_wide_int (DECL_INIT_PRIORITY (t), v);
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_FUNCTION_DECL))
@@ -854,8 +851,6 @@ hash_tree (struct streamer_tree_cache_d *cache, tree t)
 					| (DECL_LOOPING_CONST_OR_PURE_P (t) << 15), v);
       if (DECL_BUILT_IN_CLASS (t) != NOT_BUILT_IN)
 	v = iterative_hash_host_wide_int (DECL_FUNCTION_CODE (t), v);
-      if (DECL_STATIC_DESTRUCTOR (t))
-	v = iterative_hash_host_wide_int (DECL_FINI_PRIORITY (t), v);
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_TYPE_COMMON))
@@ -966,14 +961,12 @@ hash_tree (struct streamer_tree_cache_d *cache, tree t)
     {
       if (code == TYPE_DECL)
 	visit (DECL_ORIGINAL_TYPE (t));
-      visit (DECL_VINDEX (t));
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_DECL_WITH_VIS))
     {
       if (DECL_ASSEMBLER_NAME_SET_P (t))
 	visit (DECL_ASSEMBLER_NAME (t));
-      visit (DECL_SECTION_NAME (t));
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_FIELD_DECL))
@@ -987,6 +980,7 @@ hash_tree (struct streamer_tree_cache_d *cache, tree t)
 
   if (CODE_CONTAINS_STRUCT (code, TS_FUNCTION_DECL))
     {
+      visit (DECL_VINDEX (t));
       visit (DECL_FUNCTION_PERSONALITY (t));
       /* Do not follow DECL_FUNCTION_SPECIFIC_TARGET.  */
       visit (DECL_FUNCTION_SPECIFIC_OPTIMIZATION (t));
@@ -1137,32 +1131,18 @@ hash_scc (struct streamer_tree_cache_d *cache, unsigned first, unsigned size)
 
   /* Sort the SCC of type, hash pairs so that when we mix in
      all members of the SCC the hash value becomes independent on
-     the order we visited the SCC.  Disregard hashes equal to
-     the hash of the tree we mix into because we cannot guarantee
-     a stable sort for those across different TUs.  */
+     the order we visited the SCC.  Produce hash of the whole SCC as
+     combination of hashes of individual elements.  Then combine that hash into
+     hash of each element, so othewise identically looking elements from two
+     different SCCs are distinguished.  */
   qsort (&sccstack[first], size, sizeof (scc_entry), scc_entry_compare);
-  hashval_t *tem = XALLOCAVEC (hashval_t, size);
+
+  hashval_t scc_hash = sccstack[first].hash;
+  for (unsigned i = 1; i < size; ++i)
+    scc_hash = iterative_hash_hashval_t (scc_hash,
+					 sccstack[first+i].hash);
   for (unsigned i = 0; i < size; ++i)
-    {
-      hashval_t hash = sccstack[first+i].hash;
-      hashval_t orig_hash = hash;
-      unsigned j;
-      /* Skip same hashes.  */
-      for (j = i + 1;
-	   j < size && sccstack[first+j].hash == orig_hash; ++j)
-	;
-      for (; j < size; ++j)
-	hash = iterative_hash_hashval_t (sccstack[first+j].hash, hash);
-      for (j = 0; sccstack[first+j].hash != orig_hash; ++j)
-	hash = iterative_hash_hashval_t (sccstack[first+j].hash, hash);
-      tem[i] = hash;
-    }
-  hashval_t scc_hash = 0;
-  for (unsigned i = 0; i < size; ++i)
-    {
-      sccstack[first+i].hash = tem[i];
-      scc_hash = iterative_hash_hashval_t (tem[i], scc_hash);
-    }
+    sccstack[first+i].hash = iterative_hash_hashval_t (sccstack[first+i].hash, scc_hash);
   return scc_hash;
 }
 
@@ -2368,8 +2348,7 @@ output_symbol_p (symtab_node *node)
     {
       int i;
       struct ipa_ref *ref;
-      for (i = 0; ipa_ref_list_referring_iterate (&node->ref_list,
-					          i, ref); i++)
+      for (i = 0; node->iterate_referring (i, ref); i++)
 	{
 	  if (ref->use == IPA_REF_ALIAS)
 	    continue;

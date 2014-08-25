@@ -2565,9 +2565,9 @@ tree_predictive_commoning (void)
 /* Predictive commoning Pass.  */
 
 static unsigned
-run_tree_predictive_commoning (void)
+run_tree_predictive_commoning (struct function *fun)
 {
-  if (!current_loops)
+  if (number_of_loops (fun) <= 1)
     return 0;
 
   return tree_predictive_commoning ();
@@ -2580,7 +2580,6 @@ const pass_data pass_data_predcom =
   GIMPLE_PASS, /* type */
   "pcom", /* name */
   OPTGROUP_LOOP, /* optinfo_flags */
-  true, /* has_execute */
   TV_PREDCOM, /* tv_id */
   PROP_cfg, /* properties_required */
   0, /* properties_provided */
@@ -2598,9 +2597,9 @@ public:
 
   /* opt_pass methods: */
   virtual bool gate (function *) { return flag_predictive_commoning != 0; }
-  virtual unsigned int execute (function *)
+  virtual unsigned int execute (function *fun)
     {
-      return run_tree_predictive_commoning ();
+      return run_tree_predictive_commoning (fun);
     }
 
 }; // class pass_predcom

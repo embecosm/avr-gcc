@@ -457,6 +457,7 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fbranch_count_reg, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fmove_loop_invariants, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_ftree_pta, NULL, 1 },
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fssa_phiopt, NULL, 1 },
 
     /* -O2 optimizations.  */
     { OPT_LEVELS_2_PLUS, OPT_finline_small_functions, NULL, 1 },
@@ -617,6 +618,13 @@ default_options_optimization (struct gcc_options *opts,
   maybe_set_param_value
     (PARAM_LOOP_INVARIANT_MAX_BBS_IN_LOOP,
      opt2 ? default_param_value (PARAM_LOOP_INVARIANT_MAX_BBS_IN_LOOP) : 1000,
+     opts->x_param_values, opts_set->x_param_values);
+
+  /* At -Ofast, allow store motion to introduce potential race conditions.  */
+  maybe_set_param_value
+    (PARAM_ALLOW_STORE_DATA_RACES,
+     opts->x_optimize_fast ? 1
+     : default_param_value (PARAM_ALLOW_STORE_DATA_RACES),
      opts->x_param_values, opts_set->x_param_values);
 
   if (opts->x_optimize_size)
@@ -1466,6 +1474,7 @@ common_handle_option (struct gcc_options *opts,
 		sizeof "float-divide-by-zero" - 1 },
 	      { "float-cast-overflow", SANITIZE_FLOAT_CAST,
 		sizeof "float-cast-overflow" - 1 },
+	      { "bounds", SANITIZE_BOUNDS, sizeof "bounds" - 1 },
 	      { NULL, 0, 0 }
 	    };
 	    const char *comma;
@@ -1868,6 +1877,11 @@ common_handle_option (struct gcc_options *opts,
     case OPT_gxcoff_:
       set_debug_level (XCOFF_DEBUG, code == OPT_gxcoff_, arg, opts, opts_set,
 		       loc);
+      break;
+
+    case OPT_gz:
+    case OPT_gz_:
+      /* Handled completely via specs.  */
       break;
 
     case OPT_pedantic_errors:

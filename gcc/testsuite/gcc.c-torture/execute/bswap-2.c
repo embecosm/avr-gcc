@@ -6,8 +6,11 @@ typedef __UINT32_TYPE__ unsigned;
 
 struct bitfield {
   unsigned char f0:7;
+  unsigned char   :1;
   unsigned char f1:7;
+  unsigned char   :1;
   unsigned char f2:7;
+  unsigned char   :1;
   unsigned char f3:7;
 };
 
@@ -63,6 +66,32 @@ fake_read_be32 (char *x, char *y)
   return c3 | c2 << 8 | c1 << 16 | c0 << 24;
 }
 
+__attribute__ ((noinline, noclone)) uint32_t
+incorrect_read_le32 (char *x, char *y)
+{
+  unsigned char c0, c1, c2, c3;
+
+  c0 = x[0];
+  c1 = x[1];
+  c2 = x[2];
+  c3 = x[3];
+  *y = 1;
+  return c0 | c1 << 8 | c2 << 16 | c3 << 24;
+}
+
+__attribute__ ((noinline, noclone)) uint32_t
+incorrect_read_be32 (char *x, char *y)
+{
+  unsigned char c0, c1, c2, c3;
+
+  c0 = x[0];
+  c1 = x[1];
+  c2 = x[2];
+  c3 = x[3];
+  *y = 1;
+  return c3 | c2 << 8 | c1 << 16 | c0 << 24;
+}
+
 int
 main ()
 {
@@ -74,17 +103,32 @@ main ()
     return 0;
   bfin.inval = (struct ok) { 0x83, 0x85, 0x87, 0x89 };
   out = partial_read_le32 (bfin);
-  if (out != 0x09070503 && out != 0x88868482 && out != 0x78306141)
+  /* Test what bswap would do if its check are not strict enough instead of
+     what is the expected result as there is too many possible results with
+     bitfields.  */
+  if (out == 0x89878583)
     __builtin_abort ();
   bfin.inval = (struct ok) { 0x83, 0x85, 0x87, 0x89 };
   out = partial_read_be32 (bfin);
-  if (out != 0x03050709 && out != 0x82848688 && out != 0x41613078)
+  /* Test what bswap would do if its check are not strict enough instead of
+     what is the expected result as there is too many possible results with
+     bitfields.  */
+  if (out == 0x83858789)
     __builtin_abort ();
   out = fake_read_le32 (cin, &cin[2]);
   if (out != 0x89018583)
     __builtin_abort ();
+  cin[2] = 0x87;
   out = fake_read_be32 (cin, &cin[2]);
   if (out != 0x83850189)
+    __builtin_abort ();
+  cin[2] = 0x87;
+  out = incorrect_read_le32 (cin, &cin[2]);
+  if (out != 0x89878583)
+    __builtin_abort ();
+  cin[2] = 0x87;
+  out = incorrect_read_be32 (cin, &cin[2]);
+  if (out != 0x83858789)
     __builtin_abort ();
   return 0;
 }

@@ -1720,14 +1720,10 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 			      " initializer");
 		  init = convert_lvalue_to_rvalue (init_loc, init, true, true);
 		  tree init_type = TREE_TYPE (init.value);
-		  /* As with typeof, remove _Atomic and const
-		     qualifiers from atomic types.  */
+		  /* As with typeof, remove all qualifiers from atomic types.  */
 		  if (init_type != error_mark_node && TYPE_ATOMIC (init_type))
 		    init_type
-		      = c_build_qualified_type (init_type,
-						(TYPE_QUALS (init_type)
-						 & ~(TYPE_QUAL_ATOMIC
-						     | TYPE_QUAL_CONST)));
+		      = c_build_qualified_type (init_type, TYPE_UNQUALIFIED);
 		  bool vm_type = variably_modified_type_p (init_type,
 							   NULL_TREE);
 		  if (vm_type)
@@ -3024,16 +3020,11 @@ c_parser_typeof_specifier (c_parser *parser)
       if (was_vm)
 	ret.expr = c_fully_fold (expr.value, false, &ret.expr_const_operands);
       pop_maybe_used (was_vm);
-      /* For use in macros such as those in <stdatomic.h>, remove
-	 _Atomic and const qualifiers from atomic types.  (Possibly
-	 all qualifiers should be removed; const can be an issue for
-	 more macros using typeof than just the <stdatomic.h>
-	 ones.)  */
+      /* For use in macros such as those in <stdatomic.h>, remove all
+	 qualifiers from atomic types.  (const can be an issue for more macros
+	 using typeof than just the <stdatomic.h> ones.)  */
       if (ret.spec != error_mark_node && TYPE_ATOMIC (ret.spec))
-	ret.spec = c_build_qualified_type (ret.spec,
-					   (TYPE_QUALS (ret.spec)
-					    & ~(TYPE_QUAL_ATOMIC
-						| TYPE_QUAL_CONST)));
+	ret.spec = c_build_qualified_type (ret.spec, TYPE_UNQUALIFIED);
     }
   c_parser_skip_until_found (parser, CPP_CLOSE_PAREN, "expected %<)%>");
   return ret;
@@ -4948,9 +4939,10 @@ c_parser_statement_after_labels (c_parser *parser)
 	    }
 	  else
 	    {
+	      location_t xloc = c_parser_peek_token (parser)->location;
 	      struct c_expr expr = c_parser_expression_conv (parser);
 	      mark_exp_read (expr.value);
-	      stmt = c_finish_return (loc, expr.value, expr.original_type);
+	      stmt = c_finish_return (xloc, expr.value, expr.original_type);
 	      goto expect_semicolon;
 	    }
 	  break;
@@ -5197,9 +5189,13 @@ c_parser_switch_statement (c_parser *parser)
   gcc_assert (c_parser_next_token_is_keyword (parser, RID_SWITCH));
   c_parser_consume_token (parser);
   block = c_begin_compound_stmt (flag_isoc99);
+  bool explicit_cast_p = false;
   if (c_parser_require (parser, CPP_OPEN_PAREN, "expected %<(%>"))
     {
       switch_cond_loc = c_parser_peek_token (parser)->location;
+      if (c_parser_next_token_is (parser, CPP_OPEN_PAREN)
+	  && c_token_starts_typename (c_parser_peek_2nd_token (parser)))
+	explicit_cast_p = true;
       ce = c_parser_expression (parser);
       ce = convert_lvalue_to_rvalue (switch_cond_loc, ce, true, false);
       expr = ce.value;
@@ -5217,7 +5213,7 @@ c_parser_switch_statement (c_parser *parser)
       switch_cond_loc = UNKNOWN_LOCATION;
       expr = error_mark_node;
     }
-  c_start_case (switch_loc, switch_cond_loc, expr);
+  c_start_case (switch_loc, switch_cond_loc, expr, explicit_cast_p);
   save_break = c_break_label;
   c_break_label = NULL_TREE;
   body = c_parser_c99_block_statement (parser);
@@ -11906,8 +11902,17 @@ c_parser_omp_for_loop (location_t loc, c_parser *parser, enum tree_code code,
 			tree l = build_omp_clause (OMP_CLAUSE_LOCATION (*c),
 						   OMP_CLAUSE_LASTPRIVATE);
 			OMP_CLAUSE_DECL (l) = OMP_CLAUSE_DECL (*c);
-			OMP_CLAUSE_CHAIN (l) = clauses;
-			clauses = l;
+			if (code == OMP_SIMD)
+			  {
+			    OMP_CLAUSE_CHAIN (l)
+			      = cclauses[C_OMP_CLAUSE_SPLIT_FOR];
+			    cclauses[C_OMP_CLAUSE_SPLIT_FOR] = l;
+			  }
+			else
+			  {
+			    OMP_CLAUSE_CHAIN (l) = clauses;
+			    clauses = l;
+			  }
 			OMP_CLAUSE_SET_CODE (*c, OMP_CLAUSE_SHARED);
 		      }
 		  }
@@ -13553,7 +13558,7 @@ c_parser_omp_threadprivate (c_parser *parser)
 	{
 	  if (! DECL_THREAD_LOCAL_P (v))
 	    {
-	      DECL_TLS_MODEL (v) = decl_default_tls_model (v);
+	      set_decl_tls_model (v, decl_default_tls_model (v));
 	      /* If rtl has been already set for this var, call
 		 make_decl_rtl once again, so that encode_section_info
 		 has a chance to look at the new decl flags.  */
@@ -14093,7 +14098,7 @@ c_parser_array_notation (location_t loc, c_parser *parser, tree initial_index,
   tree value_tree = NULL_TREE, type = NULL_TREE, array_type = NULL_TREE;
   tree array_type_domain = NULL_TREE; 
 
-  if (array_value == error_mark_node)
+  if (array_value == error_mark_node || initial_index == error_mark_node)
     {
       /* No need to continue.  If either of these 2 were true, then an error
 	 must be emitted already.  Thus, no need to emit them twice.  */

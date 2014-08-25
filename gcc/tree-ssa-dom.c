@@ -158,21 +158,22 @@ static void free_expr_hash_elt (void *);
 
 struct expr_elt_hasher
 {
-  typedef expr_hash_elt value_type;
-  typedef expr_hash_elt compare_type;
-  static inline hashval_t hash (const value_type *);
-  static inline bool equal (const value_type *, const compare_type *);
-  static inline void remove (value_type *);
+  typedef expr_hash_elt *value_type;
+  typedef expr_hash_elt *compare_type;
+  typedef int store_values_directly;
+  static inline hashval_t hash (const value_type &);
+  static inline bool equal (const value_type &, const compare_type &);
+  static inline void remove (value_type &);
 };
 
 inline hashval_t
-expr_elt_hasher::hash (const value_type *p)
+expr_elt_hasher::hash (const value_type &p)
 {
   return p->hash;
 }
 
 inline bool
-expr_elt_hasher::equal (const value_type *p1, const compare_type *p2)
+expr_elt_hasher::equal (const value_type &p1, const compare_type &p2)
 {
   gimple stmt1 = p1->stmt;
   const struct hashable_expr *expr1 = &p1->expr;
@@ -211,7 +212,7 @@ expr_elt_hasher::equal (const value_type *p1, const compare_type *p2)
 /* Delete an expr_hash_elt and reclaim its storage.  */
 
 inline void
-expr_elt_hasher::remove (value_type *element)
+expr_elt_hasher::remove (value_type &element)
 {
   free_expr_hash_elt (element);
 }
@@ -223,7 +224,7 @@ expr_elt_hasher::remove (value_type *element)
    global redundancy elimination).  Similarly as we pass through conditionals
    we record the conditional itself as having either a true or false value
    in this table.  */
-static hash_table <expr_elt_hasher> avail_exprs;
+static hash_table<expr_elt_hasher> *avail_exprs;
 
 /* Stack of dest,src pairs that need to be restored during finalization.
 
@@ -254,7 +255,8 @@ static struct opt_stats_d opt_stats;
 static void optimize_stmt (basic_block, gimple_stmt_iterator);
 static tree lookup_avail_expr (gimple, bool);
 static hashval_t avail_expr_hash (const void *);
-static void htab_statistics (FILE *, hash_table <expr_elt_hasher>);
+static void htab_statistics (FILE *,
+			     const hash_table<expr_elt_hasher> &);
 static void record_cond (cond_equivalence *);
 static void record_const_or_copy (tree, tree);
 static void record_equality (tree, tree);
@@ -847,7 +849,6 @@ const pass_data pass_data_dominator =
   GIMPLE_PASS, /* type */
   "dom", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_SSA_DOMINATOR_OPTS, /* tv_id */
   ( PROP_cfg | PROP_ssa ), /* properties_required */
   0, /* properties_provided */
@@ -876,7 +877,7 @@ pass_dominator::execute (function *fun)
   memset (&opt_stats, 0, sizeof (opt_stats));
 
   /* Create our hash tables.  */
-  avail_exprs.create (1024);
+  avail_exprs = new hash_table<expr_elt_hasher> (1024);
   avail_exprs_stack.create (20);
   const_and_copies_stack.create (20);
   need_eh_cleanup = BITMAP_ALLOC (NULL);
@@ -976,7 +977,8 @@ pass_dominator::execute (function *fun)
   loop_optimizer_finalize ();
 
   /* Delete our main hashtable.  */
-  avail_exprs.dispose ();
+  delete avail_exprs;
+  avail_exprs = NULL;
 
   /* Free asserted bitmaps and stacks.  */
   BITMAP_FREE (need_eh_cleanup);
@@ -1070,9 +1072,9 @@ remove_local_expressions_from_table (void)
           print_expr_hash_elt (dump_file, victim);
         }
 
-      slot = avail_exprs.find_slot_with_hash (victim, victim->hash, NO_INSERT);
+      slot = avail_exprs->find_slot (victim, NO_INSERT);
       gcc_assert (slot && *slot == victim);
-      avail_exprs.clear_slot (slot);
+      avail_exprs->clear_slot (slot);
     }
 }
 
@@ -1231,7 +1233,8 @@ record_equivalences_from_phis (basic_block bb)
 	 this, since this is a true assignment and not an equivalence
 	 inferred from a comparison.  All uses of this ssa name are dominated
 	 by this assignment, so unwinding just costs time and space.  */
-      if (i == gimple_phi_num_args (phi) && may_propagate_copy (lhs, rhs))
+      if (i == gimple_phi_num_args (phi)
+	  && may_propagate_copy (lhs, rhs))
 	set_ssa_name_value (lhs, rhs);
     }
 }
@@ -1351,7 +1354,7 @@ dump_dominator_optimization_stats (FILE *file)
   fprintf (file, "\nHash table statistics:\n");
 
   fprintf (file, "    avail_exprs: ");
-  htab_statistics (file, avail_exprs);
+  htab_statistics (file, *avail_exprs);
 }
 
 
@@ -1367,7 +1370,7 @@ debug_dominator_optimization_stats (void)
 /* Dump statistics for the hash table HTAB.  */
 
 static void
-htab_statistics (FILE *file, hash_table <expr_elt_hasher> htab)
+htab_statistics (FILE *file, const hash_table<expr_elt_hasher> &htab)
 {
   fprintf (file, "size %ld, %ld elements, %f collision/search ratio\n",
 	   (long) htab.size (),
@@ -1388,7 +1391,7 @@ record_cond (cond_equivalence *p)
 
   initialize_hash_element_from_expr (&p->cond, p->value, element);
 
-  slot = avail_exprs.find_slot_with_hash (element, element->hash, INSERT);
+  slot = avail_exprs->find_slot_with_hash (element, element->hash, INSERT);
   if (*slot == NULL)
     {
       *slot = element;
@@ -1566,33 +1569,6 @@ record_const_or_copy_1 (tree x, tree y, tree prev_x)
   const_and_copies_stack.quick_push (x);
 }
 
-/* Return the loop depth of the basic block of the defining statement of X.
-   This number should not be treated as absolutely correct because the loop
-   information may not be completely up-to-date when dom runs.  However, it
-   will be relatively correct, and as more passes are taught to keep loop info
-   up to date, the result will become more and more accurate.  */
-
-int
-loop_depth_of_name (tree x)
-{
-  gimple defstmt;
-  basic_block defbb;
-
-  /* If it's not an SSA_NAME, we have no clue where the definition is.  */
-  if (TREE_CODE (x) != SSA_NAME)
-    return 0;
-
-  /* Otherwise return the loop depth of the defining statement's bb.
-     Note that there may not actually be a bb for this statement, if the
-     ssa_name is live on entry.  */
-  defstmt = SSA_NAME_DEF_STMT (x);
-  defbb = gimple_bb (defstmt);
-  if (!defbb)
-    return 0;
-
-  return bb_loop_depth (defbb);
-}
-
 /* Record that X is equal to Y in const_and_copies.  Record undo
    information in the block-local vector.  */
 
@@ -1632,8 +1608,7 @@ record_equality (tree x, tree y)
      long as we canonicalize on one value.  */
   if (is_gimple_min_invariant (y))
     ;
-  else if (is_gimple_min_invariant (x)
-	   || (loop_depth_of_name (x) <= loop_depth_of_name (y)))
+  else if (is_gimple_min_invariant (x))
     prev_x = x, x = y, y = prev_x, prev_x = prev_y;
   else if (prev_x && is_gimple_min_invariant (prev_x))
     x = y, y = prev_x, prev_x = prev_y;
@@ -2244,22 +2219,6 @@ cprop_operand (gimple stmt, use_operand_p op_p)
       if (!may_propagate_copy (op, val))
 	return;
 
-      /* Do not propagate addresses that point to volatiles into memory
-	 stmts without volatile operands.  */
-      if (POINTER_TYPE_P (TREE_TYPE (val))
-	  && TYPE_VOLATILE (TREE_TYPE (TREE_TYPE (val)))
-	  && gimple_has_mem_ops (stmt)
-	  && !gimple_has_volatile_ops (stmt))
-	return;
-
-      /* Do not propagate copies if the propagated value is at a deeper loop
-	 depth than the propagatee.  Otherwise, this may move loop variant
-	 variables outside of their loops and prevent coalescing
-	 opportunities.  If the value was loop invariant, it will be hoisted
-	 by LICM and exposed for copy propagation.  */
-      if (loop_depth_of_name (val) > loop_depth_of_name (op))
-	return;
-
       /* Do not propagate copies into simple IV increment statements.
          See PR23821 for how this can disturb IV analysis.  */
       if (TREE_CODE (val) != INTEGER_CST
@@ -2551,8 +2510,7 @@ lookup_avail_expr (gimple stmt, bool insert)
     return NULL_TREE;
 
   /* Finally try to find the expression in the main expression hash table.  */
-  slot = avail_exprs.find_slot_with_hash (&element, element.hash,
-					  (insert ? INSERT : NO_INSERT));
+  slot = avail_exprs->find_slot (&element, (insert ? INSERT : NO_INSERT));
   if (slot == NULL)
     {
       free_expr_hash_elt_contents (&element);
@@ -2680,6 +2638,33 @@ get_lhs_or_phi_result (gimple stmt)
     gcc_unreachable ();
 }
 
+/* Return the loop depth of the basic block of the defining statement of X.
+   This number should not be treated as absolutely correct because the loop
+   information may not be completely up-to-date when dom runs.  However, it
+   will be relatively correct, and as more passes are taught to keep loop info
+   up to date, the result will become more and more accurate.  */
+
+static int
+loop_depth_of_name (tree x)
+{
+  gimple defstmt;
+  basic_block defbb;
+
+  /* If it's not an SSA_NAME, we have no clue where the definition is.  */
+  if (TREE_CODE (x) != SSA_NAME)
+    return 0;
+
+  /* Otherwise return the loop depth of the defining statement's bb.
+     Note that there may not actually be a bb for this statement, if the
+     ssa_name is live on entry.  */
+  defstmt = SSA_NAME_DEF_STMT (x);
+  defbb = gimple_bb (defstmt);
+  if (!defbb)
+    return 0;
+
+  return bb_loop_depth (defbb);
+}
+
 /* Propagate RHS into all uses of LHS (when possible).
 
    RHS and LHS are derived from STMT, which is passed in solely so
@@ -2694,12 +2679,8 @@ get_lhs_or_phi_result (gimple stmt)
 static void
 propagate_rhs_into_lhs (gimple stmt, tree lhs, tree rhs, bitmap interesting_names)
 {
-  /* First verify that propagation is valid and isn't going to move a
-     loop variant variable outside its loop.  */
-  if (! SSA_NAME_OCCURS_IN_ABNORMAL_PHI (lhs)
-      && (TREE_CODE (rhs) != SSA_NAME
-	  || ! SSA_NAME_OCCURS_IN_ABNORMAL_PHI (rhs))
-      && may_propagate_copy (lhs, rhs)
+  /* First verify that propagation is valid.  */
+  if (may_propagate_copy (lhs, rhs)
       && loop_depth_of_name (lhs) >= loop_depth_of_name (rhs))
     {
       use_operand_p use_p;
@@ -3038,7 +3019,6 @@ const pass_data pass_data_phi_only_cprop =
   GIMPLE_PASS, /* type */
   "phicprop", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_PHI_CPROP, /* tv_id */
   ( PROP_cfg | PROP_ssa ), /* properties_required */
   0, /* properties_provided */
@@ -3128,8 +3108,7 @@ pass_phi_only_cprop::execute (function *fun)
     {
       free_dominance_info (CDI_DOMINATORS);
       /* If we changed the CFG schedule loops for fixup by cfgcleanup.  */
-      if (current_loops)
-	loops_state_set (LOOPS_NEED_FIXUP);
+      loops_state_set (LOOPS_NEED_FIXUP);
     }
 
   /* Propagation of const and copies may make some EH edges dead.  Purge

@@ -1244,11 +1244,10 @@ loop_single_full_bb_p (struct loop *loop)
 static void
 dump_insn_location (rtx insn)
 {
-  if (dump_file && INSN_LOCATION (insn))
+  if (dump_file && INSN_HAS_LOCATION (insn))
     {
-      const char *file = insn_file (insn);
-      if (file)
-	fprintf (dump_file, " %s:%i", file, insn_line (insn));
+      expanded_location xloc = insn_location (insn);
+      fprintf (dump_file, " %s:%i", xloc.file, xloc.line);
     }
 }
 
@@ -3333,7 +3332,6 @@ const pass_data pass_data_sms =
   RTL_PASS, /* type */
   "sms", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_SMS, /* tv_id */
   0, /* properties_required */
   0, /* properties_provided */

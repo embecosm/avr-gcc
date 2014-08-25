@@ -316,6 +316,35 @@ if test x"$ac_cv_c_uint64_t" = x"no" -o x"$ac_cv_c_int64_t" = x"no"; then
   AC_MSG_ERROR([uint64_t or int64_t not found])
 fi
 
+# check what underlying integer type int64_t uses
+AC_LANG_PUSH(C++)
+AC_CACHE_CHECK(for int64_t underlying type, ac_cv_int64_t_type, [
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif
+template <typename T> struct X { };
+template <>
+struct X<long> { typedef long t; };
+]], [[X<int64_t>::t x;]])],[ac_cv_int64_t_type=long],[ac_cv_int64_t_type="long long"])])
+if test "$ac_cv_int64_t_type" = "long"; then
+  AC_DEFINE(INT64_T_IS_LONG, 1,
+  [Define if int64_t uses long as underlying type.])
+else
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif
+template <typename T> struct X { };
+template <>
+struct X<long long> { typedef long long t; };
+]], [[X<int64_t>::t x;]])],[],[AC_MSG_ERROR([error verifying int64_t uses long long])])
+fi
+AC_LANG_POP(C++)
+
+
+
+
 # ---------------------
 # Warnings and checking
 # ---------------------
@@ -1055,13 +1084,18 @@ LIBS="$save_LIBS"
 AC_SUBST(LDEXP_LIB)
 
 # Use <inttypes.h> only if it exists,
-# doesn't clash with <sys/types.h>, and declares intmax_t.
+# doesn't clash with <sys/types.h>, declares intmax_t and defines
+# PRId64
 AC_MSG_CHECKING(for inttypes.h)
 AC_CACHE_VAL(gcc_cv_header_inttypes_h,
 [AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
-[[#include <sys/types.h>
+[[#define __STDC_FORMAT_MACROS
+#include <sys/types.h>
 #include <inttypes.h>]],
-  [[intmax_t i = -1;]])],
+  [[intmax_t i = -1;
+#ifndef PRId64
+choke me
+#endif]])],
   [gcc_cv_header_inttypes_h=yes],
   [gcc_cv_header_inttypes_h=no])])
 AC_MSG_RESULT($gcc_cv_header_inttypes_h)
@@ -1136,7 +1170,7 @@ CFLAGS="$CFLAGS -I${srcdir} -I${srcdir}/../include $GMPINC"
 saved_CXXFLAGS="$CXXFLAGS"
 CXXFLAGS="$CXXFLAGS -I${srcdir} -I${srcdir}/../include $GMPINC"
 gcc_AC_CHECK_DECLS(getenv atol asprintf sbrk abort atof getcwd getwd \
-	strsignal strstr stpcpy strverscmp \
+	stpcpy strnlen strsignal strstr strverscmp \
 	errno snprintf vsnprintf vasprintf malloc realloc calloc \
 	free basename getopt clock getpagesize ffs gcc_UNLOCKED_FUNCS, , ,[
 #include "ansidecl.h"
@@ -4372,6 +4406,30 @@ if test x"$insn" != x; then
 [Define if your assembler supports the --debug-prefix-map option.])])
 fi
 
+gcc_GAS_CHECK_FEATURE([compressed debug sections],
+  gcc_cv_as_compress_debug,,[--compress-debug-sections],,
+  [# gas compiled without zlib cannot compress debug sections and warns
+   # about it, but still exits successfully.  So check for this, too.
+   if $gcc_cv_as --compress-debug-sections -o conftest.o conftest.s 2>&1 | grep -i warning > /dev/null
+   then
+     gcc_cv_as_compress_debug=0
+   elif $gcc_cv_as --compress-debug-sections -o conftest.o conftest.s > /dev/null 2>&1
+   then
+     gcc_cv_as_compress_debug=1
+     gcc_cv_as_compress_debug_option="--compress-debug-sections"
+     gcc_cv_as_no_compress_debug_option="--nocompress-debug-sections"
+   else
+     gcc_cv_as_compress_debug=0
+   # FIXME: Future gas versions will support ELF gABI style via
+   # --compress-debug-sections[=type].
+   fi])
+AC_DEFINE_UNQUOTED(HAVE_AS_COMPRESS_DEBUG, $gcc_cv_as_compress_debug,
+[Define to the level of your assembler's compressed debug section support.])
+AC_DEFINE_UNQUOTED(AS_COMPRESS_DEBUG_OPTION, "$gcc_cv_as_compress_debug_option",
+[Define to the assembler option to enable compressed debug sections.])
+AC_DEFINE_UNQUOTED(AS_NO_COMPRESS_DEBUG_OPTION, "$gcc_cv_as_no_compress_debug_option",
+[Define to the assembler option to disable compressed debug sections.])
+
 gcc_GAS_CHECK_FEATURE([.lcomm with alignment], gcc_cv_as_lcomm_with_alignment,
  ,,
 [.lcomm bar,4,16],,
@@ -4677,6 +4735,60 @@ if test x$gcc_cv_ld_eh_gc_sections_bug = xyes; then
    sections support when .text.startup.foo like sections are used.])
 fi
 AC_MSG_RESULT($gcc_cv_ld_eh_gc_sections_bug)
+
+AC_MSG_CHECKING(linker for compressed debug sections)
+# gold/gld support compressed debug sections since binutils 2.19/2.21
+if test $in_tree_ld = yes ; then
+  gcc_cv_ld_compress_debug=0
+  if test "$gcc_cv_gld_major_version" -eq 2 -a "$gcc_cv_gld_minor_version" -ge 19 -o "$gcc_cv_gld_major_version" -gt 2 \
+     && test $in_tree_ld_is_elf = yes && test $ld_is_gold = yes; then
+    gcc_cv_ld_compress_debug=2
+    gcc_cv_ld_compress_debug_option="--compress-debug-sections"
+  elif test "$gcc_cv_gld_major_version" -eq 2 -a "$gcc_cv_gld_minor_version" -ge 21 -o "$gcc_cv_gld_major_version" -gt 2 \
+     && test $in_tree_ld_is_elf = yes; then
+    gcc_cv_ld_compress_debug=1
+  fi
+elif echo "$ld_ver" | grep GNU > /dev/null; then
+  gcc_cv_ld_compress_debug=1
+  if test 0"$ld_date" -lt 20050308; then
+    if test -n "$ld_date"; then
+      # If there was date string, but was earlier than 2005-03-08, fail
+      gcc_cv_ld_compress_debug=0
+    elif test "$ld_vers_major" -lt 2; then
+      gcc_cv_ld_compress_debug=0
+    elif test "$ld_vers_major" -eq 2 -a "$ld_vers_minor" -lt 21; then
+      gcc_cv_ld_compress_debug=0
+    fi
+  fi
+  if test $ld_is_gold = yes; then
+    gcc_cv_ld_compress_debug=2
+    gcc_cv_ld_compress_debug_option="--compress-debug-sections"
+  fi
+else
+changequote(,)dnl
+  case "${target}" in
+    *-*-solaris2*)
+      # Introduced in Solaris 11.2.
+      if $gcc_cv_ld --help 2>&1 | grep -- '-z compress-sections' > /dev/null; then
+        gcc_cv_ld_compress_debug=3
+        gcc_cv_ld_compress_debug_option="-z compress-sections"
+      else
+        gcc_cv_ld_compress_debug=0
+      fi
+      ;;
+    *)
+      # Assume linkers other than GNU ld don't support compessed debug
+      # sections.
+      gcc_cv_ld_compress_debug=0
+      ;;
+  esac
+changequote([,])dnl
+fi
+AC_DEFINE_UNQUOTED(HAVE_LD_COMPRESS_DEBUG, $gcc_cv_ld_compress_debug,
+[Define to the level of your linker's compressed debug section support.])
+AC_DEFINE_UNQUOTED(LD_COMPRESS_DEBUG_OPTION, "$gcc_cv_ld_compress_debug_option",
+[Define to the linker option to enable compressed debug sections.])
+AC_MSG_RESULT($gcc_cv_ld_compress_debug)
 
 # --------
 # UNSORTED

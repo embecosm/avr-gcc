@@ -780,22 +780,6 @@ store_init_value (tree decl, tree init, vec<tree, va_gc>** cleanups, int flags)
 	  init = build_constructor_from_list (init_list_type_node, nreverse (init));
 	}
     }
-  else if (TREE_CODE (init) == TREE_LIST
-	   && TREE_TYPE (init) != unknown_type_node)
-    {
-      gcc_assert (TREE_CODE (decl) != RESULT_DECL);
-
-      if (TREE_CODE (init) == TREE_LIST
-	       && TREE_CODE (TREE_TYPE (decl)) == ARRAY_TYPE)
-	{
-	  error ("cannot initialize arrays using this syntax");
-	  return NULL_TREE;
-	}
-      else
-	/* We get here with code like `int a (2);' */
-	init = build_x_compound_expr_from_list (init, ELK_INIT,
-						tf_warning_or_error);
-    }
 
   /* End of special C++ code.  */
 
@@ -1358,37 +1342,32 @@ process_init_constructor_record (tree type, tree init,
 	  next = massage_init_elt (TREE_TYPE (field), next, complain);
 
 	  /* Warn when some struct elements are implicitly initialized.  */
-	  warning (OPT_Wmissing_field_initializers,
-		   "missing initializer for member %qD", field);
+	  if (complain & tf_warning)
+	    warning (OPT_Wmissing_field_initializers,
+		     "missing initializer for member %qD", field);
 	}
       else
 	{
-	  if (TREE_READONLY (field))
-	    {
-	      if (complain & tf_error)
-		error ("uninitialized const member %qD", field);
-	      else
-		return PICFLAG_ERRONEOUS;
-	    }
-	  else if (CLASSTYPE_READONLY_FIELDS_NEED_INIT (TREE_TYPE (field)))
-	    {
-	      if (complain & tf_error)
-		error ("member %qD with uninitialized const fields", field);
-	      else
-		return PICFLAG_ERRONEOUS;
-	    }
-	  else if (TREE_CODE (TREE_TYPE (field)) == REFERENCE_TYPE)
+	  if (TREE_CODE (TREE_TYPE (field)) == REFERENCE_TYPE)
 	    {
 	      if (complain & tf_error)
 		error ("member %qD is uninitialized reference", field);
 	      else
 		return PICFLAG_ERRONEOUS;
 	    }
+	  else if (CLASSTYPE_REF_FIELDS_NEED_INIT (TREE_TYPE (field)))
+	    {
+	      if (complain & tf_error)
+		error ("member %qD with uninitialized reference fields", field);
+	      else
+		return PICFLAG_ERRONEOUS;
+	    }
 
 	  /* Warn when some struct elements are implicitly initialized
 	     to zero.  */
-	  warning (OPT_Wmissing_field_initializers,
-		   "missing initializer for member %qD", field);
+	  if (complain & tf_warning)
+	    warning (OPT_Wmissing_field_initializers,
+		     "missing initializer for member %qD", field);
 
 	  if (!zero_init_p (TREE_TYPE (field)))
 	    next = build_zero_init (TREE_TYPE (field), /*nelts=*/NULL_TREE,

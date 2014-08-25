@@ -1008,6 +1008,11 @@ gfc_check_atan2 (gfc_expr *y, gfc_expr *x)
 static bool
 gfc_check_atomic (gfc_expr *atom, gfc_expr *value)
 {
+  if (atom->expr_type == EXPR_FUNCTION
+      && atom->value.function.isym
+      && atom->value.function.isym->id == GFC_ISYM_CAF_GET)
+    atom = atom->value.function.actual->expr;
+
   if (!(atom->ts.type == BT_INTEGER && atom->ts.kind == gfc_atomic_int_kind)
       && !(atom->ts.type == BT_LOGICAL
 	   && atom->ts.kind == gfc_atomic_logical_kind))
@@ -1040,6 +1045,11 @@ gfc_check_atomic (gfc_expr *atom, gfc_expr *value)
 bool
 gfc_check_atomic_def (gfc_expr *atom, gfc_expr *value)
 {
+  if (atom->expr_type == EXPR_FUNCTION
+      && atom->value.function.isym
+      && atom->value.function.isym->id == GFC_ISYM_CAF_GET)
+    atom = atom->value.function.actual->expr;
+
   if (!scalar_check (atom, 0) || !scalar_check (value, 1))
     return false;
 
@@ -1296,6 +1306,18 @@ check_co_minmaxsum (gfc_expr *a, gfc_expr *result_image, gfc_expr *stat,
 {
   if (!variable_check (a, 0, false))
     return false;
+
+  if (!gfc_check_vardef_context (a, false, false, false, "argument 'A' with "
+				 "INTENT(INOUT)"))
+    return false;
+
+  if (gfc_has_vector_subscript (a))
+    {
+      gfc_error ("Argument 'A' with INTENT(INOUT) at %L of the intrinsic "
+		 "subroutine %s shall not have a vector subscript",
+		 &a->where, gfc_current_intrinsic);
+      return false;
+    }
 
   if (result_image != NULL)
     {
@@ -5206,8 +5228,10 @@ gfc_check_second_sub (gfc_expr *time)
 }
 
 
-/* The arguments of SYSTEM_CLOCK are scalar, integer variables.  Note,
-   count, count_rate, and count_max are all optional arguments */
+/* COUNT and COUNT_MAX of SYSTEM_CLOCK are scalar, default-kind integer
+   variables in Fortran 95.  In Fortran 2003 and later, they can be of any
+   kind, and COUNT_RATE can be of type real.  Note, count, count_rate, and
+   count_max are all optional arguments */
 
 bool
 gfc_check_system_clock (gfc_expr *count, gfc_expr *count_rate,
@@ -5221,6 +5245,12 @@ gfc_check_system_clock (gfc_expr *count, gfc_expr *count_rate,
       if (!type_check (count, 0, BT_INTEGER))
 	return false;
 
+      if (count->ts.kind != gfc_default_integer_kind
+	  && !gfc_notify_std (GFC_STD_F2003, "COUNT argument to "
+			      "SYSTEM_CLOCK at %L has non-default kind",
+			      &count->where))
+	return false;
+
       if (!variable_check (count, 0, false))
 	return false;
     }
@@ -5230,15 +5260,26 @@ gfc_check_system_clock (gfc_expr *count, gfc_expr *count_rate,
       if (!scalar_check (count_rate, 1))
 	return false;
 
-      if (!type_check (count_rate, 1, BT_INTEGER))
-	return false;
-
       if (!variable_check (count_rate, 1, false))
 	return false;
 
-      if (count != NULL
-	  && !same_type_check (count, 0, count_rate, 1))
-	return false;
+      if (count_rate->ts.type == BT_REAL)
+	{
+	  if (!gfc_notify_std (GFC_STD_F2003, "Real COUNT_RATE argument to "
+			       "SYSTEM_CLOCK at %L", &count_rate->where))
+	    return false;
+	}
+      else
+	{
+	  if (!type_check (count_rate, 1, BT_INTEGER))
+	    return false;
+
+	  if (count_rate->ts.kind != gfc_default_integer_kind
+	      && !gfc_notify_std (GFC_STD_F2003, "COUNT_RATE argument to "
+				  "SYSTEM_CLOCK at %L has non-default kind",
+				  &count_rate->where))
+	    return false;
+	}
 
     }
 
@@ -5250,15 +5291,13 @@ gfc_check_system_clock (gfc_expr *count, gfc_expr *count_rate,
       if (!type_check (count_max, 2, BT_INTEGER))
 	return false;
 
+      if (count_max->ts.kind != gfc_default_integer_kind
+	  && !gfc_notify_std (GFC_STD_F2003, "COUNT_MAX argument to "
+			      "SYSTEM_CLOCK at %L has non-default kind",
+			      &count_max->where))
+	return false;
+
       if (!variable_check (count_max, 2, false))
-	return false;
-
-      if (count != NULL
-	  && !same_type_check (count, 0, count_max, 2))
-	return false;
-
-      if (count_rate != NULL
-	  && !same_type_check (count_rate, 1, count_max, 2))
 	return false;
     }
 

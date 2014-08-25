@@ -225,7 +225,7 @@ finally_tree_hasher::equal (const value_type *v, const compare_type *c)
 }
 
 /* Note that this table is *not* marked GTY.  It is short-lived.  */
-static hash_table <finally_tree_hasher> finally_tree;
+static hash_table<finally_tree_hasher> *finally_tree;
 
 static void
 record_in_finally_tree (treemple child, gimple parent)
@@ -237,7 +237,7 @@ record_in_finally_tree (treemple child, gimple parent)
   n->child = child;
   n->parent = parent;
 
-  slot = finally_tree.find_slot (n, INSERT);
+  slot = finally_tree->find_slot (n, INSERT);
   gcc_assert (!*slot);
   *slot = n;
 }
@@ -316,7 +316,7 @@ outside_finally_tree (treemple start, gimple target)
   do
     {
       n.child = start;
-      p = finally_tree.find (&n);
+      p = finally_tree->find (&n);
       if (!p)
 	return true;
       start.g = p->parent;
@@ -2130,7 +2130,6 @@ const pass_data pass_data_lower_eh =
   GIMPLE_PASS, /* type */
   "eh", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_EH, /* tv_id */
   PROP_gimple_lcf, /* properties_required */
   PROP_gimple_leh, /* properties_provided */
@@ -2161,7 +2160,7 @@ pass_lower_eh::execute (function *fun)
   if (bodyp == NULL)
     return 0;
 
-  finally_tree.create (31);
+  finally_tree = new hash_table<finally_tree_hasher> (31);
   eh_region_may_contain_throw_map = BITMAP_ALLOC (NULL);
   memset (&null_state, 0, sizeof (null_state));
 
@@ -2179,7 +2178,8 @@ pass_lower_eh::execute (function *fun)
      didn't change its value, and we don't have to re-set the function.  */
   gcc_assert (bodyp == gimple_body (current_function_decl));
 
-  finally_tree.dispose ();
+  delete finally_tree;
+  finally_tree = NULL;
   BITMAP_FREE (eh_region_may_contain_throw_map);
   eh_seq = NULL;
 
@@ -3117,7 +3117,6 @@ const pass_data pass_data_refactor_eh =
   GIMPLE_PASS, /* type */
   "ehopt", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_EH, /* tv_id */
   PROP_gimple_lcf, /* properties_required */
   0, /* properties_provided */
@@ -3212,8 +3211,7 @@ lower_resx (basic_block bb, gimple stmt, struct pointer_map_t *mnt_map)
 	      gimple_stmt_iterator gsi2;
 
 	      new_bb = create_empty_bb (bb);
-	      if (current_loops)
-		add_bb_to_loop (new_bb, bb->loop_father);
+	      add_bb_to_loop (new_bb, bb->loop_father);
 	      lab = gimple_block_label (new_bb);
 	      gsi2 = gsi_start_bb (new_bb);
 
@@ -3310,7 +3308,6 @@ const pass_data pass_data_lower_resx =
   GIMPLE_PASS, /* type */
   "resx", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_EH, /* tv_id */
   PROP_gimple_lcf, /* properties_required */
   0, /* properties_provided */
@@ -3710,7 +3707,6 @@ const pass_data pass_data_lower_eh_dispatch =
   GIMPLE_PASS, /* type */
   "ehdisp", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_EH, /* tv_id */
   PROP_gimple_lcf, /* properties_required */
   0, /* properties_provided */
@@ -4210,8 +4206,7 @@ cleanup_empty_eh_merge_phis (basic_block new_bb, basic_block old_bb,
 	   we may have created a loop with multiple latches.
 	   All of this isn't easily fixed thus cancel the affected loop
 	   and mark the other loop as possibly having multiple latches.  */
-	if (current_loops
-	    && e->dest == e->dest->loop_father->header)
+	if (e->dest == e->dest->loop_father->header)
 	  {
 	    e->dest->loop_father->header = NULL;
 	    e->dest->loop_father->latch = NULL;
@@ -4569,7 +4564,6 @@ const pass_data pass_data_cleanup_eh =
   GIMPLE_PASS, /* type */
   "ehcleanup", /* name */
   OPTGROUP_NONE, /* optinfo_flags */
-  true, /* has_execute */
   TV_TREE_EH, /* tv_id */
   PROP_gimple_lcf, /* properties_required */
   0, /* properties_provided */

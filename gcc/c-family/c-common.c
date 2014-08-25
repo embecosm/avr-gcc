@@ -301,7 +301,7 @@ struct visibility_flags visibility_options;
 
 static tree c_fully_fold_internal (tree expr, bool, bool *, bool *);
 static tree check_case_value (tree);
-static bool check_case_bounds (tree, tree, tree *, tree *);
+static bool check_case_bounds (location_t, tree, tree, tree *, tree *);
 
 static tree handle_packed_attribute (tree *, tree, tree, int, bool *);
 static tree handle_nocommon_attribute (tree *, tree, tree, int, bool *);
@@ -1722,6 +1722,29 @@ warn_logical_operator (location_t location, enum tree_code code, tree type,
     }
 }
 
+/* Warn about logical not used on the left hand side operand of a comparison.
+   This function assumes that the LHS is inside of TRUTH_NOT_EXPR.
+   Do not warn if the LHS or RHS is of a boolean or a vector type.  */
+
+void
+warn_logical_not_parentheses (location_t location, enum tree_code code,
+			      tree lhs, tree rhs)
+{
+  if (TREE_CODE_CLASS (code) != tcc_comparison)
+    return;
+  if (TREE_TYPE (lhs) == NULL_TREE
+      || TREE_TYPE (rhs) == NULL_TREE)
+    ;
+  else if (TREE_CODE (TREE_TYPE (lhs)) == BOOLEAN_TYPE
+	   || TREE_CODE (TREE_TYPE (rhs)) == BOOLEAN_TYPE
+	   || VECTOR_TYPE_P (TREE_TYPE (lhs))
+	   || VECTOR_TYPE_P (TREE_TYPE (rhs)))
+    return;
+
+  warning_at (location, OPT_Wlogical_not_parentheses,
+	      "logical not is only applied to the left hand side of "
+	      "comparison");
+}
 
 /* Warn if EXP contains any computations whose results are not used.
    Return true if a warning is printed; false otherwise.  LOCUS is the
@@ -3355,7 +3378,7 @@ check_case_value (tree value)
    untouched) or false if the label is out of range.  */
 
 static bool
-check_case_bounds (tree type, tree orig_type,
+check_case_bounds (location_t loc, tree type, tree orig_type,
 		   tree *case_low_p, tree *case_high_p)
 {
   tree min_value, max_value;
@@ -3373,7 +3396,8 @@ check_case_bounds (tree type, tree orig_type,
   if (tree_int_cst_compare (case_low, min_value) < 0
       && tree_int_cst_compare (case_high, min_value) < 0)
     {
-      warning (0, "case label value is less than minimum value for type");
+      warning_at (loc, 0, "case label value is less than minimum value "
+		  "for type");
       return false;
     }
 
@@ -3381,7 +3405,7 @@ check_case_bounds (tree type, tree orig_type,
   if (tree_int_cst_compare (case_low, max_value) > 0
       && tree_int_cst_compare (case_high, max_value) > 0)
     {
-      warning (0, "case label value exceeds maximum value for type");
+      warning_at (loc, 0, "case label value exceeds maximum value for type");
       return false;
     }
 
@@ -3389,8 +3413,8 @@ check_case_bounds (tree type, tree orig_type,
   if (tree_int_cst_compare (case_high, min_value) >= 0
       && tree_int_cst_compare (case_low, min_value) < 0)
     {
-      warning (0, "lower value in case label range"
-	       " less than minimum value for type");
+      warning_at (loc, 0, "lower value in case label range"
+		  " less than minimum value for type");
       case_low = min_value;
     }
 
@@ -3398,8 +3422,8 @@ check_case_bounds (tree type, tree orig_type,
   if (tree_int_cst_compare (case_low, max_value) <= 0
       && tree_int_cst_compare (case_high, max_value) > 0)
     {
-      warning (0, "upper value in case label range"
-	       " exceeds maximum value for type");
+      warning_at (loc, 0, "upper value in case label range"
+		  " exceeds maximum value for type");
       case_high = max_value;
     }
 
@@ -6014,7 +6038,7 @@ c_add_case_label (location_t loc, splay_tree cases, tree cond, tree orig_type,
      expression.  If both low_value and high_value are out of range,
      don't insert the case label and return NULL_TREE.  */
   if (low_value
-      && !check_case_bounds (type, orig_type,
+      && !check_case_bounds (loc, type, orig_type,
 			     &low_value, high_value ? &high_value : NULL))
     return NULL_TREE;
 
@@ -6551,9 +6575,11 @@ handle_noreturn_attribute (tree *node, tree name, tree ARG_UNUSED (args),
   else if (TREE_CODE (type) == POINTER_TYPE
 	   && TREE_CODE (TREE_TYPE (type)) == FUNCTION_TYPE)
     TREE_TYPE (*node)
-      = build_pointer_type
-	(build_type_variant (TREE_TYPE (type),
-			     TYPE_READONLY (TREE_TYPE (type)), 1));
+      = (build_qualified_type
+	 (build_pointer_type
+	  (build_type_variant (TREE_TYPE (type),
+			       TYPE_READONLY (TREE_TYPE (type)), 1)),
+	  TYPE_QUALS (type)));
   else
     {
       warning (OPT_Wattributes, "%qE attribute ignored", name);
@@ -6964,9 +6990,11 @@ handle_const_attribute (tree *node, tree name, tree ARG_UNUSED (args),
   else if (TREE_CODE (type) == POINTER_TYPE
 	   && TREE_CODE (TREE_TYPE (type)) == FUNCTION_TYPE)
     TREE_TYPE (*node)
-      = build_pointer_type
-	(build_type_variant (TREE_TYPE (type), 1,
-			     TREE_THIS_VOLATILE (TREE_TYPE (type))));
+      = (build_qualified_type
+	 (build_pointer_type
+	  (build_type_variant (TREE_TYPE (type), 1,
+			       TREE_THIS_VOLATILE (TREE_TYPE (type)))),
+	  TYPE_QUALS (type)));
   else
     {
       warning (OPT_Wattributes, "%qE attribute ignored", name);
@@ -7402,8 +7430,8 @@ handle_section_attribute (tree *node, tree ARG_UNUSED (name), tree args,
 
 	  /* The decl may have already been given a section attribute
 	     from a previous declaration.  Ensure they match.  */
-	  else if (DECL_SECTION_NAME (decl) != NULL_TREE
-		   && strcmp (TREE_STRING_POINTER (DECL_SECTION_NAME (decl)),
+	  else if (DECL_SECTION_NAME (decl) != NULL
+		   && strcmp (DECL_SECTION_NAME (decl),
 			      TREE_STRING_POINTER (TREE_VALUE (args))) != 0)
 	    {
 	      error ("section of %q+D conflicts with previous declaration",
@@ -7418,7 +7446,8 @@ handle_section_attribute (tree *node, tree ARG_UNUSED (name), tree args,
 	      *no_add_attrs = true;
 	    }
 	  else
-	    DECL_SECTION_NAME (decl) = TREE_VALUE (args);
+	    set_decl_section_name (decl,
+				   TREE_STRING_POINTER (TREE_VALUE (args)));
 	}
       else
 	{
@@ -8011,7 +8040,7 @@ handle_tls_model_attribute (tree *node, tree name, tree args,
   else
     error ("tls_model argument must be one of \"local-exec\", \"initial-exec\", \"local-dynamic\" or \"global-dynamic\"");
 
-  DECL_TLS_MODEL (decl) = kind;
+  set_decl_tls_model (decl, kind);
   return NULL_TREE;
 }
 
@@ -10446,7 +10475,8 @@ get_atomic_generic_size (location_t loc, tree function,
 		    function);
 	  return 0;
 	}
-      size = tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (type)));
+      tree type_size = TYPE_SIZE_UNIT (TREE_TYPE (type));
+      size = type_size ? tree_to_uhwi (type_size) : 0;
       if (size != size_0)
 	{
 	  error_at (loc, "size mismatch in argument %d of %qE", x + 1,
