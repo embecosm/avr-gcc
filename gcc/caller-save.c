@@ -1152,9 +1152,11 @@ replace_reg_with_saved_mem (rtx *loc,
 	  }
 	else
 	  {
-	    gcc_assert (save_mode[regno] != VOIDmode);
-	    XVECEXP (mem, 0, i) = gen_rtx_REG (save_mode [regno],
-					       regno + i);
+	    enum machine_mode smode = save_mode[regno];
+	    gcc_assert (smode != VOIDmode);
+	    if (hard_regno_nregs [regno][smode] > 1)
+	      smode = word_mode;
+	    XVECEXP (mem, 0, i) = gen_rtx_REG (smode, regno + i);
 	  }
     }
 

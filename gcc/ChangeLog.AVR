@@ -1,3 +1,8 @@
+2014-08-28  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* caller-save.c (replace_reg_with_saved_mem): If saved_mode covers
+	multiple hard registers, use word_mode.
+
 2014-08-25  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.opt (mrmw): New option.
