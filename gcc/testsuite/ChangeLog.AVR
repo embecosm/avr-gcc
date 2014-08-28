@@ -1,3 +1,7 @@
+2014-08-28  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* gcc.target/avr/tiny-caller-save.c: New test.
+
 2014-06-05  Joern Rennecke  <joern.rennecke@embecosm.com>
 	Cherry-pick from upstream/trunk:
 	2014-02-18  Nick Clifton  <nickc@redhat.com>
