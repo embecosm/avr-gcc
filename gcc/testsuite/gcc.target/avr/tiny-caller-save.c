@@ -1,5 +1,5 @@
 /* { dg-do compile } */
-/* { dg-options "-O1" } */
+/* { dg-options "-march=avrtiny -gdwarf -Os" } */
 
 /* This is a stripped down piece of libgcc2.c that triggerd an ICE for avr with
    "-march=avrtiny -g -Os"; replace_reg_with_saved_mem would generate:

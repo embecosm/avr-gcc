@@ -1,3 +1,7 @@
+2014-08-29  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* gcc.target/avr/tiny-caller-save.c: Fix dg-options.
+
 2014-08-28  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* gcc.target/avr/tiny-caller-save.c: New test.
