@@ -1,3 +1,11 @@
+2014-08-29  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr-c.c (avr_cpu_cpp_builtins): Don't define
+	__MEMX for avrtiny.
+	* config/avr/avr.c (avr_insert_attributes): Reject __memx for avrtiny.
+	(avr_nonconst_pointer_addrspace): Likewise.
+	* config/avr/avr.h (AVR_HAVE_LPM): Define.
+
 2014-08-28  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* caller-save.c (replace_reg_with_saved_mem): If saved_mode covers

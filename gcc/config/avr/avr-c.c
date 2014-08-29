@@ -393,7 +393,10 @@ avr_cpu_cpp_builtins (struct cpp_reader *pfile)
             /* Only supply __FLASH<n> macro if the address space is reasonable
                for this target.  The address space qualifier itself is still
                supported, but using it will throw an error.  */
-            && avr_addrspace[i].segment < avr_n_flash)
+            && avr_addrspace[i].segment < avr_n_flash
+	    /* Only support __MEMX macro if we have LPM.  */
+	    && (AVR_HAVE_LPM || avr_addrspace[i].pointer_size <= 2))
+
           {
             const char *name = avr_addrspace[i].name;
             char *Name = (char*) alloca (1 + strlen (name));

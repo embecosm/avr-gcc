@@ -9033,7 +9033,9 @@ avr_nonconst_pointer_addrspace (tree typ)
 
       if (!ADDR_SPACE_GENERIC_P (as)
           && (!TYPE_READONLY (target)
-              || avr_addrspace[as].segment >= avr_n_flash))
+              || avr_addrspace[as].segment >= avr_n_flash)
+	      /* Also refuse __memx address space if we can't support it.  */
+	      || (!AVR_HAVE_LPM && avr_addrspace[as].pointer_size > 2))
         {
           return as;
         }
@@ -9155,6 +9157,12 @@ avr_insert_attributes (tree node, tree *attributes)
                  " beyond flash of %qs",
                  node, avr_addrspace[as].name, avr_current_device->name);
         }
+      else if (!AVR_HAVE_LPM && avr_addrspace[as].pointer_size > 2)
+	{
+          error ("variable %q+D located in address space %qs"
+                 " which is not supported by %qs",
+                 node, avr_addrspace[as].name, avr_current_arch->arch_name);
+	}
 
       if (!TYPE_READONLY (node0)
           && !TREE_READONLY (node))
