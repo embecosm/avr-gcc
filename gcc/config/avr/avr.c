@@ -83,6 +83,17 @@
   ((SYMBOL_REF_FLAGS (sym) & AVR_SYMBOL_FLAG_PROGMEM)           \
    / SYMBOL_FLAG_MACH_DEP)
 
+#define TINY_ADIW(REG1, REG2, I)                                \
+    "subi " #REG1 ",lo8(-(" #I "))" CR_TAB                        \
+    "sbci " #REG2 ",hi8(-(" #I "))"        
+
+#define TINY_SBIW(REG1, REG2, I)                                \
+    "subi " #REG1 ",lo8((" #I "))" CR_TAB                         \
+    "sbci " #REG2 ",hi8((" #I "))"        
+
+#define AVR_TMP_REGNO (AVR_TINY ? TMP_REGNO_TINY : TMP_REGNO)
+#define AVR_ZERO_REGNO (AVR_TINY ? ZERO_REGNO_TINY : ZERO_REGNO)
+
 /* Known address spaces.  The order must be the same as in the respective
    enum from avr.h (or designated initialized must be used).  */
 const avr_addrspace_t avr_addrspace[ADDR_SPACE_COUNT] =
@@ -150,6 +161,9 @@ static bool avr_rtx_costs (rtx, int, int, int, int*, bool);
 
 /* Allocate registers from r25 to r8 for parameters for function calls.  */
 #define FIRST_CUM_REG 26
+
+/* Last call saved register */
+#define LAST_CALLEE_SAVED_REG (AVR_TINY ? 19 : 17)
 
 /* Implicit target register of LPM instruction (R0) */
 extern GTY(()) rtx lpm_reg_rtx;
@@ -360,7 +374,7 @@ avr_option_override (void)
   avr_addr.rampy = 0x3A + avr_current_arch->sfr_offset;
   avr_addr.rampx = 0x39 + avr_current_arch->sfr_offset;
   avr_addr.rampd = 0x38 + avr_current_arch->sfr_offset;
-  avr_addr.ccp = 0x34 + avr_current_arch->sfr_offset;
+  avr_addr.ccp = (AVR_TINY ? 0x3C : 0x34) + avr_current_arch->sfr_offset;
 
   /* SP: Stack Pointer (SP_H:SP_L) */
   avr_addr.sp_l = 0x3D + avr_current_arch->sfr_offset;
@@ -392,8 +406,8 @@ avr_init_expanders (void)
     all_regs_rtx[regno] = gen_rtx_REG (QImode, regno);
 
   lpm_reg_rtx  = all_regs_rtx[LPM_REGNO];
-  tmp_reg_rtx  = all_regs_rtx[TMP_REGNO];
-  zero_reg_rtx = all_regs_rtx[ZERO_REGNO];
+  tmp_reg_rtx  = all_regs_rtx[AVR_TMP_REGNO];
+  zero_reg_rtx = all_regs_rtx[AVR_ZERO_REGNO];
 
   lpm_addr_reg_rtx = gen_rtx_REG (HImode, REG_Z);
 
@@ -405,6 +419,11 @@ avr_init_expanders (void)
 
   xstring_empty = gen_rtx_CONST_STRING (VOIDmode, "");
   xstring_e = gen_rtx_CONST_STRING (VOIDmode, "e");
+
+  /* TINY core does not have regs r10-r16, but avr-dimode.md expects them
+     to be present */
+  if (AVR_TINY)
+    avr_have_dimode = false; 
 }
 
 
@@ -913,7 +932,7 @@ sequent_regs_live (void)
   int live_seq = 0;
   int cur_seq = 0;
 
-  for (reg = 0; reg < 18; ++reg)
+  for (reg = 0; reg <= LAST_CALLEE_SAVED_REG; ++reg)
     {
       if (fixed_regs[reg])
         {
@@ -1025,7 +1044,7 @@ emit_push_sfr (rtx sfr, bool frame_related_p, bool clr_p)
     RTX_FRAME_RELATED_P (insn) = 1;
 
   /* PUSH __tmp_reg__ */
-  emit_push_byte (TMP_REGNO, frame_related_p);
+  emit_push_byte (AVR_TMP_REGNO, frame_related_p);
 
   if (clr_p)
     {
@@ -1051,7 +1070,8 @@ avr_prologue_setup_frame (HOST_WIDE_INT size, HARD_REG_SET set)
                    && live_seq
                    && !isr_p
                    && !cfun->machine->is_OS_task
-                   && !cfun->machine->is_OS_main);
+                   && !cfun->machine->is_OS_main
+                   && !AVR_TINY);
 
   if (minimize
       && (frame_pointer_needed
@@ -1088,11 +1108,11 @@ avr_prologue_setup_frame (HOST_WIDE_INT size, HARD_REG_SET set)
       /* Note that live_seq always contains r28+r29, but the other
          registers to be saved are all below 18.  */
 
-      first_reg = 18 - (live_seq - 2);
+      first_reg = (LAST_CALLEE_SAVED_REG + 1) - (live_seq - 2);
 
       for (reg = 29, offset = -live_seq + 1;
            reg >= first_reg;
-           reg = (reg == 28 ? 17 : reg - 1), ++offset)
+           reg = (reg == 28 ? LAST_CALLEE_SAVED_REG : reg - 1), ++offset)
         {
           rtx m, r;
 
@@ -1331,10 +1351,10 @@ avr_expand_prologue (void)
         emit_insn (gen_enable_interrupt ());
 
       /* Push zero reg.  */
-      emit_push_byte (ZERO_REGNO, true);
+      emit_push_byte (AVR_ZERO_REGNO, true);
 
       /* Push tmp reg.  */
-      emit_push_byte (TMP_REGNO, true);
+      emit_push_byte (AVR_TMP_REGNO, true);
 
       /* Push SREG.  */
       /* ??? There's no dwarf2 column reserved for SREG.  */
@@ -1476,7 +1496,8 @@ avr_expand_epilogue (bool sibcall_p)
               && live_seq
               && !isr_p
               && !cfun->machine->is_OS_task
-              && !cfun->machine->is_OS_main);
+              && !cfun->machine->is_OS_main
+              && !AVR_TINY);
 
   if (minimize
       && (live_seq > 4
@@ -1634,14 +1655,14 @@ avr_expand_epilogue (bool sibcall_p)
 
       /* Restore SREG using tmp_reg as scratch.  */
 
-      emit_pop_byte (TMP_REGNO);
+      emit_pop_byte (AVR_TMP_REGNO);
       emit_move_insn (sreg_rtx, tmp_reg_rtx);
 
       /* Restore tmp REG.  */
-      emit_pop_byte (TMP_REGNO);
+      emit_pop_byte (AVR_TMP_REGNO);
 
       /* Restore zero REG.  */
-      emit_pop_byte (ZERO_REGNO);
+      emit_pop_byte (AVR_ZERO_REGNO);
     }
 
   if (!sibcall_p)
@@ -2123,10 +2144,14 @@ avr_print_operand_punct_valid_p (unsigned char code)
 static void
 avr_print_operand (FILE *file, rtx x, int code)
 {
-  int abcd = 0;
+  int abcd = 0, ef = 0, ij = 0;
 
   if (code >= 'A' && code <= 'D')
     abcd = code - 'A';
+  else if (code == 'E' || code == 'F')
+    ef = code - 'E';
+  else if (code == 'I' || code == 'J')
+    ij = code - 'I';
 
   if (code == '~')
     {
@@ -2163,6 +2188,16 @@ avr_print_operand (FILE *file, rtx x, int code)
       else
         fatal_insn ("operands to %T/%t must be reg + const_int:", x);
     }
+  else if (code == 'E' || code == 'F')
+    {
+      rtx op = XEXP(x, 0);
+      fprintf (file, reg_names[REGNO (op) + ef]);
+    }
+  else if (code == 'I' || code == 'J')
+    {
+      rtx op = XEXP(XEXP(x, 0), 0);
+      fprintf (file, reg_names[REGNO (op) + ij]);
+    }
   else if (REG_P (x))
     {
       if (x == zero_reg_rtx)
@@ -2189,7 +2224,7 @@ avr_print_operand (FILE *file, rtx x, int code)
             fprintf (file, "__RAMPX__");
           else if (AVR_HAVE_RAMPD && ival == avr_addr.rampd)
             fprintf (file, "__RAMPD__");
-          else if (AVR_XMEGA && ival == avr_addr.ccp)
+          else if ((AVR_XMEGA || AVR_TINY) && ival == avr_addr.ccp)
             fprintf (file, "__CCP__");
           else if (ival == avr_addr.sreg)   fprintf (file, "__SREG__");
           else if (ival == avr_addr.sp_l)   fprintf (file, "__SP_L__");
@@ -2231,6 +2266,13 @@ avr_print_operand (FILE *file, rtx x, int code)
             fatal_insn ("bad address, not (reg+disp):", addr);
 
           avr_print_operand (file, XEXP (addr, 1), 0);
+        }
+      else if (code == 'b')
+        {
+          if (GET_CODE (addr) != PLUS)
+               fatal_insn ("bad address, not (reg+disp):", addr);
+
+          avr_print_operand_address (file, XEXP (addr, 0));
         }
       else if (code == 'p' || code == 'r')
         {
@@ -2589,7 +2631,7 @@ avr_simplify_comparison_p (enum machine_mode mode, RTX_CODE op, rtx x)
 int
 avr_function_arg_regno_p(int r)
 {
-  return (r >= 8 && r <= 25);
+  return (AVR_TINY ? r >= 20 && r <= 25 : r >= 8 && r <= 25);
 }
 
 
@@ -2601,7 +2643,7 @@ void
 avr_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype, rtx libname,
                           tree fndecl ATTRIBUTE_UNUSED)
 {
-  cum->nregs = 18;
+  cum->nregs = AVR_TINY ? 6 : 18;
   cum->regno = FIRST_CUM_REG;
   if (!libname && stdarg_p (fntype))
     cum->nregs = 0;
@@ -3137,6 +3179,35 @@ avr_out_xload (rtx insn ATTRIBUTE_UNUSED, rtx *op, int *plen)
   return "";
 }
 
+/*
+AVRTC-579
+if operand is symbol or constant expression with value > 0xbf
+  return false, otherwise true
+This check is used to avoid lds/sts instruction with invalid memory
+access range (valid range 0x40..0xbf). For io operand range 0x0..0x3f,
+in/out instruction will be generated.
+*/
+bool tiny_valid_direct_memory_access_range(rtx op, enum machine_mode mode)
+{
+  rtx x;
+
+  if (!AVR_TINY)
+    return true;
+
+  x = XEXP(op,0);
+
+  if (MEM_P(op) && x && (GET_CODE(x) == SYMBOL_REF))
+  {
+    return false;
+  }
+  if (MEM_P(op) && x && (CONSTANT_ADDRESS_P (x)) &&
+     !(IN_RANGE (INTVAL (x), 0, 0xC0 - GET_MODE_SIZE (mode))))
+  {
+    return false;
+  }
+
+  return true;
+}
 
 const char*
 output_movqi (rtx insn, rtx operands[], int *plen)
@@ -3265,6 +3336,24 @@ output_movhi (rtx insn, rtx xop[], int *plen)
   return "";
 }
 
+/* Same as out_movqi_r_mr, but TINY does not have ADIW or SBIW */
+static const char*
+avr_out_movqi_r_mr_reg_disp_tiny (rtx insn, rtx op[], int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx x = XEXP (src, 0);
+
+  avr_asm_len (TINY_ADIW (%I1, %J1, %o1) CR_TAB
+          "ld %0,%b1" , op, plen, -3);
+
+  if (!reg_overlap_mentioned_p (dest, XEXP (x,0))
+          && !reg_unused_after (insn, XEXP (x,0)))
+      avr_asm_len (TINY_SBIW (%I1, %J1, %o1), op, plen, 2);
+
+  return "";
+}
+
 static const char*
 out_movqi_r_mr (rtx insn, rtx op[], int *plen)
 {
@@ -3274,17 +3363,22 @@ out_movqi_r_mr (rtx insn, rtx op[], int *plen)
 
   if (CONSTANT_ADDRESS_P (x))
     {
+      int n_words = AVR_TINY ? 1 : 2;
       return optimize > 0 && io_address_operand (x, QImode)
         ? avr_asm_len ("in %0,%i1", op, plen, -1)
-        : avr_asm_len ("lds %0,%m1", op, plen, -2);
+        : avr_asm_len ("lds %0,%m1", op, plen, -n_words);
     }
-  else if (GET_CODE (x) == PLUS
+
+  if (GET_CODE (x) == PLUS
            && REG_P (XEXP (x, 0))
            && CONST_INT_P (XEXP (x, 1)))
     {
       /* memory access by reg+disp */
 
       int disp = INTVAL (XEXP (x, 1));
+
+      if (AVR_TINY)
+        return avr_out_movqi_r_mr_reg_disp_tiny (insn, op, plen);
 
       if (disp - GET_MODE_SIZE (GET_MODE (src)) >= 63)
         {
@@ -3325,6 +3419,82 @@ out_movqi_r_mr (rtx insn, rtx op[], int *plen)
   return avr_asm_len ("ld %0,%1", op, plen, -1);
 }
 
+/* Same as movhi_r_mr, but TINY does not have ADIW, SBIW and LDD */
+static const char*
+avr_out_movhi_r_mr_reg_no_disp_tiny (rtx op[], int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (src, 0);
+
+  int reg_dest = true_regnum (dest);
+  int reg_base = true_regnum (base);
+
+  if (reg_dest == reg_base)         /* R = (R) */
+      return avr_asm_len ("ld __tmp_reg__,%1+" CR_TAB
+              "ld %B0,%1"          CR_TAB
+              "mov %A0,__tmp_reg__", op, plen, -3);
+
+  return avr_asm_len ("ld %A0,%1"             CR_TAB                        
+          TINY_ADIW (%E1, %F1, 1) CR_TAB                       
+          "ld %B0,%1"             CR_TAB                        
+          TINY_SBIW (%E1, %F1, 1), op, plen, -6);
+
+}
+
+/* Same as movhi_r_mr, but TINY does not have ADIW, SBIW and LDD */
+static const char*
+avr_out_movhi_r_mr_reg_disp_tiny (rtx op[], int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (src, 0);
+
+  int reg_dest = true_regnum (dest);
+  int reg_base = true_regnum (XEXP (base, 0));
+
+  if (reg_base == reg_dest)
+  {
+      return avr_asm_len (TINY_ADIW (%I1, %J1, %o1) CR_TAB
+              "ld __tmp_reg__,%b1+"    CR_TAB
+              "ld %B0,%b1"             CR_TAB 
+              "mov %A0,__tmp_reg__", op, plen, -5);
+  }
+  else
+  {
+      return avr_asm_len (TINY_ADIW (%I1, %J1, %o1) CR_TAB
+              "ld %A0,%b1+"             CR_TAB
+              "ld %B0,%b1"              CR_TAB
+              TINY_SBIW (%I1, %J1, %o1+1), op, plen, -6);
+  }
+} 
+
+/* Same as movhi_r_mr, but TINY does not have ADIW, SBIW and LDD */
+static const char*
+avr_out_movhi_r_mr_pre_dec_tiny (rtx insn, rtx op[], int *plen)
+{
+  int mem_volatile_p = 0;
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (src, 0);
+
+  /* "volatile" forces reading low byte first, even if less efficient,
+     for correct operation with 16-bit I/O registers.  */
+  mem_volatile_p = MEM_VOLATILE_P (src);
+
+  if (reg_overlap_mentioned_p (dest, XEXP (base, 0)))
+      fatal_insn ("incorrect insn:", insn);
+
+  if (!mem_volatile_p)
+      return avr_asm_len ("ld %B0,%1" CR_TAB
+              "ld %A0,%1", op, plen, -2);
+
+  return avr_asm_len (TINY_SBIW (%I1, %J1, 2)  CR_TAB
+          "ld %A0,%p1+"   CR_TAB
+          "ld %B0,%p1"    CR_TAB
+          TINY_SBIW (%I1, %J1, 1), op, plen, -6);
+}
+
 static const char*
 out_movhi_r_mr (rtx insn, rtx op[], int *plen)
 {
@@ -3339,6 +3509,9 @@ out_movhi_r_mr (rtx insn, rtx op[], int *plen)
 
   if (reg_base > 0)
     {
+      if (AVR_TINY)
+        return avr_out_movhi_r_mr_reg_no_disp_tiny (op, plen);
+
       if (reg_dest == reg_base)         /* R = (R) */
         return avr_asm_len ("ld __tmp_reg__,%1+" CR_TAB
                             "ld %B0,%1"          CR_TAB
@@ -3361,6 +3534,9 @@ out_movhi_r_mr (rtx insn, rtx op[], int *plen)
       int disp = INTVAL (XEXP (base, 1));
       int reg_base = true_regnum (XEXP (base, 0));
 
+      if (AVR_TINY)
+        return avr_out_movhi_r_mr_reg_disp_tiny (op, plen);
+
       if (disp > MAX_LD_OFFSET (GET_MODE (src)))
         {
           if (REGNO (XEXP (base, 0)) != REG_Y)
@@ -3372,7 +3548,7 @@ out_movhi_r_mr (rtx insn, rtx op[], int *plen)
                            "ldd %B0,Y+63"    CR_TAB
                            "sbiw r28,%o1-62", op, plen, -4)
 
-            : avr_asm_len ("subi r28,lo8(-%o1)" CR_TAB
+              : avr_asm_len ("subi r28,lo8(-%o1)" CR_TAB
                            "sbci r29,hi8(-%o1)" CR_TAB
                            "ld %A0,Y"           CR_TAB
                            "ldd %B0,Y+1"        CR_TAB
@@ -3406,6 +3582,9 @@ out_movhi_r_mr (rtx insn, rtx op[], int *plen)
     }
   else if (GET_CODE (base) == PRE_DEC) /* (--R) */
     {
+      if (AVR_TINY)
+          return avr_out_movhi_r_mr_pre_dec_tiny (insn, op, plen);
+
       if (reg_overlap_mentioned_p (dest, XEXP (base, 0)))
         fatal_insn ("incorrect insn:", insn);
 
@@ -3433,16 +3612,110 @@ out_movhi_r_mr (rtx insn, rtx op[], int *plen)
     }
   else if (CONSTANT_ADDRESS_P (base))
     {
+      int n_words = AVR_TINY ? 2 : 4;
       return optimize > 0 && io_address_operand (base, HImode)
         ? avr_asm_len ("in %A0,%i1" CR_TAB
                        "in %B0,%i1+1", op, plen, -2)
 
         : avr_asm_len ("lds %A0,%m1" CR_TAB
-                       "lds %B0,%m1+1", op, plen, -4);
+                       "lds %B0,%m1+1", op, plen, -n_words);
     }
 
   fatal_insn ("unknown move insn:",insn);
   return "";
+}
+
+static const char*
+avr_out_movsi_r_mr_reg_no_disp_tiny (rtx insn, rtx op[], int *l)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (src, 0);
+  int reg_dest = true_regnum (dest);
+  int reg_base = true_regnum (base);
+
+  if (reg_dest == reg_base)
+    {
+	  /* "ld r26,-X" is undefined */
+      return *l=9, (TINY_ADIW (%E1, %F1, 3) CR_TAB
+                    "ld %D0,%1"             CR_TAB
+                    "ld %C0,-%1"            CR_TAB
+                    "ld __tmp_reg__,-%1"   CR_TAB
+                    TINY_SBIW (%E1, %F1, 1) CR_TAB
+                    "ld %A0,%1"             CR_TAB
+                    "mov %B0,__tmp_reg__");
+    }
+  else if (reg_dest == reg_base - 2)
+    {
+      return *l=5, ("ld %A0,%1+"            CR_TAB
+                    "ld %B0,%1+"            CR_TAB
+                    "ld __tmp_reg__,%1+"   CR_TAB
+                    "ld %D0,%1"            CR_TAB
+                    "mov %C0,__tmp_reg__");
+    }
+  else if (reg_unused_after (insn, base))
+    {
+      return *l=4, ("ld %A0,%1+"    CR_TAB
+                    "ld %B0,%1+"    CR_TAB 
+                    "ld %C0,%1+"    CR_TAB
+                    "ld %D0,%1");
+    }
+  else
+    {
+      return *l=6, ("ld %A0,%1+"    CR_TAB
+                    "ld %B0,%1+"    CR_TAB 
+                    "ld %C0,%1+"    CR_TAB
+                    "ld %D0,%1"     CR_TAB
+                    TINY_SBIW (%E1, %F1, 3));
+    }
+}
+
+static const char*
+avr_out_movsi_r_mr_reg_disp_tiny (rtx insn, rtx op[], int *l)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (src, 0);
+  int reg_dest = true_regnum (dest);
+  int reg_base = true_regnum (XEXP (base, 0));
+
+  if (reg_dest == reg_base)
+    {
+	  /* "ld r26,-X" is undefined */
+      return *l=9, (TINY_ADIW (%I1, %J1, %o1+3) CR_TAB
+                    "ld %D0,%b1"                 CR_TAB
+                    "ld %C0,-%b1"                CR_TAB
+                    "ld __tmp_reg__,-%b1"        CR_TAB
+                    TINY_SBIW (%I1, %J1, 1)     CR_TAB
+                    "ld %A0,%b1"                 CR_TAB
+                    "mov %B0,__tmp_reg__");
+    }
+  else if (reg_dest == reg_base - 2)
+    {
+      return *l=7, (TINY_ADIW (%I1, %J1, %o1) CR_TAB
+                    "ld %A0,%b1+"              CR_TAB
+                    "ld %B0,%b1+"              CR_TAB
+                    "ld __tmp_reg__,%b1+"      CR_TAB
+                    "ld %D0,%b1"               CR_TAB
+                    "mov %C0,__tmp_reg__");
+    }
+  else if (reg_unused_after (insn, XEXP (base, 0)))
+    {
+      return *l=6, (TINY_ADIW (%I1, %J1, %o1) CR_TAB
+                    "ld %A0,%b1+"              CR_TAB
+                    "ld %B0,%b1+"              CR_TAB 
+                    "ld %C0,%b1+"              CR_TAB
+                    "ld %D0,%b1");
+    }
+  else
+    {
+      return *l=8, (TINY_ADIW (%I1, %J1, %o1) CR_TAB
+                    "ld %A0,%b1+"              CR_TAB
+                    "ld %B0,%b1+"              CR_TAB 
+                    "ld %C0,%b1+"              CR_TAB
+                    "ld %D0,%b1"               CR_TAB
+                    TINY_SBIW (%I1, %J1, %o1+3));
+    }
 }
 
 static const char*
@@ -3460,6 +3733,9 @@ out_movsi_r_mr (rtx insn, rtx op[], int *l)
 
   if (reg_base > 0)
     {
+      if (AVR_TINY)
+        return avr_out_movsi_r_mr_reg_no_disp_tiny (insn, op, l);
+
       if (reg_base == REG_X)        /* (R26) */
         {
           if (reg_dest == REG_X)
@@ -3513,6 +3789,9 @@ out_movsi_r_mr (rtx insn, rtx op[], int *l)
   else if (GET_CODE (base) == PLUS) /* (R + i) */
     {
       int disp = INTVAL (XEXP (base, 1));
+
+      if (AVR_TINY)
+        return avr_out_movsi_r_mr_reg_disp_tiny (insn, op, l);
 
       if (disp > MAX_LD_OFFSET (GET_MODE (src)))
 	{
@@ -3597,13 +3876,131 @@ out_movsi_r_mr (rtx insn, rtx op[], int *l)
 		  "ld %C0,%1" CR_TAB
 		  "ld %D0,%1");
   else if (CONSTANT_ADDRESS_P (base))
-    return *l=8, ("lds %A0,%m1"   CR_TAB
+    {
+      if (io_address_operand (base, SImode))
+        {
+          *l = 4;
+          return ("in %A0,%i1"   CR_TAB
+                  "in %B0,%i1+1" CR_TAB
+                  "in %C0,%i1+2" CR_TAB
+                  "in %D0,%i1+3");
+        }
+      else
+        {
+          *l = AVR_TINY ? 4 : 8;
+          return ("lds %A0,%m1"   CR_TAB
                   "lds %B0,%m1+1" CR_TAB
                   "lds %C0,%m1+2" CR_TAB
                   "lds %D0,%m1+3");
+        }
+    }
 
   fatal_insn ("unknown move insn:",insn);
   return "";
+}
+
+static const char*
+avr_out_movsi_mr_r_reg_no_disp_tiny (rtx insn, rtx op[], int *l)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (dest, 0);
+  int reg_base = true_regnum (base);
+  int reg_src = true_regnum (src);
+  
+  if (reg_base == reg_src)
+    {
+	  /* "ld r26,-X" is undefined */
+      if (reg_unused_after (insn, base))
+        { 
+          return *l=7, ("mov __tmp_reg__, %B1"  CR_TAB
+                        "st %0,%A1"             CR_TAB
+                        TINY_ADIW (%E0, %F0, 1) CR_TAB
+                        "st %0+,__tmp_reg__"    CR_TAB
+                        "st %0+,%C1"            CR_TAB
+                        "st %0+,%D1");
+        }
+      else
+        {
+          return *l=9, ("mov __tmp_reg__, %B1"  CR_TAB
+                        "st %0,%A1"             CR_TAB
+                        TINY_ADIW (%E0, %F0, 1) CR_TAB
+                        "st %0+,__tmp_reg__"    CR_TAB
+                        "st %0+,%C1"            CR_TAB
+                        "st %0+,%D1"            CR_TAB
+                        TINY_SBIW (%E0, %F0, 3));
+        }
+    }
+    else if (reg_base == reg_src + 2)
+      {
+        if (reg_unused_after (insn, base))
+          return *l=7, ("mov __zero_reg__,%C1" CR_TAB
+                        "mov __tmp_reg__,%D1"  CR_TAB
+                        "st %0+,%A1"           CR_TAB
+                        "st %0+,%B1"           CR_TAB
+                        "st %0+,__zero_reg__"  CR_TAB
+                        "st %0,__tmp_reg__"    CR_TAB
+                        "clr __zero_reg__");
+        else
+          return *l=9, ("mov __zero_reg__,%C1" CR_TAB
+                        "mov __tmp_reg__,%D1"  CR_TAB
+                        "st %0+,%A1"           CR_TAB
+                        "st %0+,%B1"           CR_TAB
+                        "st %0+,__zero_reg__"  CR_TAB
+                        "st %0,__tmp_reg__"    CR_TAB
+                        "clr __zero_reg__"     CR_TAB
+                        TINY_SBIW (%E0, %F0, 3));
+      }
+
+    return *l=6, ("st %0+,%A1" CR_TAB
+                  "st %0+,%B1" CR_TAB
+                  "st %0+,%C1" CR_TAB
+                  "st %0,%D1"  CR_TAB
+                  TINY_SBIW (%E0, %F0, 3));
+}
+
+static const char*
+avr_out_movsi_mr_r_reg_disp_tiny (rtx op[], int *l)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (dest, 0);
+  int reg_base = REGNO (XEXP (base, 0));
+  int reg_src =true_regnum (src);
+
+  if (reg_base == reg_src)
+    {
+	  *l = 11;
+	  return ("mov __tmp_reg__,%A2"        CR_TAB
+		      "mov __zero_reg__,%B2"       CR_TAB
+              TINY_ADIW (%I0, %J0, %o0)    CR_TAB
+		      "st %b0+,__tmp_reg__"        CR_TAB
+		      "st %b0+,__zero_reg__"       CR_TAB
+		      "st %b0+,%C2"                CR_TAB
+		      "st %b0,%D2"                 CR_TAB
+		      "clr __zero_reg__"           CR_TAB
+		      TINY_SBIW (%I0, %J0, %o0+3));
+	 }
+  else if (reg_src == reg_base - 2)
+    {
+	  *l = 11;
+	  return ("mov __tmp_reg__,%C2"         CR_TAB
+		      "mov __zero_reg__,%D2"        CR_TAB
+		      TINY_ADIW (%I0, %J0, %o0)     CR_TAB
+		      "st %b0+,%A0"                 CR_TAB
+		      "st %b0+,%B0"                 CR_TAB
+		      "st %b0+,__tmp_reg__"         CR_TAB
+		      "st %b0,__zero_reg__"         CR_TAB
+		      "clr __zero_reg__"            CR_TAB
+		      TINY_SBIW (%I0, %J0, %o0+3));
+	    }
+  *l = 8;
+  return (TINY_ADIW (%I0, %J0, %o0)     CR_TAB
+		  "st %b0+,%A1"                 CR_TAB
+		  "st %b0+,%B1"                 CR_TAB
+		  "st %b0+,%C1"                 CR_TAB
+		  "st %b0,%D1"                  CR_TAB
+		  TINY_SBIW (%I0, %J0, %o0+3));
 }
 
 static const char*
@@ -3620,12 +4017,29 @@ out_movsi_mr_r (rtx insn, rtx op[], int *l)
     l = &tmp;
 
   if (CONSTANT_ADDRESS_P (base))
-    return *l=8,("sts %m0,%A1" CR_TAB
-                 "sts %m0+1,%B1" CR_TAB
-                 "sts %m0+2,%C1" CR_TAB
-                 "sts %m0+3,%D1");
+    {
+      if (io_address_operand (base, SImode))
+        {
+          return *l=4,("out %i0, %A1"  CR_TAB
+                       "out %i0+1,%B1" CR_TAB
+                       "out %i0+2,%C1" CR_TAB
+                       "out %i0+3,%D1");
+        }
+      else
+        {
+          *l = AVR_TINY ? 4 : 8;
+          return ("sts %m0,%A1"   CR_TAB
+                  "sts %m0+1,%B1" CR_TAB
+                  "sts %m0+2,%C1" CR_TAB
+                  "sts %m0+3,%D1");
+        }
+    }
+
   if (reg_base > 0)                 /* (r) */
     {
+      if (AVR_TINY)
+        return avr_out_movsi_mr_r_reg_no_disp_tiny (insn, op, l);
+
       if (reg_base == REG_X)                /* (R26) */
         {
           if (reg_src == REG_X)
@@ -3682,6 +4096,10 @@ out_movsi_mr_r (rtx insn, rtx op[], int *l)
   else if (GET_CODE (base) == PLUS) /* (R + i) */
     {
       int disp = INTVAL (XEXP (base, 1));
+
+      if (AVR_TINY)
+        return avr_out_movsi_mr_r_reg_disp_tiny (op, l);
+
       reg_base = REGNO (XEXP (base, 0));
       if (disp > MAX_LD_OFFSET (GET_MODE (dest)))
 	{
@@ -3842,6 +4260,73 @@ output_movsisf (rtx insn, rtx operands[], int *l)
 /* Handle loads of 24-bit types from memory to register.  */
 
 static const char*
+avr_out_load_psi_reg_no_disp_tiny (rtx insn, rtx *op, int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (src, 0);
+  int reg_dest = true_regnum (dest);
+  int reg_base = true_regnum (base);
+
+  if (reg_base == reg_dest)
+    {
+      return avr_asm_len (TINY_ADIW (%E1, %F1, 2)   CR_TAB
+                          "ld %C0,%1"               CR_TAB
+                          "ld __tmp_reg__,-%1"     CR_TAB
+                          TINY_SBIW (%E1, %F1, 1)   CR_TAB
+                          "ld %A0,%1"              CR_TAB
+                          "mov %B0,__tmp_reg__", op, plen, -8);
+    }
+  else
+    {
+      return avr_asm_len ("ld %A0,%1+"  CR_TAB
+                          "ld %B0,%1+"  CR_TAB
+                          "ld %C0,%1", op, plen, -3);
+
+      if (reg_dest != reg_base - 2 &&
+          !reg_unused_after (insn, base))
+        {
+          avr_asm_len (TINY_SBIW (%E1, %F1, 2), op, plen, 2);
+        }
+      return "";
+    }
+}
+
+static const char*
+avr_out_load_psi_reg_disp_tiny (rtx insn, rtx *op, int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (src, 0);
+  int reg_dest = true_regnum (dest);
+  int reg_base = true_regnum (base);
+
+  reg_base = true_regnum (XEXP (base, 0));
+  if (reg_base == reg_dest)
+    {
+      return avr_asm_len (TINY_ADIW (%I1, %J1, %o1+2) CR_TAB
+                          "ld %C0,%b1"                CR_TAB
+                          "ld __tmp_reg__,-%b1"       CR_TAB
+                          TINY_SBIW (%I1, %J1, 1)     CR_TAB
+                          "ld %A0,%b1"                CR_TAB
+                          "mov %B0,__tmp_reg__", op, plen, -8);
+   }
+  else
+    {
+      avr_asm_len (TINY_ADIW (%I1, %J1, %o1)   CR_TAB
+                          "ld %A0,%b1+"              CR_TAB
+                          "ld %B0,%b1+"              CR_TAB  
+                          "ld %C0,%b1", op, plen, -5);
+
+      if (reg_dest != (reg_base - 2)
+          && !reg_unused_after (insn, XEXP (base, 0)))
+          avr_asm_len (TINY_SBIW (%I1, %J1, %o1+2), op, plen, 2);
+      
+      return "";
+    }
+}
+
+static const char*
 avr_out_load_psi (rtx insn, rtx *op, int *plen)
 {
   rtx dest = op[0];
@@ -3852,6 +4337,9 @@ avr_out_load_psi (rtx insn, rtx *op, int *plen)
 
   if (reg_base > 0)
     {
+      if (AVR_TINY)
+        return avr_out_load_psi_reg_no_disp_tiny (insn, op, plen);
+
       if (reg_base == REG_X)        /* (R26) */
         {
           if (reg_dest == REG_X)
@@ -3893,6 +4381,9 @@ avr_out_load_psi (rtx insn, rtx *op, int *plen)
   else if (GET_CODE (base) == PLUS) /* (R + i) */
     {
       int disp = INTVAL (XEXP (base, 1));
+
+      if (AVR_TINY)
+        return avr_out_load_psi_reg_disp_tiny (insn, op, plen);
 
       if (disp > MAX_LD_OFFSET (GET_MODE (src)))
         {
@@ -3962,12 +4453,92 @@ avr_out_load_psi (rtx insn, rtx *op, int *plen)
                         "ld %C0,%1", op, plen, -3);
 
   else if (CONSTANT_ADDRESS_P (base))
-    return avr_asm_len ("lds %A0,%m1" CR_TAB
-                        "lds %B0,%m1+1" CR_TAB
-                        "lds %C0,%m1+2", op, plen , -6);
+    {
+      int n_words = AVR_TINY ? 3 : 6;
+      return avr_asm_len ("lds %A0,%m1" CR_TAB
+                          "lds %B0,%m1+1" CR_TAB
+                          "lds %C0,%m1+2", op, plen , -n_words);
+    }
 
   fatal_insn ("unknown move insn:",insn);
   return "";
+}
+
+
+static const char*
+avr_out_store_psi_reg_no_disp_tiny (rtx insn, rtx *op, int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (dest, 0);
+  int reg_base = true_regnum (base);
+  int reg_src = true_regnum (src);
+
+  if (reg_base == reg_src)
+    {
+      avr_asm_len ("st %0,%A1"              CR_TAB
+                   "mov __tmp_reg__,%B1"    CR_TAB
+                   TINY_ADIW (%E0, %F0, 1)  CR_TAB /* st X+, r27 is undefined */
+                   "st %0+,__tmp_reg__"     CR_TAB
+                   "st %0,%C1", op, plen, -6);
+
+    }
+  else if (reg_src == reg_base - 2)
+    {
+      avr_asm_len ("st %0,%A1"              CR_TAB
+                   "mov __tmp_reg__,%C1"    CR_TAB
+                   TINY_ADIW (%E0, %F0, 1)  CR_TAB
+                   "st %0+,%B1"             CR_TAB
+                   "st %0,__tmp_reg__", op, plen, 6);
+    }
+  else
+    {
+      avr_asm_len ("st %0+,%A1"  CR_TAB
+                   "st %0+,%B1" CR_TAB
+                   "st %0,%C1", op, plen, -3);
+    }
+
+  if (!reg_unused_after (insn, base))
+    avr_asm_len (TINY_SBIW (%E0, %F0, 2), op, plen, 2);
+
+  return "";
+}
+
+static const char*
+avr_out_store_psi_reg_disp_tiny (rtx *op, int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (dest, 0);
+  int reg_base = REGNO (XEXP (base, 0));
+  int reg_src = true_regnum (src);
+
+  if (reg_src == reg_base)
+    {
+      return avr_asm_len ("mov __tmp_reg__,%A1"          CR_TAB
+                          "mov __zero_reg__,%B1"         CR_TAB
+                          TINY_ADIW (%I0, %J0, %o0)      CR_TAB
+                          "st %b0+,__tmp_reg__"          CR_TAB
+                          "st %b0+,__zero_reg__"         CR_TAB
+                          "st %b0,%C1"                   CR_TAB
+                          "clr __zero_reg__"             CR_TAB
+                          TINY_SBIW (%I0, %J0, %o0+2), op, plen, -10);
+    }
+  else if (reg_src == reg_base - 2)
+    {
+      return avr_asm_len ("mov __tmp_reg__,%C1"          CR_TAB  
+                          TINY_ADIW (%I0, %J0, %o0)      CR_TAB
+                          "st %b0+,%A1"                  CR_TAB
+                          "st %b0+,%B1"                  CR_TAB
+                          "st %b0,__tmp_reg__"           CR_TAB
+                          TINY_SBIW (%I0, %J0, %o0+2), op, plen, -8);
+    }
+
+  return avr_asm_len (TINY_ADIW (%I0, %J0, %o0)      CR_TAB
+                          "st %b0+,%A1"                  CR_TAB
+                          "st %b0+,%B1"                  CR_TAB
+                          "st %b0,%C1"                   CR_TAB
+                          TINY_SBIW (%I0, %J0, %o0+2), op, plen, -7);
 }
 
 /* Handle store of 24-bit type from register or zero to memory.  */
@@ -3981,12 +4552,18 @@ avr_out_store_psi (rtx insn, rtx *op, int *plen)
   int reg_base = true_regnum (base);
 
   if (CONSTANT_ADDRESS_P (base))
-    return avr_asm_len ("sts %m0,%A1"   CR_TAB
-                        "sts %m0+1,%B1" CR_TAB
-                        "sts %m0+2,%C1", op, plen, -6);
+    {
+      int n_words = AVR_TINY ? 3 : 6;
+      return avr_asm_len ("sts %m0,%A1"   CR_TAB
+                          "sts %m0+1,%B1" CR_TAB
+                          "sts %m0+2,%C1", op, plen, -n_words);
+    }
 
   if (reg_base > 0)                 /* (r) */
     {
+      if (AVR_TINY)
+        return avr_out_store_psi_reg_no_disp_tiny (insn, op, plen);
+
       if (reg_base == REG_X)        /* (R26) */
         {
           gcc_assert (!reg_overlap_mentioned_p (base, src));
@@ -4008,6 +4585,10 @@ avr_out_store_psi (rtx insn, rtx *op, int *plen)
   else if (GET_CODE (base) == PLUS) /* (R + i) */
     {
       int disp = INTVAL (XEXP (base, 1));
+
+      if (AVR_TINY)
+        return avr_out_store_psi_reg_disp_tiny (op, plen);
+
       reg_base = REGNO (XEXP (base, 0));
 
       if (disp > MAX_LD_OFFSET (GET_MODE (dest)))
@@ -4124,6 +4705,30 @@ avr_out_movpsi (rtx insn, rtx *op, int *plen)
   return "";
 }
 
+static const char*
+avr_out_movqi_mr_r_reg_disp_tiny (rtx insn, rtx op[], int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx x = XEXP (dest, 0);
+
+  if (reg_overlap_mentioned_p (src, XEXP (x, 0)))
+    {
+      avr_asm_len ("mov __tmp_reg__,%1"      CR_TAB
+                   TINY_ADIW (%I0, %J0, %o0) CR_TAB
+                   "st %b0,__tmp_reg__", op, plen, -4);
+    }
+    else
+    {
+      avr_asm_len (TINY_ADIW (%I0, %J0, %o0) CR_TAB
+          "st %b0,%1" , op, plen, -3);
+    }
+
+  if (!reg_unused_after (insn, XEXP (x,0)))
+      avr_asm_len (TINY_SBIW (%I0, %J0, %o0), op, plen, 2);
+
+  return "";
+}
 
 static const char*
 out_movqi_mr_r (rtx insn, rtx op[], int *plen)
@@ -4134,9 +4739,10 @@ out_movqi_mr_r (rtx insn, rtx op[], int *plen)
 
   if (CONSTANT_ADDRESS_P (x))
     {
+      int n_words = AVR_TINY ? 1 : 2;
       return optimize > 0 && io_address_operand (x, QImode)
         ? avr_asm_len ("out %i0,%1", op, plen, -1)
-        : avr_asm_len ("sts %m0,%1", op, plen, -2);
+        : avr_asm_len ("sts %m0,%1", op, plen, -n_words);
     }
   else if (GET_CODE (x) == PLUS
            && REG_P (XEXP (x, 0))
@@ -4145,6 +4751,9 @@ out_movqi_mr_r (rtx insn, rtx op[], int *plen)
       /* memory access by reg+disp */
 
       int disp = INTVAL (XEXP (x, 1));
+
+      if (AVR_TINY)
+        return avr_out_movqi_mr_r_reg_disp_tiny (insn, op, plen);
 
       if (disp - GET_MODE_SIZE (GET_MODE (dest)) >= 63)
         {
@@ -4206,12 +4815,15 @@ avr_out_movhi_mr_r_xmega (rtx insn, rtx op[], int *plen)
   int mem_volatile_p = MEM_VOLATILE_P (dest);
 
   if (CONSTANT_ADDRESS_P (base))
-    return optimize > 0 && io_address_operand (base, HImode)
-      ? avr_asm_len ("out %i0,%A1" CR_TAB
-                     "out %i0+1,%B1", op, plen, -2)
+    {
+      int n_words = AVR_TINY ? 2 : 4;
+      return optimize > 0 && io_address_operand (base, HImode)
+        ? avr_asm_len ("out %i0,%A1" CR_TAB
+                       "out %i0+1,%B1", op, plen, -2)
 
-      : avr_asm_len ("sts %m0,%A1" CR_TAB
-                     "sts %m0+1,%B1", op, plen, -4);
+        : avr_asm_len ("sts %m0,%A1" CR_TAB
+                       "sts %m0+1,%B1", op, plen, -n_words);
+    }
 
   if (reg_base > 0)
     {
@@ -4300,6 +4912,72 @@ avr_out_movhi_mr_r_xmega (rtx insn, rtx op[], int *plen)
   return "";
 }
 
+static const char*
+avr_out_movhi_mr_r_reg_no_disp_tiny (rtx insn, rtx op[], int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (dest, 0);
+  int reg_base = true_regnum (base);
+  int reg_src = true_regnum (src);
+  int mem_volatile_p = MEM_VOLATILE_P (dest);
+
+  if (reg_base == reg_src)
+    {
+      return !mem_volatile_p && reg_unused_after (insn, src)
+        ? avr_asm_len ("mov __tmp_reg__,%B1"   CR_TAB
+                       "st %0,%A1"             CR_TAB
+                       TINY_ADIW (%E0, %F0, 1) CR_TAB
+                       "st %0,__tmp_reg__", op, plen, -5)
+        : avr_asm_len ("mov __tmp_reg__,%B1"   CR_TAB
+                       TINY_ADIW (%E0, %F0, 1) CR_TAB
+                       "st %0,__tmp_reg__"      CR_TAB
+                       TINY_SBIW (%E0, %F0, 1) CR_TAB
+                       "st %0, %A1", op, plen, -7);
+    }
+
+  return !mem_volatile_p && reg_unused_after (insn, base)
+      ? avr_asm_len ("st %0+,%A1" CR_TAB
+                     "st %0,%B1", op, plen, -2)
+      : avr_asm_len (TINY_ADIW (%E0, %F0, 1) CR_TAB
+                     "st %0,%B1"             CR_TAB
+                     "st -%0,%A1", op, plen, -4);
+}
+
+static const char*
+avr_out_movhi_mr_r_reg_disp_tiny (rtx op[], int *plen)
+{
+  rtx dest = op[0];
+  rtx src = op[1];
+  rtx base = XEXP (dest, 0);
+  int reg_base = REGNO (XEXP (base, 0));
+  int reg_src = true_regnum (src);
+
+  return reg_src == reg_base
+        ? avr_asm_len ("mov __tmp_reg__,%A1"          CR_TAB
+                       "mov __zero_reg__,%B1"         CR_TAB
+                       TINY_ADIW (%I0, %J0, %o0+1)    CR_TAB
+                       "st %b0,__zero_reg__"          CR_TAB
+                       "st -%b0,__tmp_reg__"          CR_TAB
+                       "clr __zero_reg__"             CR_TAB
+                       TINY_SBIW (%I0, %J0, %o0), op, plen, -9) 
+
+        : avr_asm_len (TINY_ADIW (%I0, %J0, %o0+1) CR_TAB
+                       "st %b0,%B1"                CR_TAB
+                       "st -%b0,%A1"               CR_TAB
+                       TINY_SBIW (%I0, %J0, %o0), op, plen, -6);
+}
+
+static const char*
+avr_out_movhi_mr_r_post_inc_tiny (rtx op[], int *plen)
+{
+  rtx dest = op[0];
+
+  return avr_asm_len (TINY_ADIW (%I0, %J0, 1)  CR_TAB
+                      "st %p0,%B1"    CR_TAB
+                      "st -%p0,%A1"   CR_TAB
+                      TINY_ADIW (%I0, %J0, 2), op, plen, -6);
+}
 
 static const char*
 out_movhi_mr_r (rtx insn, rtx op[], int *plen)
@@ -4321,15 +4999,21 @@ out_movhi_mr_r (rtx insn, rtx op[], int *plen)
   mem_volatile_p = MEM_VOLATILE_P (dest);
 
   if (CONSTANT_ADDRESS_P (base))
-    return optimize > 0 && io_address_operand (base, HImode)
-      ? avr_asm_len ("out %i0+1,%B1" CR_TAB
-                     "out %i0,%A1", op, plen, -2)
+    {
+      int n_words = AVR_TINY ? 2 : 4;
+      return optimize > 0 && io_address_operand (base, HImode)
+        ? avr_asm_len ("out %i0+1,%B1" CR_TAB
+                       "out %i0,%A1", op, plen, -2)
 
-      : avr_asm_len ("sts %m0+1,%B1" CR_TAB
-                     "sts %m0,%A1", op, plen, -4);
+        : avr_asm_len ("sts %m0+1,%B1" CR_TAB
+                       "sts %m0,%A1", op, plen, -n_words);
+    }
 
   if (reg_base > 0)
     {
+      if (AVR_TINY)
+        return avr_out_movhi_mr_r_reg_no_disp_tiny (insn, op, plen);
+
       if (reg_base != REG_X)
         return avr_asm_len ("std %0+1,%B1" CR_TAB
                             "st %0,%A1", op, plen, -2);
@@ -4358,6 +5042,10 @@ out_movhi_mr_r (rtx insn, rtx op[], int *plen)
   else if (GET_CODE (base) == PLUS)
     {
       int disp = INTVAL (XEXP (base, 1));
+
+      if (AVR_TINY)
+        return avr_out_movhi_mr_r_reg_disp_tiny (op, plen);
+
       reg_base = REGNO (XEXP (base, 0));
       if (disp > MAX_LD_OFFSET (GET_MODE (dest)))
         {
@@ -4406,6 +5094,9 @@ out_movhi_mr_r (rtx insn, rtx op[], int *plen)
       if (!mem_volatile_p)
         return avr_asm_len ("st %0,%A1"  CR_TAB
                             "st %0,%B1", op, plen, -2);
+
+      if (AVR_TINY)
+        return avr_out_movhi_mr_r_post_inc_tiny (op, plen);
 
       return REGNO (XEXP (base, 0)) == REG_X
         ? avr_asm_len ("adiw r26,1"  CR_TAB
@@ -4589,7 +5280,11 @@ avr_out_compare (rtx insn, rtx *xop, int *plen)
               && (val8 == 0
                   || reg_unused_after (insn, xreg)))
             {
-              avr_asm_len ("sbiw %0,%1", xop, plen, 1);
+              if (AVR_TINY)
+                avr_asm_len (TINY_SBIW (%A0, %B0, %1), xop, plen, 2);
+              else
+                avr_asm_len ("sbiw %0,%1", xop, plen, 1);
+
               i++;
               continue;
             }
@@ -4599,7 +5294,9 @@ avr_out_compare (rtx insn, rtx *xop, int *plen)
               && compare_eq_p (insn)
               && reg_unused_after (insn, xreg))
             {
-              return avr_asm_len ("adiw %0,%n1", xop, plen, 1);
+              return AVR_TINY
+                  ? avr_asm_len (TINY_ADIW (%A0, %B0, %n1), xop, plen, 2)
+                  : avr_asm_len ("adiw %0,%n1", xop, plen, 1);
             }
         }
 
@@ -8062,7 +8759,8 @@ avr_assemble_integer (rtx x, unsigned int size, int aligned_p)
 static bool
 avr_class_likely_spilled_p (reg_class_t c)
 {
-  return (c != ALL_REGS && c != ADDW_REGS);
+  return (c != ALL_REGS &&
+           (AVR_TINY ? 1 : c != ADDW_REGS));
 }
 
 
@@ -8893,10 +9591,10 @@ avr_file_start (void)
     fprintf (asm_out_file, "__RAMPX__ = 0x%02x\n", avr_addr.rampx - sfr_offset);
   if (AVR_HAVE_RAMPD)
     fprintf (asm_out_file, "__RAMPD__ = 0x%02x\n", avr_addr.rampd - sfr_offset);
-  if (AVR_XMEGA)
+  if (AVR_XMEGA || AVR_TINY)
     fprintf (asm_out_file, "__CCP__ = 0x%02x\n", avr_addr.ccp - sfr_offset);
-  fprintf (asm_out_file, "__tmp_reg__ = %d\n", TMP_REGNO);
-  fprintf (asm_out_file, "__zero_reg__ = %d\n", ZERO_REGNO);
+  fprintf (asm_out_file, "__tmp_reg__ = %d\n", AVR_TMP_REGNO);
+  fprintf (asm_out_file, "__zero_reg__ = %d\n", AVR_ZERO_REGNO);
 }
 
 
@@ -8943,6 +9641,18 @@ avr_adjust_reg_alloc_order (void)
       0, 1,
       32, 33, 34, 35
   };
+  static const int tiny_order_0[] = {
+    20, 21,
+    22, 23,
+    24, 25,
+    30, 31,
+    26, 27,
+    28, 29,
+    19, 18,
+    16, 17,
+    32, 33, 34, 35,
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+  };
   static const int order_1[] =
     {
       18, 19, 20, 21, 22, 23, 24, 25,
@@ -8951,6 +9661,17 @@ avr_adjust_reg_alloc_order (void)
       17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2,
       0, 1,
       32, 33, 34, 35
+  };
+  static const int tiny_order_1[] = {
+    22, 23,
+    24, 25,
+    30, 31,
+    26, 27,
+    28, 29,
+    21, 20, 19, 18,
+    16, 17,
+    32, 33, 34, 35,
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
   };
   static const int order_2[] =
     {
@@ -8962,9 +9683,14 @@ avr_adjust_reg_alloc_order (void)
       32, 33, 34, 35
   };
 
-  const int *order = (TARGET_ORDER_1 ? order_1 :
-		      TARGET_ORDER_2 ? order_2 :
-		      order_0);
+  /*
+  Select specific register allocation order. Tiny Core (attiny4/5/9/10/20/40)
+  devices has only 16 registers, so different allocation order should be used
+  */ 
+  const int *order = (TARGET_ORDER_1 ? (AVR_TINY ? tiny_order_1 : order_1) :
+             TARGET_ORDER_2 ? (AVR_TINY ? tiny_order_0 : order_2) :
+                                       (AVR_TINY ? tiny_order_0 : order_0));
+
   for (i = 0; i < ARRAY_SIZE (order_0); ++i)
       reg_alloc_order[i] = order[i];
 }
@@ -10646,7 +11372,7 @@ output_reload_in_const (rtx *op, rtx clobber_reg, int *len, bool clear_p)
         {
           if (!clear_p)
             avr_asm_len (ldreg_p ? "ldi %0,0"
-                         : ZERO_REGNO == REGNO (xdest[n]) ? "clr %0"
+                         : AVR_ZERO_REGNO == REGNO (xdest[n]) ? "clr %0"
                          : "mov %0,__zero_reg__",
                          &xdest[n], len, 1);
           continue;
@@ -10848,6 +11574,49 @@ avr_output_addr_vec_elt (FILE *stream, int value)
     fprintf (stream, "\trjmp .L%d\n", value);
 }
 
+static void
+avr_conditional_register_usage(void) {
+
+  if (AVR_TINY) {
+    unsigned int i;
+
+    const int tiny_reg_alloc_order[] = {
+      24, 25,
+      22, 23,
+      30, 31,
+      26, 27,
+      28, 29,
+      21, 20, 19, 18,
+      16, 17,
+      32, 33, 34, 35,
+      15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+    };
+
+    /* Set R0-R17 as fixed registers. Reset R0-R17 in call used register list
+    - R0-R15 are not available in Tiny Core devices
+    - R16 and R17 are fixed registers
+    */
+    for (i = 0;  i <= 17;  i++) {
+      fixed_regs[i] = 1;
+      call_used_regs[i] = 1;
+    }
+
+    /* Set R18 to R21 as callee saved registers
+    - R18, R19, R20 and R21 are the callee saved registers in Tiny Core devices
+    */
+    for (i = 18; i <= LAST_CALLEE_SAVED_REG; i++) {
+      call_used_regs[i] = 0;
+    }
+
+    /*update register allocation order for Tiny Core devices */
+    for (i=0; i < ARRAY_SIZE (tiny_reg_alloc_order); i++) {
+      reg_alloc_order[i] = tiny_reg_alloc_order[i];
+    }
+
+    CLEAR_HARD_REG_SET(reg_class_contents[(int)ADDW_REGS]);
+    CLEAR_HARD_REG_SET(reg_class_contents[(int)NO_LD_REGS]);
+  }
+}
 
 /* Implement `TARGET_HARD_REGNO_SCRATCH_OK'.  */
 /* Returns true if SCRATCH are safe to be allocated as a scratch
@@ -11002,13 +11771,20 @@ avr_asm_out_dtor (rtx symbol, int priority)
 static bool
 avr_return_in_memory (const_tree type, const_tree fntype ATTRIBUTE_UNUSED)
 {
-  if (TYPE_MODE (type) == BLKmode)
-    {
-      HOST_WIDE_INT size = int_size_in_bytes (type);
-      return (size == -1 || size > 8);
-    }
+  HOST_WIDE_INT size = int_size_in_bytes (type);
+  HOST_WIDE_INT ret_size_limit = AVR_TINY ? 4 : 8;                                      
+
+  /* In avr, there are 8 return registers. But, for Tiny Core 
+  (attiny4/5/9/10/20/40) devices, only 4 registers available.
+  Return true if size is unknown or greater than the limit */
+  if ((size == -1) || (size > ret_size_limit))
+  {
+    return true;
+  }
   else
+  {
     return false;
+  }
 }
 
 
@@ -12654,6 +13430,9 @@ avr_stdio_altname (const_tree fndecl, const_tree exp)
 
 #undef  TARGET_BUILTIN_SETJMP_FRAME_VALUE
 #define TARGET_BUILTIN_SETJMP_FRAME_VALUE avr_builtin_setjmp_frame_value
+
+#undef TARGET_CONDITIONAL_REGISTER_USAGE
+#define TARGET_CONDITIONAL_REGISTER_USAGE avr_conditional_register_usage
 
 #undef  TARGET_HARD_REGNO_SCRATCH_OK
 #define TARGET_HARD_REGNO_SCRATCH_OK avr_hard_regno_scratch_ok

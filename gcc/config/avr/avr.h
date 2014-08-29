@@ -99,6 +99,7 @@ FIXME: DRIVER_SELF_SPECS has changed.
 #define AVR_3_BYTE_PC (AVR_HAVE_EIJMP_EICALL)
 
 #define AVR_XMEGA (avr_current_arch->xmega_p)
+#define AVR_TINY  (avr_current_arch->tiny_p)
 
 #define BITS_BIG_ENDIAN 0
 #define BYTES_BIG_ENDIAN 0
@@ -307,7 +308,7 @@ enum reg_class {
 
 #define ARG_POINTER_REGNUM 34
 
-#define STATIC_CHAIN_REGNUM 2
+#define STATIC_CHAIN_REGNUM ((AVR_TINY) ? 18 :2)
 
 #define ELIMINABLE_REGS {					\
       {ARG_POINTER_REGNUM, STACK_POINTER_REGNUM},		\
