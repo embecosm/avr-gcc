@@ -284,6 +284,17 @@
 	* config/avr/avr.c (avr_2word_insn_p): Likewise.
 	* config/avr/avr.md (*cpse.ne): Likewise.
 
+2014-03-05  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (TARGET_UNWIND_WORD_MODE): Define.
+	(avr_unwind_word_mode): New function.
+
+2014-02-21  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_asm_function_rodata_section):
+	Distinguish between ".progmem.gcc_sw_table" and "".gnu.linkonce.t.*"
+	sections when decide what section flags to set.
+
 2014-02-19  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.c (avr_can_eliminate): Allow elimination from
@@ -291,6 +302,12 @@
 	to STACK_POINTER_REGNUM if !frame_pointer_needed.
 	* config/avr/avr.h (ELIMINABLE_REGS): Add elimination from
 	ARG_POINTER_REGNUM to STACK_POINTER_REGNUM.
+
+2013-06-14  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.c (avr_asm_function_rodata_section):
+	When merging something into a function-specific section, always
+	add the SECTION_CODE flag.
 
 2013-05-26  Joern Rennecke <joern.rennecke@embecosm.com>
 

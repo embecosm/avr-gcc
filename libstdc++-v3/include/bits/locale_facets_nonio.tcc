@@ -796,7 +796,7 @@ _GLIBCXX_END_NAMESPACE_LDBL
 		  // Timezone info.
 		  if (__ctype.is(ctype_base::upper, *__beg))
 		    {
-		      int __tmp;
+		      __tm_small_int __tmp;
 		      __beg = _M_extract_name(__beg, __end, __tmp,
 				       __timepunct_cache<_CharT>::_S_timezones,
 					      14, __io, __tmperr);
@@ -837,9 +837,10 @@ _GLIBCXX_END_NAMESPACE_LDBL
     }
 
   template<typename _CharT, typename _InIter>
+  template<typename _Member_t>
     _InIter
     time_get<_CharT, _InIter>::
-    _M_extract_num(iter_type __beg, iter_type __end, int& __member,
+    _M_extract_num(iter_type __beg, iter_type __end, _Member_t& __member,
 		   int __min, int __max, size_t __len,
 		   ios_base& __io, ios_base::iostate& __err) const
     {
@@ -882,7 +883,7 @@ _GLIBCXX_END_NAMESPACE_LDBL
   template<typename _CharT, typename _InIter>
     _InIter
     time_get<_CharT, _InIter>::
-    _M_extract_name(iter_type __beg, iter_type __end, int& __member,
+    _M_extract_name(iter_type __beg, iter_type __end, __tm_small_int& __member,
 		    const _CharT** __names, size_t __indexlen,
 		    ios_base& __io, ios_base::iostate& __err) const
     {

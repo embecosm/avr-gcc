@@ -9370,8 +9370,20 @@ avr_asm_function_rodata_section (tree decl)
             {
               const char *rname = ACONCAT ((new_prefix,
                                             name + strlen (old_prefix), NULL));
-              flags &= ~SECTION_CODE;
-              flags |= AVR_HAVE_JMP_CALL ? 0 : SECTION_CODE;
+	      if (i == 0)
+		{
+		  flags &= ~SECTION_CODE;
+		  flags |= AVR_HAVE_JMP_CALL ? 0 : SECTION_CODE;
+		}
+	      else
+		{
+		  /* The flags have to match the existing section where the
+		     function proper went, lest varasm.c:get_section will
+		     complain: ...include/bits/locale_facets_nonio.tcc:
+		     In member function '<447 chars of c++ name>':
+		      <447 chars of c++ name> causes a section type conflict  */
+		  flags |= SECTION_CODE;
+		}
 
               return get_section (rname, flags, frodata->named.decl);
             }
@@ -13532,6 +13544,16 @@ avr_stdio_altname (const_tree fndecl, const_tree exp)
 #undef TARGET_STDIO_ALTNAME
 #define TARGET_STDIO_ALTNAME avr_stdio_altname
 
+#undef  TARGET_UNWIND_WORD_MODE
+#define TARGET_UNWIND_WORD_MODE avr_unwind_word_mode
+
+static enum machine_mode
+avr_unwind_word_mode (void)
+{
+  return Pmode;
+}
+
+
 struct gcc_target targetm = TARGET_INITIALIZER;
 
 

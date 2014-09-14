@@ -42,6 +42,15 @@ namespace std _GLIBCXX_VISIBILITY(default)
 {
 _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
+#ifdef __AVR__
+/* The struct tm defined in avr-libc/include/time.h uses int8_t for a number
+   of fields.  To allow overload resolution to succeed, we need to adjust
+   some data structures and functions to match.  */
+typedef typeof (((tm*)0)->tm_sec) __tm_small_int;
+#else /* For 100% mangling compatibility, use int directly.  */
+#define __tm_small_int int
+#endif
+
   /**
    *  @brief  Time format ordering data.
    *  @ingroup locales
@@ -654,14 +663,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		  ios_base::iostate& __err, tm* __tm) const;
 
       // Extract numeric component of length __len.
+      template <typename _Member_t>
       iter_type
-      _M_extract_num(iter_type __beg, iter_type __end, int& __member,
+      _M_extract_num(iter_type __beg, iter_type __end, _Member_t& __member,
 		     int __min, int __max, size_t __len,
 		     ios_base& __io, ios_base::iostate& __err) const;
 
       // Extract any unique array of string literals in a const _CharT* array.
       iter_type
-      _M_extract_name(iter_type __beg, iter_type __end, int& __member,
+      _M_extract_name(iter_type __beg, iter_type __end,
+		      __tm_small_int& __member,
 		      const _CharT** __names, size_t __indexlen,
 		      ios_base& __io, ios_base::iostate& __err) const;
 
