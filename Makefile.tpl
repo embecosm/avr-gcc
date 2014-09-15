@@ -1409,15 +1409,19 @@ ENDIF raw_cxx +]
 [+ ENDFOR recursive_targets +]
 [+ ENDFOR target_modules +]
 
-@if target-libgomp
 .PHONY: check-target-libgomp-c++
+check-target-libgomp-c++:
+
+@if target-libgomp
 check-target-libgomp-c++:
 	$(MAKE) RUNTESTFLAGS="$(RUNTESTFLAGS) c++.exp" check-target-libgomp
 
 @endif target-libgomp
 
-@if target-libitm
 .PHONY: check-target-libitm-c++
+check-target-libitm-c++:
+
+@if target-libitm
 check-target-libitm-c++:
 	$(MAKE) RUNTESTFLAGS="$(RUNTESTFLAGS) c++.exp" check-target-libitm
 
