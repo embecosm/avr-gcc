@@ -1,5 +1,11 @@
 2014-09-15  Joern Rennecke  <joern.rennecke@embecosm.com>
 
+	* libstdc++-v3/testsuite/util/io/prog_bar.cc: Qualify size_t.
+	* libstdc++-v3/testsuite/util/io/prog_bar.hpp: Likewise.
+	* libstdc++-v3/testsuite/util/io/verified_cmd_line_input.hpp: Likewise,
+
+2014-09-15  Joern Rennecke  <joern.rennecke@embecosm.com>
+
 	Allow check-c++ to work on avr:
 	* Makefile.tpl (check-target-libgomp-c++): Always provide some rule.
 	(check-target-libitm-c++): Likewise.
