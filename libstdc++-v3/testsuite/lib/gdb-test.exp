@@ -223,6 +223,8 @@ proc gdb-test { marker {selector {}} } {
 
 # Invoke gdb with a command and pattern-match the output.
 proc gdb_batch_check {command pattern} {
+    if { ![isnative] || [is_remote target] } { return 0 }
+
     set gdb_name $::env(GUALITY_GDB_NAME)
     set cmd "$gdb_name -nw -nx -quiet -batch -ex \"$command\""
     send_log "Spawning: $cmd\n"

@@ -1,3 +1,8 @@
+2013-09-17  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* testsuite/lib/gdb-test.exp (gdb_batch_check): Don't invoke
+	gdb on cross targets.
+
 2013-06-14  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* configure.ac [avr-*-*]: Don't use AC_LIBTOOL_DLOPEN.
