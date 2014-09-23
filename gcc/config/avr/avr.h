@@ -520,9 +520,6 @@ typedef struct avr_args
 #define LIB_SPEC \
   "%{!mmcu=at90s1*:%{!mmcu=attiny11:%{!mmcu=attiny12:%{!mmcu=attiny15:%{!mmcu=attiny28: -lprintf_flt -lscanf_flt -lc }}}}}"
 
-#define LIBSTDCXX "gcc"
-/* No libstdc++ for now.  Empty string doesn't work.  */
-
 #define LIBGCC_SPEC \
   "%{!mmcu=at90s1*:%{!mmcu=attiny11:%{!mmcu=attiny12:%{!mmcu=attiny15:%{!mmcu=attiny28: -lgcc }}}}}"
 

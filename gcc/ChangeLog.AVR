@@ -1,3 +1,7 @@
+2014-09-23  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.h (LIBSTDCXX): Don't define.
+
 2014-08-29  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr-c.c (avr_cpu_cpp_builtins): Don't define
