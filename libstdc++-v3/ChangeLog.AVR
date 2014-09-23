@@ -1,3 +1,13 @@
+2013-09-23  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* testsuite/20_util/shared_ptr/creation/58594.cc (dg-options):
+	Add -frtti.
+	* testsuite/20_util/typeindex/comparison_operators.cc (dg-options):
+	Likewise.
+	* testsuite/20_util/typeindex/name.cc (dg-options): Likewise.
+	* testsuite/23_containers/array/requirements/non_default_constructible.cc (dg-options):
+	Likewise.
+
 2013-09-17  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* testsuite/lib/gdb-test.exp (gdb_batch_check): Don't invoke
