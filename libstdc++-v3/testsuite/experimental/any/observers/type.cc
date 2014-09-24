@@ -1,4 +1,4 @@
-// { dg-options "-std=gnu++14" }
+// { dg-options "-std=gnu++14 -frtti" }
 // { dg-do run }
 
 // Copyright (C) 2014 Free Software Foundation, Inc.

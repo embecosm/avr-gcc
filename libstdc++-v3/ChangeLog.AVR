@@ -1,3 +1,14 @@
+2013-09-24  Joern Rennecke <joern.rennecke@embecosm.com>
+
+	* testsuite/18_support/type_info/hash_code.cc (dg-options): Add -frtti.
+	* testsuite/20_util/shared_ptr/cons/unique_ptr_deleter_ref_2.cc
+	(dg-options): Likewise.
+	* testsuite/20_util/shared_ptr/creation/private.cc (dg-options):
+	Likewise.
+	* testsuite/20_util/typeindex/hash.cc (dg-options): Likewise.
+	* testsuite/20_util/typeindex/hash_code.cc (dg-options): Likewise.
+	* testsuite/experimental/any/observers/type.cc (dg-options): Likewise.
+
 2013-09-23  Joern Rennecke <joern.rennecke@embecosm.com>
 
 	* testsuite/20_util/shared_ptr/creation/58594.cc (dg-options):
