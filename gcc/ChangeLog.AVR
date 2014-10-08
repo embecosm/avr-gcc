@@ -1,3 +1,8 @@
+2014-10-07  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* cfgexpand.c (expand_debug_expr): Get address space from
+	TARGET_MEM_REF.
+
 2014-09-23  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.h (LIBSTDCXX): Don't define.
@@ -155,10 +160,6 @@
 
 	* config/avr/gen-avr-mmcu-specs.c (print_mcu) <*cpp>:
 	Define __AVR_DEV_LIB_NAME__ .
-
-2014-06-16  Joern Rennecke  <joern.rennecke@embecosm.com>
-
-	* config/avr/avr.h (POINTERS_EXTEND_UNSIGNED): Define.
 
 2014-06-12  Joern Rennecke  <joern.rennecke@embecosm.com>
 

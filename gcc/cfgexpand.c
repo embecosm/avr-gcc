@@ -3986,6 +3986,8 @@ expand_debug_expr (tree exp)
 
       if (POINTER_TYPE_P (TREE_TYPE (exp)))
 	as = TYPE_ADDR_SPACE (TREE_TYPE (TREE_TYPE (exp)));
+      else if (TREE_CODE (exp) == TARGET_MEM_REF)
+	as = TYPE_ADDR_SPACE (TREE_TYPE (exp));
       else
 	as = ADDR_SPACE_GENERIC;
 

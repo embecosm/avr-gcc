@@ -598,12 +598,3 @@ extern int avr_accumulate_outgoing_args (void);
 #define SYMBOL_FLAG_IO_LOW	(SYMBOL_FLAG_MACH_DEP << 4)
 #define SYMBOL_FLAG_IO		(SYMBOL_FLAG_MACH_DEP << 5)
 #define SYMBOL_FLAG_ADDRESS	(SYMBOL_FLAG_MACH_DEP << 6)
-
-/* convert_debug_memory_address panics compiling strftime with debug info if
-   POINTER_EXTEND_UNSIGNED is not set - not sure if this setting is the
-   right one (or if there is any one right setting), but it's better
-   than none.
-   For the rtl that triggered the ICE without POINTER_EXTEND_UNSIGNED,
-   we just do simplify_gen_subreg to reduce PSImode to HImode, regardless
-   of what POINTERS_EXTEND_UNSIGNED is exactly.  */
-#define POINTERS_EXTEND_UNSIGNED 0
