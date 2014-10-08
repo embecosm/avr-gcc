@@ -1,3 +1,8 @@
+2014-10-08  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/genmultilib.awk: Remove Multilib matches processing.
+	* config/avr/t-multilib: Regenerate.
+
 2014-10-07  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* cfgexpand.c (expand_debug_expr): Get address space from
