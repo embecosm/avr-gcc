@@ -1,3 +1,7 @@
+2014-10-30  Jan-Benedict Glaw  <jbglaw@lug-owl.de>
+
+	* config/avr/driver-avr.c (avr_set_current_device): Remove.
+
 2014-10-15  Joern Rennecke  <joern.rennecke@embecosm.com>
 	    Jeff Law  <law@redhat.com>
 
