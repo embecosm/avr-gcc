@@ -450,6 +450,16 @@ typedef struct avr_args
       fprintf (STREAM, "\t.p2align\t%d\n", POWER);      \
   } while (0)
 
+#define ASM_OUTPUT_MAX_SKIP_ALIGN(FILE, LOG, MAX_SKIP)          \
+  if ((LOG) != 0)                                               \
+    {                                                           \
+      if ((MAX_SKIP) == 0)                                      \
+        fprintf ((FILE), "\t.p2align %d\n", (int) (LOG));       \
+      else                                                      \
+        fprintf ((FILE), "\t.p2align %d,,%d\n",                 \
+                 (int) (LOG), (int) (MAX_SKIP));                \
+    }
+
 #define CASE_VECTOR_MODE HImode
 
 #undef WORD_REGISTER_OPERATIONS

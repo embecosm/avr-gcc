@@ -1,3 +1,9 @@
+2014-11-05  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.h (ASM_OUTPUT_MAX_SKIP_ALIGN): Define.
+	* config/avr/avr.c (avr_loop_align_max_skip): New function.
+	(TARGET_ASM_LOOP_ALIGN_MAX_SKIP): Define.
+
 2014-10-08  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/genmultilib.awk: Remove Multilib matches processing.

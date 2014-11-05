@@ -13377,6 +13377,14 @@ avr_stdio_altname (const_tree fndecl, const_tree exp)
   return new_name;
 }
 
+static int
+avr_loop_align_max_skip (rtx label ATTRIBUTE_UNUSED)
+{
+  if (align_loops_log)
+    return 1;
+  return 0;
+}
+
 
 
 /* Initialize the GCC target structure.  */
@@ -13552,6 +13560,9 @@ avr_unwind_word_mode (void)
 {
   return Pmode;
 }
+
+#undef TARGET_ASM_LOOP_ALIGN_MAX_SKIP
+#define TARGET_ASM_LOOP_ALIGN_MAX_SKIP avr_loop_align_max_skip
 
 
 struct gcc_target targetm = TARGET_INITIALIZER;
