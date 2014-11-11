@@ -1,3 +1,10 @@
+2014-11-11  Joern Rennecke  <joern.rennecke@embecosm.com>
+
+	* config/avr/avr.opt (malign-loops-max-skip=): New option.
+	* config/avr/avr.c (avr_option_override): Adjust
+	avr_align_loops_max_skip.
+	(avr_loop_align_max_skip): Use avr_align_loops_max_skip.
+
 2014-11-05  Joern Rennecke  <joern.rennecke@embecosm.com>
 
 	* config/avr/avr.h (ASM_OUTPUT_MAX_SKIP_ALIGN): Define.

@@ -383,6 +383,11 @@ avr_option_override (void)
   init_machine_status = avr_init_machine_status;
 
   avr_log_set_avr_log();
+
+  /* ??? We got align_loops_max_skip, but that is not really accessible
+     to the options machinery, as there is no VarExists flag anymore.  */
+  if (avr_align_loops_max_skip >= align_loops)
+    avr_align_loops_max_skip = align_loops - 1;
 }
 
 /* Function to set up the backend function structure.  */
@@ -13380,8 +13385,12 @@ avr_stdio_altname (const_tree fndecl, const_tree exp)
 static int
 avr_loop_align_max_skip (rtx label ATTRIBUTE_UNUSED)
 {
+  /* ??? We might want to pretend this is 1 here and emit it later with
+     the full value, or just pretend the length is smaller, to enable better
+     branch shortening, and let the linker punt on an alignment that won't
+     fit.  */
   if (align_loops_log)
-    return 1;
+    return avr_align_loops_max_skip;
   return 0;
 }
 
